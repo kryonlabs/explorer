@@ -5,7 +5,7 @@ KRYON=/sys/src/kryon
 BIN=/$objtype/bin
 OUT=$O.out
 
-CPPFLAGS=-I$KRYON/src/platform/plan9/include -I$KRYON/include -I./src \
+CPPFLAGS=-I$KRYON/src/platform/plan9/include -I$KRYON/include -I$KRYON/build/plan9/generated -I./src \
 	-DKRYON_BACKEND_LIBDRAW -DKRYON_PLATFORM_PLAN9 -DKRYON_NATIVE_PLAN9
 CFLAGS=-FTVw
 
