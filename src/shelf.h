@@ -90,7 +90,7 @@ typedef struct FileManager {
     char dialog_text[FILE_MANAGER_PATH_MAX];
     char dialog_message[2048];
     int dialog_cursor;
-    int dialog_focused;
+    bool dialog_focused;
     int context_open;
     int context_x;
     int context_y;

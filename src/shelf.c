@@ -1115,6 +1115,18 @@ hit(Rectangle r)
 }
 
 static void
+draw_label(const char *text, int x, int y, int font_size, Color color)
+{
+    Vector2 position;
+
+    if(text == NULL)
+        text = "";
+    position.x = (float)x;
+    position.y = (float)y;
+    DrawTextEx(GetTextFont(), text, position, (float)font_size, 0.0f, color);
+}
+
+static void
 draw_text_fit_right(const char *text, int x, int y, int max_width,
                     int font_size, Color color)
 {
@@ -1122,10 +1134,11 @@ draw_text_fit_right(const char *text, int x, int y, int max_width,
 
     if(text == NULL)
         text = "";
-    while(font_size > Text8 && TextWidth(text, font_size) > max_width)
+    while(font_size > Text8 &&
+          MeasureTextWidth(text, font_size, NULL) > max_width)
         font_size -= 2;
-    width = TextWidth(text, font_size);
-    Text(text, x + max_width - width, y, font_size, color);
+    width = MeasureTextWidth(text, font_size, NULL);
+    draw_label(text, x + max_width - width, y, font_size, color);
 }
 
 #ifdef FILE_MANAGER_HAS_GDK_PIXBUF
@@ -1281,23 +1294,16 @@ draw_icon(Rectangle r, int is_dir)
 static int
 small_button(Rectangle r, const char *label, int id, int disabled)
 {
-    ButtonProps props = {r, label, ButtonStyleSecondary, Text12, id, disabled};
+    ButtonProps props;
 
+    memset(&props, 0, sizeof(props));
+    props.bounds = r;
+    props.label = label;
+    props.id = id;
+    props.emphasis = ButtonEmphasisSoft;
+    props.size = ControlSizeSmall;
+    props.disabled = disabled != 0;
     return Button(props);
-}
-
-static int
-menu_label(Rectangle r, const char *label, int active)
-{
-    if(active || hit(r))
-        DrawRectangleRounded(r, 0.08f, 4, Fade(GetThemeButton(), 0.48f));
-    Text(label, (int)r.x + 6, (int)r.y + 5, Text14,
-         active || hit(r) ? GetThemeText() : GetThemeIcon());
-    if(hit(r) && IsMouseButtonReleased(MOUSE_BUTTON_LEFT)) {
-        UIConsumeRelease();
-        return 1;
-    }
-    return 0;
 }
 
 static void
@@ -1464,29 +1470,6 @@ handle_menu_command(FileManager *manager, int command)
 }
 
 static void
-draw_menu_popup(FileManager *manager, Rectangle trigger,
-                const MenuItem *items, int item_count, int menu_id)
-{
-    int command;
-
-    if(manager->menu_open == menu_id) {
-        int open = 1;
-        ContextMenuProps menu = {4000 + menu_id, trigger, items, item_count,
-                                 &open, &manager->menu_x, &manager->menu_y};
-
-        if(manager->menu_defer) {
-            manager->menu_defer = 0;
-            return;
-        }
-        command = ContextMenu(menu);
-        if(command != 0)
-            handle_menu_command(manager, command);
-        if(!open)
-            manager->menu_open = 0;
-    }
-}
-
-static void
 draw_menu_bar(FileManager *manager, Rectangle menu)
 {
     MenuItem file_items[] = {
@@ -1537,37 +1520,41 @@ draw_menu_bar(FileManager *manager, Rectangle menu)
     MenuItem help_items[] = {
         {MenuCommand, "About Files", NULL, 3040, 0, 0, NULL, 0}
     };
-    Rectangle labels[] = {
-        {menu.x + 8, menu.y + 3, 38, 22},
-        {menu.x + 50, menu.y + 3, 38, 22},
-        {menu.x + 92, menu.y + 3, 42, 22},
-        {menu.x + 138, menu.y + 3, 32, 22},
-        {menu.x + 174, menu.y + 3, 78, 22},
-        {menu.x + 256, menu.y + 3, 42, 22}
-    };
-    const char *names[] = {"File", "Edit", "View", "Go", "Bookmarks", "Help"};
-    int i;
+    MenuGroup menus[6];
+    MenuProps in;
+    MenuResult out;
 
-    for(i = 0; i < 6; i++) {
-        if(menu_label(labels[i], names[i], manager->menu_open == i + 1)) {
-            manager->menu_open = i + 1;
-            manager->menu_x = (int)labels[i].x;
-            manager->menu_y = (int)(labels[i].y + labels[i].height);
-            manager->menu_defer = 1;
-        }
-    }
-    draw_menu_popup(manager, labels[0], file_items,
-                    (int)(sizeof(file_items) / sizeof(file_items[0])), 1);
-    draw_menu_popup(manager, labels[1], edit_items,
-                    (int)(sizeof(edit_items) / sizeof(edit_items[0])), 2);
-    draw_menu_popup(manager, labels[2], view_items,
-                    (int)(sizeof(view_items) / sizeof(view_items[0])), 3);
-    draw_menu_popup(manager, labels[3], go_items,
-                    (int)(sizeof(go_items) / sizeof(go_items[0])), 4);
-    draw_menu_popup(manager, labels[4], bookmark_items,
-                    (int)(sizeof(bookmark_items) / sizeof(bookmark_items[0])), 5);
-    draw_menu_popup(manager, labels[5], help_items,
-                    (int)(sizeof(help_items) / sizeof(help_items[0])), 6);
+    memset(menus, 0, sizeof(menus));
+    menus[0].label = "File";
+    menus[0].items = file_items;
+    menus[0].item_count = (int)(sizeof(file_items) / sizeof(file_items[0]));
+    menus[1].label = "Edit";
+    menus[1].items = edit_items;
+    menus[1].item_count = (int)(sizeof(edit_items) / sizeof(edit_items[0]));
+    menus[2].label = "View";
+    menus[2].items = view_items;
+    menus[2].item_count = (int)(sizeof(view_items) / sizeof(view_items[0]));
+    menus[3].label = "Go";
+    menus[3].items = go_items;
+    menus[3].item_count = (int)(sizeof(go_items) / sizeof(go_items[0]));
+    menus[4].label = "Bookmarks";
+    menus[4].items = bookmark_items;
+    menus[4].item_count =
+        (int)(sizeof(bookmark_items) / sizeof(bookmark_items[0]));
+    menus[5].label = "Help";
+    menus[5].items = help_items;
+    menus[5].item_count = (int)(sizeof(help_items) / sizeof(help_items[0]));
+
+    memset(&in, 0, sizeof(in));
+    in.id = 4000;
+    in.mode = MenuModeBar;
+    in.bounds = menu;
+    in.menus = menus;
+    in.menu_count = 6;
+    in.open_index = &manager->menu_open;
+    out = Menu(in);
+    if(out.activated_id != 0)
+        handle_menu_command(manager, out.activated_id);
 }
 
 static void
@@ -1612,7 +1599,7 @@ draw_tabs(FileManager *manager, Rectangle tabs)
         BeginScissorMode((int)tab.x + 8, (int)tab.y,
                          (int)tab.width - (manager->tab_count > 1 ? 36 : 16),
                          (int)tab.height);
-        Text(label, (int)tab.x + 8, (int)tab.y + 7, Text12,
+        draw_label(label, (int)tab.x + 8, (int)tab.y + 7, Text12,
              active ? GetThemeText() : GetThemeIcon());
         EndScissorMode();
         if(manager->tab_count > 1 &&
@@ -1678,7 +1665,7 @@ draw_toolbar(FileManager *manager, Rectangle toolbar)
     field.width = location.width - (field_x - location.x) - 50;
     field.height = 26;
     DrawRectangleRounded(field, 0.02f, 4, Fade(GetThemeBackground(), 0.86f));
-    Text(manager->cwd, field_x + 10, y + 7, Text14, GetThemeText());
+    draw_label(manager->cwd, field_x + 10, y + 7, Text14, GetThemeText());
     if(hit(field) && IsMouseButtonReleased(MOUSE_BUTTON_LEFT))
         start_prompt(manager, FILE_DIALOG_LOCATION, manager->cwd);
     x = (int)(location.x + location.width - 42);
@@ -1737,7 +1724,7 @@ draw_places(FileManager *manager, Rectangle sidebar)
     count++;
 
     DrawRectangleRec(sidebar, Fade(GetThemeSurface(), 0.66f));
-    Text("Places", (int)sidebar.x + 12, y, Text12, GetThemeIcon());
+    draw_label("Places", (int)sidebar.x + 12, y, Text12, GetThemeIcon());
     y += 24;
     for(i = 0; i < count; i++) {
         Rectangle row = {sidebar.x + 6, y, sidebar.width - 12, 28};
@@ -1758,7 +1745,7 @@ draw_places(FileManager *manager, Rectangle sidebar)
             icon_rect.height = 12;
             DrawRectangleRounded(icon_rect, 0.20f, 4, GetThemeIcon());
         }
-        Text(places[i].label, (int)row.x + 30, (int)row.y + 8, Text12,
+        draw_label(places[i].label, (int)row.x + 30, (int)row.y + 8, Text12,
              exists ? GetThemeText() : GetThemeIcon());
         if(exists && hit(row) && IsMouseButtonReleased(MOUSE_BUTTON_LEFT))
             (void)FileManagerOpenPathTracked(manager, places[i].path);
@@ -2003,8 +1990,8 @@ draw_rows(FileManager *manager, Rectangle list)
             draw_icon(icon, entry->is_dir);
             BeginScissorMode((int)label.x, (int)label.y,
                              (int)label.width, (int)label.height);
-            label_w = TextWidth(entry->name, Text12);
-            Text(entry->name,
+            label_w = MeasureTextWidth(entry->name, Text12, NULL);
+            draw_label(entry->name,
                  (int)(label.x + (label.width - label_w) * 0.5f),
                  (int)label.y + 3, Text12,
                  entry->readable ? GetThemeText() : GetThemeIcon());
@@ -2033,7 +2020,7 @@ draw_rows(FileManager *manager, Rectangle list)
     EndScissorMode();
 
     if(manager->entry_count == 0 && manager->error[0] == '\0')
-        Text("Empty folder", (int)list.x + 16, (int)list.y + 16, Text14,
+        draw_label("Empty folder", (int)list.x + 16, (int)list.y + 16, Text14,
              GetThemeIcon());
 }
 
@@ -2097,12 +2084,12 @@ draw_context_menu(FileManager *manager, Rectangle trigger)
 {
     int selected = FileManagerSelectedCount(manager);
     MenuItem items[17];
+    MenuProps in;
+    MenuResult out;
     int command;
     int trash_view = is_trash_view(manager);
-    ContextMenuProps menu = {3100, trigger, items, 17,
-                             &manager->context_open,
-                             &manager->context_x,
-                             &manager->context_y};
+
+    memset(&in, 0, sizeof(in));
 
     items[0].kind = MenuCommand;
     items[0].label = "Open";
@@ -2241,7 +2228,18 @@ draw_context_menu(FileManager *manager, Rectangle trigger)
     items[16].submenu = NULL;
     items[16].submenu_count = 0;
 
-    command = ContextMenu(menu);
+    in.id = 3100;
+    in.mode = MenuModeContext;
+    in.bounds = trigger;
+    in.trigger = trigger;
+    in.items = items;
+    in.item_count = 17;
+    in.open = &manager->context_open;
+    in.x = &manager->context_x;
+    in.y = &manager->context_y;
+
+    out = Menu(in);
+    command = out.activated_id;
     if(command != 0)
         perform_menu_command(manager, command);
 }
@@ -2277,7 +2275,7 @@ draw_status(FileManager *manager, Rectangle status)
                  manager->clipboard.count > 0 ?
                      (manager->clipboard.mode == FILE_CLIPBOARD_CUT ?
                           " | cut ready" : " | copy ready") : "");
-    Text(text, (int)status.x + 10, (int)status.y + 7, Text12, GetThemeIcon());
+    draw_label(text, (int)status.x + 10, (int)status.y + 7, Text12, GetThemeIcon());
     if(manager->error[0] != '\0')
         draw_text_fit_right(manager->error, (int)status.x + 240,
                             (int)status.y + 7,
@@ -2287,19 +2285,25 @@ draw_status(FileManager *manager, Rectangle status)
 static void
 draw_dialogs(FileManager *manager)
 {
+    static const ModalAction ok_actions[] = {{"OK", 0, 0, 0}};
+    static const ModalAction prompt_actions[] = {
+        {"Cancel", 0, 0, 0},
+        {"OK", 0, 0, 0}
+    };
+    ModalAction confirm_actions[2];
+    ModalProps in;
+    const char *prompt_title;
     int result;
-    PromptDialogProps prompt = {
-        manager->dialog == FILE_DIALOG_RENAME ? "Rename" :
-        manager->dialog == FILE_DIALOG_NEW_FOLDER ? "New Folder" :
-        manager->dialog == FILE_DIALOG_NEW_FILE ? "New File" :
-        manager->dialog == FILE_DIALOG_SEARCH ? "Search" : "Go to Location",
-        manager->dialog_text, sizeof(manager->dialog_text),
-        &manager->dialog_cursor, &manager->dialog_focused, "Cancel", "OK"};
 
     if(manager == NULL || manager->dialog == FILE_DIALOG_NONE)
         return;
     if(manager->dialog == FILE_DIALOG_PROPERTIES) {
-        result = Modal("Properties", manager->dialog_message, NULL, "OK");
+        memset(&in, 0, sizeof(in));
+        in.title = "Properties";
+        in.message = manager->dialog_message;
+        in.actions = ok_actions;
+        in.action_count = 1;
+        result = Modal(in);
         if(result != 0)
             manager->dialog = FILE_DIALOG_NONE;
         return;
@@ -2308,15 +2312,26 @@ draw_dialogs(FileManager *manager)
        manager->dialog == FILE_DIALOG_TRASH) {
         int selected = FileManagerSelectedCount(manager);
         char msg[128];
-        ConfirmDialogProps dialog = {
-            manager->dialog == FILE_DIALOG_TRASH ? "Move to Trash" : "Delete",
-            msg, "Cancel",
-            manager->dialog == FILE_DIALOG_TRASH ? "Trash" : "Delete"};
 
         snprintf(msg, sizeof(msg), "%s %d selected item%s?",
                  manager->dialog == FILE_DIALOG_TRASH ? "Move" : "Permanently delete",
                  selected, selected == 1 ? "" : "s");
-        result = ConfirmDialog(dialog);
+        confirm_actions[0].label = "Cancel";
+        confirm_actions[0].tone = ButtonToneNeutral;
+        confirm_actions[0].emphasis = ButtonEmphasisFilled;
+        confirm_actions[0].disabled = 0;
+        confirm_actions[1].label =
+            manager->dialog == FILE_DIALOG_TRASH ? "Trash" : "Delete";
+        confirm_actions[1].tone = ButtonToneNeutral;
+        confirm_actions[1].emphasis = ButtonEmphasisFilled;
+        confirm_actions[1].disabled = 0;
+        memset(&in, 0, sizeof(in));
+        in.title = manager->dialog == FILE_DIALOG_TRASH ? "Move to Trash" :
+                                                          "Delete";
+        in.message = msg;
+        in.actions = confirm_actions;
+        in.action_count = 2;
+        result = Modal(in);
         if(result == 1 || result == -1)
             manager->dialog = FILE_DIALOG_NONE;
         else if(result == 2) {
@@ -2328,7 +2343,20 @@ draw_dialogs(FileManager *manager)
         return;
     }
 
-    result = PromptDialog(prompt);
+    prompt_title =
+        manager->dialog == FILE_DIALOG_RENAME ? "Rename" :
+        manager->dialog == FILE_DIALOG_NEW_FOLDER ? "New Folder" :
+        manager->dialog == FILE_DIALOG_NEW_FILE ? "New File" :
+        manager->dialog == FILE_DIALOG_SEARCH ? "Search" : "Go to Location";
+    memset(&in, 0, sizeof(in));
+    in.title = prompt_title;
+    in.actions = prompt_actions;
+    in.action_count = 2;
+    in.text = manager->dialog_text;
+    in.text_size = (int)sizeof(manager->dialog_text);
+    in.cursor_position = &manager->dialog_cursor;
+    in.focused = &manager->dialog_focused;
+    result = Modal(in);
     if(result == 1 || result == -1) {
         manager->dialog = FILE_DIALOG_NONE;
     } else if(result == 2) {

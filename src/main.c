@@ -7,15 +7,13 @@ main(int argc, char **argv)
 
     InitWindow(900, 620, "Files");
     SetTargetFPS(60);
-    SetUIDefaultFontAutoLoad(1);
+    SetDefaultFontAutoLoad(1);
+    InitInterface(GetScreenWidth(), GetScreenHeight(), 1.0f);
     RefreshSystemTheme();
     SetThemeSource(THEME_SOURCE_SYSTEM);
     SetThemeMode(THEME_MODE_SYSTEM);
-    SetThemeStyle(THEME_STYLE_SYSTEM);
-    SetCurrentTheme(GetDefaultThemeForThemeStyle(THEME_STYLE_SYSTEM),
-                    SystemThemePrefersDark());
-    ApplyCurrentUITheme();
-    EnsureUIDefaultFont();
+    SetCurrentTheme(0, GetEffectiveThemeDarkMode() ? 1 : 0);
+    EnsureDefaultFont();
 #ifdef KRYON_NATIVE_PLAN9
     FileManagerInit(&manager, argc > 1 ? argv[1] : getenv("home"));
 #else
@@ -26,16 +24,14 @@ main(int argc, char **argv)
     while(!WindowShouldClose()) {
         BeginDrawing();
         ClearBackground(GetThemeBackground());
-        BeginUIFrame(GetScreenWidth(), GetScreenHeight(), 1.0f);
-        BeginUI(0x46494c45);
+        BeginInterfaceFrame(GetScreenWidth(), GetScreenHeight(), 1.0f);
         FileManagerResize(&manager, GetScreenWidth(), GetScreenHeight());
         {
             Rectangle viewport = {0, 0, GetScreenWidth(), GetScreenHeight()};
 
             FileManagerDraw(&manager, viewport);
         }
-        EndUI();
-        EndUIFrame();
+        EndInterfaceFrame();
         EndDrawing();
     }
     CloseWindow();
