@@ -29,8 +29,11 @@ main(int argc, char **argv)
         BeginUIFrame(GetScreenWidth(), GetScreenHeight(), 1.0f);
         BeginUI(0x46494c45);
         FileManagerResize(&manager, GetScreenWidth(), GetScreenHeight());
-        FileManagerDraw(&manager,
-                        (Rectangle){0, 0, GetScreenWidth(), GetScreenHeight()});
+        {
+            Rectangle viewport = {0, 0, GetScreenWidth(), GetScreenHeight()};
+
+            FileManagerDraw(&manager, viewport);
+        }
         EndUI();
         EndUIFrame();
         EndDrawing();

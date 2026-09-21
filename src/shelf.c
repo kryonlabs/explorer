@@ -1222,17 +1222,21 @@ load_icons(void)
 static void
 draw_texture_icon(Texture2D texture, Rectangle r, Color tint)
 {
+    Rectangle source = {0, 0, (float)texture.width, (float)texture.height};
+    Vector2 origin = {0, 0};
+
     if(!IsTextureValid(texture))
         return;
-    DrawTexturePro(texture,
-                   (Rectangle){0, 0, (float)texture.width, (float)texture.height},
-                   r, (Vector2){0, 0}, 0.0f, tint);
+    DrawTexturePro(texture, source, r, origin, 0.0f, tint);
 }
 
 static void
 draw_icon(Rectangle r, int is_dir)
 {
     Color c = is_dir ? GetThemeLink() : GetThemeIcon();
+    Rectangle body;
+    Vector2 a;
+    Vector2 b;
 
     load_icons();
     if(is_dir && IsTextureValid(icons.folder)) {
@@ -1244,30 +1248,42 @@ draw_icon(Rectangle r, int is_dir)
         return;
     }
     if(is_dir) {
-        DrawRectangleRoundedLinesEx((Rectangle){r.x + 7, r.y + 20,
-                                                r.width - 14, r.height - 24},
-                                    0.06f, 4, 3.0f, c);
-        DrawLineEx((Vector2){r.x + 11, r.y + 19},
-                   (Vector2){r.x + 24, r.y + 10}, 3.0f, c);
-        DrawLineEx((Vector2){r.x + 24, r.y + 10},
-                   (Vector2){r.x + 39, r.y + 10}, 3.0f, Fade(PINK, 0.85f));
-        DrawLineEx((Vector2){r.x + 39, r.y + 10},
-                   (Vector2){r.x + 48, r.y + 20}, 3.0f, Fade(PINK, 0.85f));
+        body.x = r.x + 7;
+        body.y = r.y + 20;
+        body.width = r.width - 14;
+        body.height = r.height - 24;
+        DrawRectangleRoundedLinesEx(body, 0.06f, 4, 3.0f, c);
+        a.x = r.x + 11;
+        a.y = r.y + 19;
+        b.x = r.x + 24;
+        b.y = r.y + 10;
+        DrawLineEx(a, b, 3.0f, c);
+        a.x = r.x + 24;
+        a.y = r.y + 10;
+        b.x = r.x + 39;
+        b.y = r.y + 10;
+        DrawLineEx(a, b, 3.0f, Fade(PINK, 0.85f));
+        a.x = r.x + 39;
+        a.y = r.y + 10;
+        b.x = r.x + 48;
+        b.y = r.y + 20;
+        DrawLineEx(a, b, 3.0f, Fade(PINK, 0.85f));
     } else {
-        DrawRectangleRounded((Rectangle){r.x + 5, r.y + 3, r.width - 10,
-                                         r.height - 6},
-                             0.04f, 4, Fade(GetThemeSurface(), 0.96f));
-        DrawRectangleRoundedLinesEx((Rectangle){r.x + 5, r.y + 3,
-                                                r.width - 10, r.height - 6},
-                                    0.04f, 4, 1.0f, c);
+        body.x = r.x + 5;
+        body.y = r.y + 3;
+        body.width = r.width - 10;
+        body.height = r.height - 6;
+        DrawRectangleRounded(body, 0.04f, 4, Fade(GetThemeSurface(), 0.96f));
+        DrawRectangleRoundedLinesEx(body, 0.04f, 4, 1.0f, c);
     }
 }
 
 static int
 small_button(Rectangle r, const char *label, int id, int disabled)
 {
-    return Button((ButtonProps){r, label, ButtonStyleSecondary, Text12, id,
-                                disabled});
+    ButtonProps props = {r, label, ButtonStyleSecondary, Text12, id, disabled};
+
+    return Button(props);
 }
 
 static int
@@ -1455,15 +1471,14 @@ draw_menu_popup(FileManager *manager, Rectangle trigger,
 
     if(manager->menu_open == menu_id) {
         int open = 1;
+        ContextMenuProps menu = {4000 + menu_id, trigger, items, item_count,
+                                 &open, &manager->menu_x, &manager->menu_y};
 
         if(manager->menu_defer) {
             manager->menu_defer = 0;
             return;
         }
-        command = ContextMenu((ContextMenuProps){4000 + menu_id, trigger,
-                                                 items, item_count, &open,
-                                                 &manager->menu_x,
-                                                 &manager->menu_y});
+        command = ContextMenu(menu);
         if(command != 0)
             handle_menu_command(manager, command);
         if(!open)
@@ -1576,6 +1591,7 @@ draw_tabs(FileManager *manager, Rectangle tabs)
     int x = (int)tabs.x + 8;
     int y = (int)tabs.y + 4;
     int i;
+    Rectangle add;
 
     DrawRectangleRec(tabs, opaque_color(GetThemeSurface()));
     DrawRectangle((int)tabs.x, (int)(tabs.y + tabs.height - 1),
@@ -1609,9 +1625,14 @@ draw_tabs(FileManager *manager, Rectangle tabs)
         x += 138;
     }
     if(manager->tab_count < FILE_MANAGER_MAX_TABS &&
-       x + 30 < tabs.x + tabs.width &&
-       small_button((Rectangle){(float)x, (float)y, 28, 24}, "+", 12100, 0))
-        (void)FileManagerNewTab(manager, manager->cwd);
+       x + 30 < tabs.x + tabs.width) {
+        add.x = (float)x;
+        add.y = (float)y;
+        add.width = 28;
+        add.height = 24;
+        if(small_button(add, "+", 12100, 0))
+            (void)FileManagerNewTab(manager, manager->cwd);
+    }
 }
 
 static void
@@ -1622,6 +1643,8 @@ draw_toolbar(FileManager *manager, Rectangle toolbar)
     int x = (int)location.x + 10;
     int y = (int)location.y + 7;
     int field_x;
+    Rectangle b;
+    Rectangle field;
 
     DrawRectangleRec(toolbar, opaque_color(GetThemeSurface()));
     DrawRectangle((int)toolbar.x, (int)(toolbar.y + toolbar.height - 1),
@@ -1629,32 +1652,39 @@ draw_toolbar(FileManager *manager, Rectangle toolbar)
 
     draw_menu_bar(manager, menu);
 
-    if(small_button((Rectangle){x, y, 32, 26}, "<", 1001,
-                    manager->back_count <= 0))
+    b.x = (float)x;
+    b.y = (float)y;
+    b.width = 32;
+    b.height = 26;
+    if(small_button(b, "<", 1001, manager->back_count <= 0))
         open_back(manager);
     x += 36;
-    if(small_button((Rectangle){x, y, 32, 26}, ">", 1002,
-                    manager->forward_count <= 0))
+    b.x = (float)x;
+    if(small_button(b, ">", 1002, manager->forward_count <= 0))
         open_forward(manager);
     x += 36;
-    if(small_button((Rectangle){x, y, 32, 26}, "^", 1003, 0))
+    b.x = (float)x;
+    if(small_button(b, "^", 1003, 0))
         open_parent(manager);
     x += 36;
-    if(small_button((Rectangle){x, y, 52, 26}, "Home", 1004, 0))
+    b.x = (float)x;
+    b.width = 52;
+    if(small_button(b, "Home", 1004, 0))
         open_home(manager);
     x += 60;
     field_x = x;
-    DrawRectangleRounded((Rectangle){(float)field_x, (float)y,
-                                     location.width - (field_x - location.x) - 50,
-                                     26},
-                         0.02f, 4, Fade(GetThemeBackground(), 0.86f));
+    field.x = (float)field_x;
+    field.y = (float)y;
+    field.width = location.width - (field_x - location.x) - 50;
+    field.height = 26;
+    DrawRectangleRounded(field, 0.02f, 4, Fade(GetThemeBackground(), 0.86f));
     Text(manager->cwd, field_x + 10, y + 7, Text14, GetThemeText());
-    if(hit((Rectangle){(float)field_x, (float)y,
-                       location.width - (field_x - location.x) - 50, 26}) &&
-       IsMouseButtonReleased(MOUSE_BUTTON_LEFT))
+    if(hit(field) && IsMouseButtonReleased(MOUSE_BUTTON_LEFT))
         start_prompt(manager, FILE_DIALOG_LOCATION, manager->cwd);
     x = (int)(location.x + location.width - 42);
-    if(small_button((Rectangle){x, y, 36, 26}, "Find", 1111, 0))
+    b.x = (float)x;
+    b.width = 36;
+    if(small_button(b, "Find", 1111, 0))
         start_prompt(manager, FILE_DIALOG_SEARCH, manager->search_query);
 }
 
@@ -1681,12 +1711,30 @@ draw_places(FileManager *manager, Rectangle sidebar)
     kry_fs_trash_dir(KRY_TRASH_DIR_FILES, trash, sizeof(trash));
 
     load_icons();
-    places[count++] = (PlaceItem){"Home", home_path(), &icons.home};
-    places[count++] = (PlaceItem){"Desktop", desktop, &icons.desktop};
-    places[count++] = (PlaceItem){"Documents", documents, &icons.documents};
-    places[count++] = (PlaceItem){"Downloads", downloads, &icons.downloads};
-    places[count++] = (PlaceItem){"Trash", trash, &icons.trash};
-    places[count++] = (PlaceItem){"File System", "/", &icons.filesystem};
+    places[count].label = "Home";
+    places[count].path = home_path();
+    places[count].icon = &icons.home;
+    count++;
+    places[count].label = "Desktop";
+    places[count].path = desktop;
+    places[count].icon = &icons.desktop;
+    count++;
+    places[count].label = "Documents";
+    places[count].path = documents;
+    places[count].icon = &icons.documents;
+    count++;
+    places[count].label = "Downloads";
+    places[count].path = downloads;
+    places[count].icon = &icons.downloads;
+    count++;
+    places[count].label = "Trash";
+    places[count].path = trash;
+    places[count].icon = &icons.trash;
+    count++;
+    places[count].label = "File System";
+    places[count].path = "/";
+    places[count].icon = &icons.filesystem;
+    count++;
 
     DrawRectangleRec(sidebar, Fade(GetThemeSurface(), 0.66f));
     Text("Places", (int)sidebar.x + 12, y, Text12, GetThemeIcon());
@@ -1695,18 +1743,21 @@ draw_places(FileManager *manager, Rectangle sidebar)
         Rectangle row = {sidebar.x + 6, y, sidebar.width - 12, 28};
         int active = same_text(manager->cwd, places[i].path);
         int exists = kry_fs_exists(places[i].path);
+        Rectangle icon_rect = {row.x + 8, row.y + 6, 16, 16};
 
         if(active)
             DrawRectangleRounded(row, 0.08f, 4, Fade(GetThemeButtonHover(), 0.70f));
         else if(hit(row))
             DrawRectangleRounded(row, 0.08f, 4, Fade(GetThemeButton(), 0.42f));
         if(places[i].icon != NULL && IsTextureValid(*places[i].icon))
-            draw_texture_icon(*places[i].icon,
-                              (Rectangle){row.x + 8, row.y + 6, 16, 16},
-                              WHITE);
-        else
-            DrawRectangleRounded((Rectangle){row.x + 9, row.y + 8, 12, 12},
-                                 0.20f, 4, GetThemeIcon());
+            draw_texture_icon(*places[i].icon, icon_rect, WHITE);
+        else {
+            icon_rect.x = row.x + 9;
+            icon_rect.y = row.y + 8;
+            icon_rect.width = 12;
+            icon_rect.height = 12;
+            DrawRectangleRounded(icon_rect, 0.20f, 4, GetThemeIcon());
+        }
         Text(places[i].label, (int)row.x + 30, (int)row.y + 8, Text12,
              exists ? GetThemeText() : GetThemeIcon());
         if(exists && hit(row) && IsMouseButtonReleased(MOUSE_BUTTON_LEFT))
@@ -1929,12 +1980,18 @@ draw_rows(FileManager *manager, Rectangle list)
             if(index >= manager->entry_count)
                 continue;
             entry = &manager->entries[index];
-            cell = (Rectangle){list.x + col * cell_w + 10,
-                               list.y + row * cell_h + 8,
-                               cell_w - 16, cell_h - 10};
-            icon = (Rectangle){cell.x + (cell.width - icon_size) * 0.5f,
-                               cell.y + 8, icon_size, icon_size};
-            label = (Rectangle){cell.x + 4, cell.y + 69, cell.width - 8, 20};
+            cell.x = list.x + col * cell_w + 10;
+            cell.y = list.y + row * cell_h + 8;
+            cell.width = cell_w - 16;
+            cell.height = cell_h - 10;
+            icon.x = cell.x + (cell.width - icon_size) * 0.5f;
+            icon.y = cell.y + 8;
+            icon.width = icon_size;
+            icon.height = icon_size;
+            label.x = cell.x + 4;
+            label.y = cell.y + 69;
+            label.width = cell.width - 8;
+            label.height = 20;
             hover = manager->focused && hit(cell);
 
             if(entry->selected)
@@ -2042,43 +2099,149 @@ draw_context_menu(FileManager *manager, Rectangle trigger)
     MenuItem items[17];
     int command;
     int trash_view = is_trash_view(manager);
+    ContextMenuProps menu = {3100, trigger, items, 17,
+                             &manager->context_open,
+                             &manager->context_x,
+                             &manager->context_y};
 
-    items[0] = (MenuItem){MenuCommand, "Open", "Enter", 2001,
-                          selected <= 0, 0, NULL, 0};
-    items[1] = (MenuItem){MenuCommand, "Rename", "F2", 2002,
-                          selected != 1, 0, NULL, 0};
-    items[2] = (MenuItem){MenuCommand, "Restore", NULL, 2014,
-                          selected <= 0 || !trash_view, 0, NULL, 0};
-    items[3] = (MenuItem){MenuSeparator, NULL, NULL, 0, 0, 0, NULL, 0};
-    items[4] = (MenuItem){MenuCommand, "Copy", "Ctrl+C", 2003,
-                          selected <= 0, 0, NULL, 0};
-    items[5] = (MenuItem){MenuCommand, "Cut", "Ctrl+X", 2004,
-                          selected <= 0, 0, NULL, 0};
-    items[6] = (MenuItem){MenuCommand, "Paste", "Ctrl+V", 2005,
-                          manager->clipboard.count <= 0, 0, NULL, 0};
-    items[7] = (MenuItem){MenuCommand, "Duplicate", NULL, 2010,
-                          selected <= 0, 0, NULL, 0};
-    items[8] = (MenuItem){MenuCommand, "Make Link", NULL, 2011,
-                          selected <= 0, 0, NULL, 0};
-    items[9] = (MenuItem){MenuSeparator, NULL, NULL, 0, 0, 0, NULL, 0};
-    items[10] = (MenuItem){MenuCommand, "Move to Trash", "Del", 2006,
-                          selected <= 0, 0, NULL, 0};
-    items[11] = (MenuItem){MenuCommand, "Delete", "Shift+Del", 2007,
-                           selected <= 0, 0, NULL, 0};
-    items[12] = (MenuItem){MenuSeparator, NULL, NULL, 0, 0, 0, NULL, 0};
-    items[13] = (MenuItem){MenuCommand, "Search", "Ctrl+F", 2012,
-                           0, 0, NULL, 0};
-    items[14] = (MenuItem){MenuCommand, "Properties", "Alt+Enter", 2013,
-                           selected <= 0, 0, NULL, 0};
-    items[15] = (MenuItem){MenuCommand, "New Folder", NULL, 2008,
-                          0, 0, NULL, 0};
-    items[16] = (MenuItem){MenuCommand, "New File", NULL, 2009,
-                           0, 0, NULL, 0};
+    items[0].kind = MenuCommand;
+    items[0].label = "Open";
+    items[0].accelerator = "Enter";
+    items[0].id = 2001;
+    items[0].disabled = selected <= 0;
+    items[0].checked = 0;
+    items[0].submenu = NULL;
+    items[0].submenu_count = 0;
+    items[1].kind = MenuCommand;
+    items[1].label = "Rename";
+    items[1].accelerator = "F2";
+    items[1].id = 2002;
+    items[1].disabled = selected != 1;
+    items[1].checked = 0;
+    items[1].submenu = NULL;
+    items[1].submenu_count = 0;
+    items[2].kind = MenuCommand;
+    items[2].label = "Restore";
+    items[2].accelerator = NULL;
+    items[2].id = 2014;
+    items[2].disabled = selected <= 0 || !trash_view;
+    items[2].checked = 0;
+    items[2].submenu = NULL;
+    items[2].submenu_count = 0;
+    items[3].kind = MenuSeparator;
+    items[3].label = NULL;
+    items[3].accelerator = NULL;
+    items[3].id = 0;
+    items[3].disabled = 0;
+    items[3].checked = 0;
+    items[3].submenu = NULL;
+    items[3].submenu_count = 0;
+    items[4].kind = MenuCommand;
+    items[4].label = "Copy";
+    items[4].accelerator = "Ctrl+C";
+    items[4].id = 2003;
+    items[4].disabled = selected <= 0;
+    items[4].checked = 0;
+    items[4].submenu = NULL;
+    items[4].submenu_count = 0;
+    items[5].kind = MenuCommand;
+    items[5].label = "Cut";
+    items[5].accelerator = "Ctrl+X";
+    items[5].id = 2004;
+    items[5].disabled = selected <= 0;
+    items[5].checked = 0;
+    items[5].submenu = NULL;
+    items[5].submenu_count = 0;
+    items[6].kind = MenuCommand;
+    items[6].label = "Paste";
+    items[6].accelerator = "Ctrl+V";
+    items[6].id = 2005;
+    items[6].disabled = manager->clipboard.count <= 0;
+    items[6].checked = 0;
+    items[6].submenu = NULL;
+    items[6].submenu_count = 0;
+    items[7].kind = MenuCommand;
+    items[7].label = "Duplicate";
+    items[7].accelerator = NULL;
+    items[7].id = 2010;
+    items[7].disabled = selected <= 0;
+    items[7].checked = 0;
+    items[7].submenu = NULL;
+    items[7].submenu_count = 0;
+    items[8].kind = MenuCommand;
+    items[8].label = "Make Link";
+    items[8].accelerator = NULL;
+    items[8].id = 2011;
+    items[8].disabled = selected <= 0;
+    items[8].checked = 0;
+    items[8].submenu = NULL;
+    items[8].submenu_count = 0;
+    items[9].kind = MenuSeparator;
+    items[9].label = NULL;
+    items[9].accelerator = NULL;
+    items[9].id = 0;
+    items[9].disabled = 0;
+    items[9].checked = 0;
+    items[9].submenu = NULL;
+    items[9].submenu_count = 0;
+    items[10].kind = MenuCommand;
+    items[10].label = "Move to Trash";
+    items[10].accelerator = "Del";
+    items[10].id = 2006;
+    items[10].disabled = selected <= 0;
+    items[10].checked = 0;
+    items[10].submenu = NULL;
+    items[10].submenu_count = 0;
+    items[11].kind = MenuCommand;
+    items[11].label = "Delete";
+    items[11].accelerator = "Shift+Del";
+    items[11].id = 2007;
+    items[11].disabled = selected <= 0;
+    items[11].checked = 0;
+    items[11].submenu = NULL;
+    items[11].submenu_count = 0;
+    items[12].kind = MenuSeparator;
+    items[12].label = NULL;
+    items[12].accelerator = NULL;
+    items[12].id = 0;
+    items[12].disabled = 0;
+    items[12].checked = 0;
+    items[12].submenu = NULL;
+    items[12].submenu_count = 0;
+    items[13].kind = MenuCommand;
+    items[13].label = "Search";
+    items[13].accelerator = "Ctrl+F";
+    items[13].id = 2012;
+    items[13].disabled = 0;
+    items[13].checked = 0;
+    items[13].submenu = NULL;
+    items[13].submenu_count = 0;
+    items[14].kind = MenuCommand;
+    items[14].label = "Properties";
+    items[14].accelerator = "Alt+Enter";
+    items[14].id = 2013;
+    items[14].disabled = selected <= 0;
+    items[14].checked = 0;
+    items[14].submenu = NULL;
+    items[14].submenu_count = 0;
+    items[15].kind = MenuCommand;
+    items[15].label = "New Folder";
+    items[15].accelerator = NULL;
+    items[15].id = 2008;
+    items[15].disabled = 0;
+    items[15].checked = 0;
+    items[15].submenu = NULL;
+    items[15].submenu_count = 0;
+    items[16].kind = MenuCommand;
+    items[16].label = "New File";
+    items[16].accelerator = NULL;
+    items[16].id = 2009;
+    items[16].disabled = 0;
+    items[16].checked = 0;
+    items[16].submenu = NULL;
+    items[16].submenu_count = 0;
 
-    command = ContextMenu((ContextMenuProps){3100, trigger, items, 17,
-                                             &manager->context_open,
-                                             &manager->context_x,
-                                             &manager->context_y});
+    command = ContextMenu(menu);
     if(command != 0)
         perform_menu_command(manager, command);
 }
@@ -2125,6 +2288,13 @@ static void
 draw_dialogs(FileManager *manager)
 {
     int result;
+    PromptDialogProps prompt = {
+        manager->dialog == FILE_DIALOG_RENAME ? "Rename" :
+        manager->dialog == FILE_DIALOG_NEW_FOLDER ? "New Folder" :
+        manager->dialog == FILE_DIALOG_NEW_FILE ? "New File" :
+        manager->dialog == FILE_DIALOG_SEARCH ? "Search" : "Go to Location",
+        manager->dialog_text, sizeof(manager->dialog_text),
+        &manager->dialog_cursor, &manager->dialog_focused, "Cancel", "OK"};
 
     if(manager == NULL || manager->dialog == FILE_DIALOG_NONE)
         return;
@@ -2138,14 +2308,15 @@ draw_dialogs(FileManager *manager)
        manager->dialog == FILE_DIALOG_TRASH) {
         int selected = FileManagerSelectedCount(manager);
         char msg[128];
+        ConfirmDialogProps dialog = {
+            manager->dialog == FILE_DIALOG_TRASH ? "Move to Trash" : "Delete",
+            msg, "Cancel",
+            manager->dialog == FILE_DIALOG_TRASH ? "Trash" : "Delete"};
 
         snprintf(msg, sizeof(msg), "%s %d selected item%s?",
                  manager->dialog == FILE_DIALOG_TRASH ? "Move" : "Permanently delete",
                  selected, selected == 1 ? "" : "s");
-        result = ConfirmDialog((ConfirmDialogProps){
-            manager->dialog == FILE_DIALOG_TRASH ? "Move to Trash" : "Delete",
-            msg, "Cancel",
-            manager->dialog == FILE_DIALOG_TRASH ? "Trash" : "Delete"});
+        result = ConfirmDialog(dialog);
         if(result == 1 || result == -1)
             manager->dialog = FILE_DIALOG_NONE;
         else if(result == 2) {
@@ -2157,13 +2328,7 @@ draw_dialogs(FileManager *manager)
         return;
     }
 
-    result = PromptDialog((PromptDialogProps){
-        manager->dialog == FILE_DIALOG_RENAME ? "Rename" :
-        manager->dialog == FILE_DIALOG_NEW_FOLDER ? "New Folder" :
-        manager->dialog == FILE_DIALOG_NEW_FILE ? "New File" :
-        manager->dialog == FILE_DIALOG_SEARCH ? "Search" : "Go to Location",
-        manager->dialog_text, sizeof(manager->dialog_text),
-        &manager->dialog_cursor, &manager->dialog_focused, "Cancel", "OK"});
+    result = PromptDialog(prompt);
     if(result == 1 || result == -1) {
         manager->dialog = FILE_DIALOG_NONE;
     } else if(result == 2) {
@@ -2198,17 +2363,26 @@ FileManagerDraw(FileManager *manager, Rectangle viewport)
 
     if(manager == NULL)
         return;
-    tabs = (Rectangle){viewport.x, viewport.y, viewport.width, tab_h};
-    toolbar = (Rectangle){viewport.x, viewport.y + tab_h, viewport.width,
-                          toolbar_h};
-    sidebar = (Rectangle){viewport.x, viewport.y + tab_h + toolbar_h,
-                          sidebar_w,
-                          viewport.height - tab_h - toolbar_h - status_h};
-    list = (Rectangle){viewport.x + sidebar_w, viewport.y + tab_h + toolbar_h,
-                       viewport.width - sidebar_w,
-                       viewport.height - tab_h - toolbar_h - status_h};
-    status = (Rectangle){viewport.x, viewport.y + viewport.height - status_h,
-                         viewport.width, status_h};
+    tabs.x = viewport.x;
+    tabs.y = viewport.y;
+    tabs.width = viewport.width;
+    tabs.height = (float)tab_h;
+    toolbar.x = viewport.x;
+    toolbar.y = viewport.y + tab_h;
+    toolbar.width = viewport.width;
+    toolbar.height = (float)toolbar_h;
+    sidebar.x = viewport.x;
+    sidebar.y = viewport.y + tab_h + toolbar_h;
+    sidebar.width = (float)sidebar_w;
+    sidebar.height = viewport.height - tab_h - toolbar_h - status_h;
+    list.x = viewport.x + sidebar_w;
+    list.y = viewport.y + tab_h + toolbar_h;
+    list.width = viewport.width - sidebar_w;
+    list.height = viewport.height - tab_h - toolbar_h - status_h;
+    status.x = viewport.x;
+    status.y = viewport.y + viewport.height - status_h;
+    status.width = viewport.width;
+    status.height = (float)status_h;
 
     DrawRectangleRec(viewport, opaque_color(GetThemeBackground()));
     if(tab_h > 0)
