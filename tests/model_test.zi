@@ -7,6 +7,56 @@ Preview :: #import "preview";
 Utf8 :: #import "std/utf8";
 FileClipboard :: #import "file_clipboard";
 Number :: #import "std/number_text";
+FileDisplay :: #import "file_display";
+
+FileDisplayTest :: (root: string) -> bool {
+    raw_bytes := u8.[65, 255, 254, 92, 120, 70, 70, 10, 195, 169]
+    raw := TextView(raw_bytes[:])
+    caption: Text = FileDisplay.Caption(raw)
+    if TextView(caption) != "A\\xFF\\xFE\\\\xFF\\x0Aé" || !Utf8.Valid(TextView(caption)) { return false }
+    decoded: FileDisplay.EditorValue = FileDisplay.ParseEditor(TextView(caption))
+    if !decoded.valid || TextView(decoded.value) != raw { return false }
+    bytes: Vec(u8)
+    for byte: 1..255 { if !VecPush(bytes, cast(u8)byte) { return false } }
+    all_caption: Text = FileDisplay.Caption(TextView(bytes[:]))
+    all_decoded: FileDisplay.EditorValue = FileDisplay.ParseEditor(TextView(all_caption))
+    if !Utf8.Valid(TextView(all_caption)) || !all_decoded.valid ||
+        TextView(all_decoded.value) != TextView(bytes[:]) { return false }
+    bad := string.["\\x", "\\x0", "\\xGG", "\\x00"]
+    for value: bad {
+        rejected: FileDisplay.EditorValue = FileDisplay.ParseEditor(value)
+        if rejected.valid { return false }
+    }
+    directory_bytes := u8.[68, 45, 128]
+    name_bytes := u8.[78, 45, 255, 46, 116, 120, 116]
+    renamed_bytes := u8.[82, 45, 254, 46, 116, 120, 116]
+    directory: Text = Files.JoinPath(root, TextView(directory_bytes[:]))
+    path: Text = Files.JoinPath(directory, TextView(name_bytes[:]))
+    literal: Text = Files.JoinPath(directory, "N-\\xFF.txt")
+    if !Files.CreateDirectories(directory) || !Files.ReplaceFile(path, "raw data") ||
+        !Files.ReplaceFile(literal, "literal data") { return false }
+    manager: Model.Manager
+    Model.Init(*manager, directory)
+    if manager.cwd != TextView(directory) || manager.entries.count != 2 { return false }
+    for entry: manager.entries {
+        if !Utf8.Valid(entry.caption) || entry.key != Model.PathKey(entry.path) { return false }
+    }
+    if !SelectName(*manager, TextView(name_bytes[:])) { return false }
+    if Model.EntryName(*manager, manager.cursor) != TextView(name_bytes[:]) ||
+        Model.EntryCaption(*manager, manager.cursor) != "N-\\xFF.txt" ||
+        !Model.RenameSelection(*manager, TextView(renamed_bytes[:])) { return false }
+    renamed: Text = Files.JoinPath(directory, TextView(renamed_bytes[:]))
+    if Files.PathExists(path) || !Files.PathExists(renamed) || !Files.PathExists(literal) ||
+        !SelectName(*manager, TextView(renamed_bytes[:])) || !Model.CopySelection(*manager, false) { return false }
+    invalid_uri: Text = FileClipboard.Encode(*manager.clipboard, FileClipboard.GNOME_FILES)
+    if invalid_uri.bytes.count != 0 { return false }
+    target: Text = Files.JoinPath(root, "raw-copy-target")
+    if !Files.CreateDirectories(target) || !Model.OpenPathTracked(*manager, target) ||
+        !Model.Paste(*manager) || !Files.PathExists(Files.JoinPath(target, TextView(renamed_bytes[:]))) ||
+        !Files.PathExists(renamed) { return false }
+    Model.Dispose(*manager)
+    return true
+}
 
 FileClipboardTest :: (root: string) -> bool {
     clipboard: Model.Clipboard
@@ -260,6 +310,7 @@ main :: (argc: s32, argv: **u8) -> s32 {
     unused Files.RemoveTree(root)
     if !Files.CreateDirectories(root, 448) ||
         !Files.CreateDirectories(Files.JoinPath(root, "data-home"), 448) { return 66 }
+    if !FileDisplayTest(root) { print("raw filename caption/identity/filesystem roundtrip failed\n"); return 73 }
     if !FileClipboardTest(root) { print("file clipboard parse/roundtrip/safety failed\n"); return 72 }
     if !PreviewTest(root) { print("bounded preview ownership/format test failed\n"); return 71 }
 

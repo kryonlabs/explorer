@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- Display Linux filenames with invalid UTF-8 using reversible byte escapes,
+  preserving raw paths, selection identity and file operations across views,
+  current paths, errors, previews and rename/location editors.
 - Exchange desktop file copy/cut/paste selections with Thunar through native
   X11/XWayland MIME clipboard transport, including URI escaping, transactional
   payload validation, ownership changes and pending-cut retry handling.

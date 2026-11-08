@@ -42,6 +42,9 @@ specific so each missing row can become an independent implementation task.
 
 - `src/model.zi` owns navigation, tabs, history, selection, recursive search,
   file operations, symbolic links and XDG trash metadata.
+- Linux paths and selection keys retain raw filename bytes. `src/file_display.zi`
+  supplies valid UTF-8 captions and reversible byte escapes for rename/location
+  editors; desktop file clipboard URI validation remains strict.
 - `src/app.zi` is the standalone Kryon `Frame` entry.
 - `src/app_host.zi` owns widget composition and exports `Host`, `Prepare`,
   `Draw` and `Close` for direct Ziran embedding.

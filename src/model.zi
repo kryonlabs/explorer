@@ -7,6 +7,7 @@ Env :: #import "std/environment_linux";
 using Format :: #import "std/format";
 Number :: #import "std/number_text";
 Strings :: #import "std/c_string";
+Display :: #import "file_display";
 using Bytes :: #import "std/byte_text_linux";
 using TextBuffer :: #import "std/text_buffer";
 
@@ -58,6 +59,7 @@ Entry :: struct {
     name: string
     path: string
     info: Files.PathInfo
+    caption: string
 }
 
 PathKey :: (path: string) -> u64 {
@@ -298,9 +300,13 @@ AppendEntry :: (manager: *Manager, name: string, path: string,
     entry: Entry
     owned_name: Text = TextCopy(name)
     owned_path: Text = TextCopy(path)
-    if !VecPush(manager.entry_text, owned_name) || !VecPush(manager.entry_text, owned_path) { return false }
-    entry.name = TextView(manager.entry_text[manager.entry_text.count - 2])
-    entry.path = TextView(manager.entry_text[manager.entry_text.count - 1])
+    owned_caption: Text = Display.Caption(name)
+    if name != "" && owned_caption.bytes.count == 0 { return false }
+    if !VecPush(manager.entry_text, owned_name) || !VecPush(manager.entry_text, owned_path) ||
+        !VecPush(manager.entry_text, owned_caption) { return false }
+    entry.name = TextView(manager.entry_text[manager.entry_text.count - 3])
+    entry.path = TextView(manager.entry_text[manager.entry_text.count - 2])
+    entry.caption = TextView(manager.entry_text[manager.entry_text.count - 1])
     entry.key = PathKey(entry.path)
     entry.info = info
     if !VecPush(manager.entries, entry) { return false }
@@ -593,6 +599,11 @@ EntryIsDirectory :: (manager: *Manager, index: s32) -> bool {
 EntryName :: (manager: *Manager, index: s32) -> string {
     if index < 0 || index >= manager.entries.count { return "" }
     return manager.entries[index].name
+}
+
+EntryCaption :: (manager: *Manager, index: s32) -> string {
+    if index < 0 || index >= manager.entries.count { return "" }
+    return manager.entries[index].caption
 }
 
 EntryPath :: (manager: *Manager, index: s32) -> string {

@@ -17,10 +17,122 @@ Preview :: #import "preview";
 Palettes :: #import "kryon/widget_palette";
 DateTime :: #import "std/date_time_linux";
 using FormatText :: #import "std/format";
+Utf8 :: #import "std/utf8";
+FileDisplay :: #import "file_display";
 
 frame_seconds: float64;
 frame_wheel: float32;
 theme_pixels: [576000]u32;
+
+LabelsValid :: (session: Sessions.Session) -> bool {
+    for index: cast(s32)0..Tree.TreeCount(session) - 1 {
+        if !Utf8.Valid(Tree.TreeNodeAt(session, index).semantic_label) { return false }
+    }
+    return true
+}
+
+RawFilenameHostTest :: (host: *App.Host, session: Sessions.Session, root: string) -> bool {
+    Preview.Close(*host.preview)
+    host.manager.prompt = .PromptNone
+    // Ordinary editors retain literal backslashes, including escape lookalikes.
+    ordinary: Text = Files.JoinPath(root, "ordinary.txt")
+    literal_name := "literal-\\x41-\\\\.txt"
+    literal_dir: Text = Files.JoinPath(root, "directory-\\x41-\\\\")
+    if !Files.ReplaceFile(ordinary, "ordinary") || !Files.CreateDirectories(literal_dir) ||
+        !Model.OpenPath(*host.manager, root) { return false }
+    for index: cast(s32)0..cast(s32)host.manager.entries.count - 1 {
+        if Model.EntryPath(*host.manager, index) == TextView(ordinary) { Model.SelectOne(*host.manager, index) }
+    }
+    App.OpenPrompt(host, .PromptRename)
+    if host.escaped_editor || App.PromptTitle(host) != "New name" { return false }
+    host.field.length = App.CopyInto(host.field.bytes, literal_name)
+    App.FinishPrompt(host)
+    if !Files.PathExists(Files.JoinPath(root, literal_name)) { return false }
+    App.OpenPrompt(host, .PromptLocation)
+    if host.escaped_editor || App.PromptTitle(host) != "Location" { return false }
+    host.field.length = App.CopyInto(host.field.bytes, TextView(literal_dir))
+    App.FinishPrompt(host)
+    if host.manager.cwd != TextView(literal_dir) { return false }
+    App.OpenPrompt(host, .PromptLocation)
+    if host.escaped_editor || TextView(host.field.bytes[:host.field.length]) != TextView(literal_dir) { return false }
+    App.FinishPrompt(host)
+    if host.manager.cwd != TextView(literal_dir) { return false }
+    directory_bytes := u8.[68, 45, 128]
+    name_bytes := u8.[78, 45, 255, 46, 116, 120, 116]
+    image_bytes := u8.[90, 45, 255, 46, 112, 110, 103]
+    directory: Text = Files.JoinPath(root, TextView(directory_bytes[:]))
+    path: Text = Files.JoinPath(directory, TextView(name_bytes[:]))
+    if !Files.CreateDirectories(directory) || !Files.ReplaceFile(path, "preview body") ||
+        !Files.ReplaceFile(Files.JoinPath(directory, "N-\\xFF.txt"), "literal") ||
+        !Files.ReplaceFile(Files.JoinPath(directory, TextView(image_bytes[:])), "unavailable thumbnail") ||
+        !Model.OpenPath(*host.manager, directory) { return false }
+    raw_index: s32 = -1
+    for index: cast(s32)0..cast(s32)host.manager.entries.count - 1 {
+        if Model.EntryPath(*host.manager, index) == TextView(path) { raw_index = index }
+    }
+    if raw_index < 0 { return false }
+    raw_key := host.manager.entries[raw_index].key
+    for mode: cast(s32)0..2 {
+        Model.SetView(*host.manager, cast(Model.ViewMode)mode)
+        Model.SelectOne(*host.manager, raw_index)
+        if !Render(host, session, true) || !LabelsValid(session) ||
+            Model.EntryPath(*host.manager, host.manager.cursor) != TextView(path) ||
+            host.manager.entries[host.manager.cursor].key != raw_key { return false }
+        found := false
+        for index: cast(s32)0..Tree.TreeCount(session) - 1 {
+            if Tree.TreeNodeAt(session, index).semantic_label == "N-\\xFF.txt" { found = true }
+        }
+        if !found { return false }
+    }
+    App.OpenPrompt(host, .PromptLocation)
+    caption: Text = FileDisplay.Caption(TextView(directory))
+    if !host.escaped_editor || TextView(host.field.bytes[:host.field.length]) != TextView(caption) ||
+        !Render(host, session, true) || !LabelsValid(session) { return false }
+    App.FinishPrompt(host)
+    if host.manager.cwd != TextView(directory) { return false }
+    App.OpenPrompt(host, .PromptLocation)
+    host.field.length = App.CopyInto(host.field.bytes, "\\x00")
+    App.FinishPrompt(host)
+    if host.manager.prompt != .PromptLocation || host.manager.cwd != TextView(directory) { return false }
+    host.manager.prompt = .PromptNone
+    host.field.focused = false
+    Model.SelectOne(*host.manager, raw_index)
+    App.OpenPrompt(host, .PromptRename)
+    if TextView(host.field.bytes[:host.field.length]) != "N-\\xFF.txt" ||
+        !Render(host, session, true) || !LabelsValid(session) { return false }
+    App.FinishPrompt(host)
+    if !Files.PathExists(path) { return false }
+    App.OpenPrompt(host, .PromptRename)
+    host.field.length = App.CopyInto(host.field.bytes, "\\xGG")
+    App.FinishPrompt(host)
+    if host.manager.prompt != .PromptRename || !Files.PathExists(path) ||
+        !Render(host, session, true) || !LabelsValid(session) { return false }
+    host.manager.prompt = .PromptNone
+    host.field.focused = false
+    for index: cast(s32)0..cast(s32)host.manager.entries.count - 1 {
+        if Model.EntryPath(*host.manager, index) == TextView(path) { Model.SelectOne(*host.manager, index) }
+    }
+    Model.SetError(*host.manager, TextView(path))
+    if !Render(host, session, true) || !LabelsValid(session) ||
+        !Press(host, session, 80, Keys.KeyModifierControl) || !host.preview.opened ||
+        TextView(host.preview.path) != TextView(path) ||
+        !Render(host, session, true) || !LabelsValid(session) { return false }
+    Preview.Close(*host.preview)
+    // A legal raw path can exceed the editor capacity after byte escaping.
+    component: [200]u8
+    for index: cast(s32)0..199 { component[index] = cast(u8)255 }
+    long_path: Text = TextCopy(root)
+    for depth: cast(s32)0..5 {
+        next: Text = Files.JoinPath(long_path, TextView(component[:]))
+        VecSwap(long_path.bytes, next.bytes)
+    }
+    if !Files.CreateDirectories(long_path) || !Model.OpenPath(*host.manager, long_path) { return false }
+    App.OpenPrompt(host, .PromptLocation)
+    if host.manager.prompt != .PromptNone || host.field.focused || host.field.length != 0 ||
+        host.manager.cwd != TextView(long_path) || host.manager.error != "Escaped name or path is too long to edit safely" ||
+        !Render(host, session, true) || !LabelsValid(session) { return false }
+    return true
+}
 
 ClipboardHostTest :: (host: *App.Host, session: Sessions.Session, root: string) -> bool {
     Preview.Close(*host.preview)
@@ -553,6 +665,7 @@ main :: (argc: s32, argv: **u8) -> s32 {
     if !LargeViewTest(*host, session, root) { print("large view storage/reveal failed\n"); return 25 }
     if !PreviewHostTest(*host, session, root) { print("preview image/text/input/viewport behavior failed\n"); return 30 }
     if !ClipboardHostTest(*host, session, root) { print("headless file clipboard shortcuts failed\n"); return 32 }
+    if !RawFilenameHostTest(*host, session, root) { print("raw filename host labels/prompts/identity failed\n"); return 33 }
     App.Close(*host)
     if host.manager.entry_text.count != 0 || host.manager.cwd_text.bytes.count != 0 ||
         host.manager.clipboard.text.count != 0 || host.details_cells.count != 0 ||

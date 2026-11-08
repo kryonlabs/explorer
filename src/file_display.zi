@@ -1,0 +1,87 @@
+// Linux paths are bytes. Widget text and editable captions are UTF-8.
+#scope_module
+Utf8 :: #import "std/utf8";
+using Vectors :: #import "std/vec";
+
+#scope_export
+EditorValue :: struct { valid: bool; value: Text; }
+
+NeedsEscapes :: (value: string) -> bool {
+    if !Utf8.Valid(value) { return true }
+    for byte: value { if byte < cast(u8)32 || byte == cast(u8)127 { return true } }
+    return false
+}
+
+EditorText :: (value: string, escaped: bool) -> Text {
+    if escaped { return Caption(value) }
+    return TextCopy(value)
+}
+
+Hex :: (byte: u8) -> s32 {
+    if byte >= #char "0" && byte <= #char "9" { return cast(s32)byte - 48 }
+    if byte >= #char "A" && byte <= #char "F" { return cast(s32)byte - 55 }
+    if byte >= #char "a" && byte <= #char "f" { return cast(s32)byte - 87 }
+    return -1
+}
+
+Escape :: (bytes: *Vec(u8), byte: u8) -> bool {
+    digits := "0123456789ABCDEF"
+    return VecPush(bytes.*, #char "\\") && VecPush(bytes.*, #char "x") &&
+        VecPush(bytes.*, digits[cast(s32)byte / 16]) &&
+        VecPush(bytes.*, digits[cast(s32)byte % 16])
+}
+
+// Preserve valid Unicode. Escape malformed bytes and controls individually;
+// double literal backslashes so captions cannot collide with byte escapes.
+Caption :: (value: string) -> Text {
+    bytes: Vec(u8)
+    at: s64 = 0
+    while at < value.count {
+        end := at + 4
+        if end > value.count { end = value.count }
+        scalar := Utf8.Decode(value[at:end], 0)
+        if !scalar.valid || value[at] < cast(u8)32 || value[at] == cast(u8)127 {
+            if !Escape(*bytes, value[at]) { return .{} }
+            at += 1
+        } else if value[at] == #char "\\" {
+            if !VecPush(bytes, #char "\\") || !VecPush(bytes, #char "\\") { return .{} }
+            at += 1
+        } else {
+            for index: at..at + scalar.after - 1 {
+                if !VecPush(bytes, value[index]) { return .{} }
+            }
+            at += scalar.after
+        }
+    }
+    result: Text
+    result.bytes = bytes
+    return result
+}
+
+// Rename/location editors use the lossless caption spelling. Unknown escapes
+// remain literal; incomplete or malformed hexadecimal escapes reject as a whole.
+ParseEditor :: (value: string) -> EditorValue {
+    if !Utf8.Valid(value) { return .{} }
+    bytes: Vec(u8)
+    at: s64 = 0
+    while at < value.count {
+        byte := value[at]
+        if byte == #char "\\" && at + 1 < value.count {
+            if value[at + 1] == #char "\\" { at += 1 }
+            else if value[at + 1] == #char "x" {
+                if at + 3 >= value.count { return .{} }
+                high := Hex(value[at + 2])
+                low := Hex(value[at + 3])
+                if high < 0 || low < 0 { return .{} }
+                byte = cast(u8)(high * 16 + low)
+                at += 3
+            }
+        }
+        if byte == cast(u8)0 || !VecPush(bytes, byte) { return .{} }
+        at += 1
+    }
+    result: EditorValue
+    result.valid = true
+    result.value.bytes = bytes
+    return result
+}

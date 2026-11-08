@@ -28,6 +28,17 @@ themes. Palette changes apply while Shelf is running. Views, icons, prompts
 and previews share these colors; photographs keep their original colors.
 Embedded drawing restores the caller's palette after each Shelf viewport.
 
+Linux filenames retain their original bytes. Views, current paths, errors and
+preview headings display invalid UTF-8 bytes and control bytes as `\xNN`;
+literal backslashes display as `\\`, so names remain distinct. Valid Unicode
+is preserved. Rename and Location keep ordinary input literal, including
+backslashes. When the existing name or path contains invalid UTF-8 or control
+bytes, the editor explicitly shows byte-escape mode: `\xFF` enters byte FF
+and `\\` enters a literal backslash. Malformed hexadecimal escapes and NUL
+in that mode are rejected without changing the filesystem; an escaped path
+that exceeds the editor's capacity reports an error instead of being truncated.
+Desktop clipboard publication still rejects paths that cannot be UTF-8 URIs.
+
 Copy, Cut and Paste (also Ctrl+C/X/V outside prompts) exchange local file
 selections with desktop file managers on X11/XWayland. Shelf publishes both
 `text/uri-list` and `x-special/gnome-copied-files`; URI-only lists copy, while
@@ -66,6 +77,7 @@ make check
 make test       # filesystem model and embedded host, from source and saved IR
 make test-ui    # desktop interaction on a private Xvfb display
 make test-file-clipboard # native Shelf/Thunar interchange on a private desktop
+make test-filenames # raw-byte names, directories and operations on a private desktop
 make install
 make test-installed
 ```

@@ -14,6 +14,7 @@ using FormatText :: #import "std/format";
 SystemTheme :: #import "kryon/SystemThemeLinux";
 Palettes :: #import "kryon/widget_palette";
 FileClipboard :: #import "desktop_file_clipboard";
+FileDisplay :: #import "file_display";
 
 #scope_export
 HostSession :: struct {
@@ -62,6 +63,7 @@ Host :: struct {
     palette_ms: s64
     palette_loaded: bool
     file_clipboard: FileClipboard.State
+    escaped_editor: bool
 }
 
 CopyInto :: (target: []u8, value: string) -> s32 {
@@ -80,6 +82,7 @@ Prepare :: (host: *Host, start_path: string = "") -> bool {
     host.field.anchor = 0
     host.field.scroll_x = 0
     host.field.focused = false
+    host.escaped_editor = false
     host.column_widths = s32.[300, 110, 140, 190]
     host.last_click_ms = 0
     host.palette_loaded = false
@@ -109,10 +112,14 @@ Close :: (host: *Host) {
 }
 
 PromptTitle :: (host: *Host) -> string {
-    if host.manager.prompt == .PromptRename { return "New name" }
+    if host.manager.prompt == .PromptRename {
+        return ifx host.escaped_editor then "New name (\\xNN bytes; \\\\ backslash)" else "New name"
+    }
     if host.manager.prompt == .PromptFolder { return "Folder name" }
     if host.manager.prompt == .PromptFile { return "File name" }
-    if host.manager.prompt == .PromptLocation { return "Location" }
+    if host.manager.prompt == .PromptLocation {
+        return ifx host.escaped_editor then "Location (\\xNN bytes; \\\\ backslash)" else "Location"
+    }
     if host.manager.prompt == .PromptSearch { return "Search" }
     return ""
 }
@@ -124,11 +131,21 @@ OpenPrompt :: (host: *Host, prompt: Model.PromptKind) {
     host.field.anchor = 0
     host.field.scroll_x = 0
     host.field.focused = true
-    if prompt == .PromptLocation { host.field.length = CopyInto(host.field.bytes, host.manager.cwd) }
+    initial := ""
+    if prompt == .PromptLocation { initial = host.manager.cwd }
     if prompt == .PromptRename && host.manager.cursor >= 0 {
-        host.field.length = CopyInto(host.field.bytes,
-            Model.EntryName(*host.manager, host.manager.cursor))
+        initial = Model.EntryName(*host.manager, host.manager.cursor)
     }
+    host.escaped_editor = FileDisplay.NeedsEscapes(initial)
+    caption: Text = FileDisplay.EditorText(initial, host.escaped_editor)
+    if (initial != "" && caption.bytes.count == 0) || caption.bytes.count > host.field.bytes.count {
+        Model.SetError(*host.manager, ifx caption.bytes.count > host.field.bytes.count then
+            "Escaped name or path is too long to edit safely" else "Cannot prepare name or path for editing")
+        host.manager.prompt = .PromptNone
+        host.field.focused = false
+        return
+    }
+    host.field.length = CopyInto(host.field.bytes, TextView(caption))
     unused CopyInto(host.field_value[:], TextView(host.field.bytes[:host.field.length]))
 }
 
@@ -137,6 +154,13 @@ FinishPrompt :: (host: *Host) {
     value_length := CopyInto(prompt_buffer[:], TextView(host.field.bytes[:host.field.length]))
     value := TextView(prompt_buffer[:value_length])
     prompt := host.manager.prompt
+    decoded: FileDisplay.EditorValue = FileDisplay.ParseEditor(
+        ifx host.escaped_editor then value else "")
+    if !decoded.valid {
+        Model.SetError(*host.manager, "Invalid byte escape; use \\xNN or \\\\ for a backslash")
+        return
+    }
+    if host.escaped_editor { value = TextView(decoded.value) }
     host.manager.prompt = .PromptNone
     if prompt == .PromptRename { unused Model.RenameSelection(*host.manager, value) }
     else if prompt == .PromptFolder { unused Model.CreateFolder(*host.manager, value) }
@@ -145,6 +169,7 @@ FinishPrompt :: (host: *Host) {
     else if prompt == .PromptSearch { unused Model.Search(*host.manager, value) }
     host.field.length = 0
     host.field.focused = false
+    host.escaped_editor = false
 }
 
 #scope_file
@@ -266,7 +291,7 @@ DrawFileGrid :: (host: *Host, session: UI.Session, bounds: Rectangle,
     if !VecResize(host.grid_items, manager.entries.count) { return }
     for index: cast(s32)0..cast(s32)manager.entries.count - 1 {
         host.grid_items[index].key = manager.entries[index].key
-        host.grid_items[index].label = Model.EntryName(manager, index)
+        host.grid_items[index].label = Model.EntryCaption(manager, index)
         icon := cast(s32)IconType.IconManual
         if Model.EntryIsDirectory(manager, index) { icon = cast(s32)IconType.IconHome }
         else if manager.entries[index].info.kind == .Link { icon = cast(s32)IconType.IconLink }
@@ -274,7 +299,7 @@ DrawFileGrid :: (host: *Host, session: UI.Session, bounds: Rectangle,
         host.grid_items[index].image.tint = host.palette.text
         if !Model.EntryIsDirectory(manager, index) && Preview.ImagePath(Model.EntryPath(manager, index)) {
             host.grid_items[index].image = ImageProps.{.asset_path = Model.EntryPath(manager, index),
-                .alt_text = Model.EntryName(manager, index), .fit = .ImageFitContain,
+                .alt_text = Model.EntryCaption(manager, index), .fit = .ImageFitContain,
                 .tint = cast(u32)0xffffffff, .smooth = true}
         }
     }
@@ -317,7 +342,7 @@ DrawDetails :: (host: *Host, session: UI.Session, bounds: Rectangle,
     for index: cast(s32)0..count - 1 {
         entry: *Model.Entry = *manager.entries[index]
         data := *host.details_cells[index]
-        data.cells[0] = entry.name
+        data.cells[0] = entry.caption
         data.cells[1] = Number.FormatInteger(entry.info.size, data.size[:])
         if Model.EntryIsDirectory(manager, index) { data.cells[1] = "—" }
         data.cells[2] = Model.EntryType(entry)
@@ -468,9 +493,10 @@ DrawPreview :: (host: *Host, session: UI.Session, viewport: Rectangle,
     }
     Box(session, BoxProps.{.key = cast(u64)80, .bounds = viewport,
         .fill = ColorFromPacked(host.palette.background)})
+    preview_caption: Text = FileDisplay.Caption(TextView(state.path))
     Text(session, TextProps.{.key = cast(u64)81,
         .bounds = .{viewport.x + 8.0, viewport.y + 8.0, viewport.width - 16.0, 24.0},
-        .text = TextView(state.path), .font = 16, .wrap = .TextWrapEllipsis})
+        .text = TextView(preview_caption), .font = 16, .wrap = .TextWrapEllipsis})
     x := viewport.x + 8.0
     y := viewport.y + 40.0
     if Button(session, 82, "Previous", .{x, y, 76.0, 32.0}) { PreviewStep(host, -1) }
@@ -578,9 +604,10 @@ DrawPreview :: (host: *Host, session: UI.Session, viewport: Rectangle,
     if state.kind == .Image { help = "Fit / 100% / + − · arrows and wheel pan when zoomed · PgUp/PgDn browse · Esc closes" }
     if state.kind == .Text && state.truncated { help = "Preview limited to 64 KiB · Open to read the complete file · Esc closes" }
     if host.manager.error != "" { help = host.manager.error }
+    help_caption: Text = FileDisplay.Caption(help)
     Text(session, TextProps.{.key = cast(u64)95,
         .bounds = .{viewport.x + 8.0, viewport.y + viewport.height - 28.0, viewport.width - 16.0, 22.0},
-        .text = help, .font = 13, .wrap = .TextWrapEllipsis})
+        .text = TextView(help_caption), .font = 13, .wrap = .TextWrapEllipsis})
 }
 
 #scope_export
@@ -672,8 +699,9 @@ Draw :: (host: *Host, host_session: HostSession, host_viewport: HostViewport,
     path_bounds := Rectangle.{toolbar.x + 188.0, toolbar.y + 5.0,
         viewport.width - 530.0, 26.0}
     if path_bounds.width < 160.0 { path_bounds.width = 160.0 }
+    cwd_caption: Text = FileDisplay.Caption(manager.cwd)
     Text(session, TextProps.{.key = cast(u64)20, .bounds = path_bounds,
-        .text = manager.cwd, .font = 15})
+        .text = TextView(cwd_caption), .font = 15})
 
     action_x := viewport.x + viewport.width - 328.0
     if Button(session, 4, "Folder", Rectangle.{action_x, toolbar.y, 68.0, 36.0}) { OpenPrompt(host, .PromptFolder) }
@@ -700,9 +728,10 @@ Draw :: (host: *Host, host_session: HostSession, host_viewport: HostViewport,
         OpenPreview(host, Model.EntryPath(manager, manager.cursor))
     }
     if manager.error != "" {
+        error_caption: Text = FileDisplay.Caption(manager.error)
         Text(session, TextProps.{.key = cast(u64)21,
             .bounds = .{second.x + 420.0, second.y + 5.0, viewport.width - 716.0, 22.0},
-            .text = manager.error, .font = 13, .disabled = true})
+            .text = TextView(error_caption), .font = 13, .disabled = true})
     }
     tabs_x := viewport.x + viewport.width - 300.0
     if Button(session, 15, "+", Rectangle.{tabs_x, second.y, 32.0, 32.0}) {

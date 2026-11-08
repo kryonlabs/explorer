@@ -6,7 +6,7 @@ SOURCES := $(wildcard src/*.zi) $(wildcard tests/*.zi) ziran.toml ziran.lock scr
 NATIVE_FLAGS := -std=c99 -O2 -ffunction-sections -fdata-sections -Wl,--gc-sections
 HOST_TEST_ENV := python3 tests/private_desktop.py --headless env -u GTK_THEME HOME=$(CURDIR)/build/host-test-fixture XDG_CONFIG_HOME=$(CURDIR)/build/host-test-fixture/config XDG_DATA_HOME=$(CURDIR)/build/host-test-fixture/data-home
 
-.PHONY: build check test test-ui test-installed test-file-clipboard run install clean test-saved
+.PHONY: build check test test-ui test-installed test-file-clipboard test-filenames run install clean test-saved
 
 build:
 	build-queue -- $(ZIRAN) build
@@ -45,6 +45,9 @@ test-saved:
 
 test-ui: build
 	python3 tests/private_desktop.py python3 tests/ui_test.py
+
+test-filenames: build
+	python3 tests/private_desktop.py python3 tests/filename_test.py
 
 build/file-clipboard-probe: $(SOURCES)
 	build-queue -- $(ZIRAN) build --project --target=c --exe --entry file_clipboard_probe:main -o build/file-clipboard-probe-c tests/file_clipboard_probe.zi
