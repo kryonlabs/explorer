@@ -11,7 +11,7 @@ specific so each missing row can become an independent implementation task.
 | Compact view | Partial | Column-major layout, small leading icons, shared selection and horizontal scroll exist; add zoom and persistent layout preferences. |
 | Shortcuts side pane | Partial | Fixed Home, File System and Trash plus persistent local GTK bookmarks with add, label rename, removal, reordering and external refresh exist; add devices and remote shortcuts. |
 | Tree side pane | Partial | Lazy local Home/File System tree, expansion state, cwd ancestor reveal, hidden filtering, explicit branch refresh, safe raw-name captions and horizontal scrolling/reveal exist. Add remote/device trees and automatic filesystem watching. |
-| Location bar and path bar | Partial | Read-only path plus Ctrl+L location prompt; add breadcrumb navigation and completion. |
+| Location bar and path bar | Partial | Native local breadcrumbs with ancestor overflow, inline Ctrl+L editor, bounded raw-name completion and checked folder/file selection exist. Add remote URI providers and broader path-bar preferences. |
 | Tabs | Partial | Model and visible new/previous/next/close/numbered controls exist; add labels, drag reorder and overflow. |
 | Split view | Missing | Add synchronized dual-pane state and per-pane tabs/selection. |
 | Open With and default apps | Partial | Files delegate to `kryon/open_uri`; add application chooser, MIME database and defaults. |
@@ -49,6 +49,10 @@ specific so each missing row can become an independent implementation task.
   unsupported remote/malformed records remain unchanged during local edits.
 - `src/tree_sidebar.zi` owns bounded lazy local directory state, identity checks
   and staged branch refresh; canonical DataViews TreeView owns retained tree UI.
+- `src/location.zi` owns literal local paths, bounded completion snapshots and raw
+  breadcrumb ancestors; canonical Kryon owns Breadcrumb, TextField and list UI.
+  Checked directory navigation stages listing, selection and active-tab storage
+  before committing; completion and filesystem errors retain the prior route.
 - `src/app.zi` is the standalone Kryon `Frame` entry.
 - `src/app_host.zi` owns widget composition and exports `Host`, `Prepare`,
   `Draw` and `Close` for direct Ziran embedding.
@@ -64,6 +68,7 @@ specific so each missing row can become an independent implementation task.
 | --- | --- | --- |
 | `Makefile` | Developer entry point | Thin wrapper around `scripts/ziran.sh`; contains no application code. |
 | `scripts/ziran.sh` | Resolves the locked or locally overridden toolchain | Thin package launcher; all product code remains Ziran. |
+| `tests/location_*.py` | Private native location UI, installed Thunar key comparison and allocation/read-failure probes | Test tooling only; application paths/completion remain Ziran. |
 | `tests/ui_test.py` | Exercises the standalone desktop app on private Xvfb | Test tooling only; product behavior stays in the Ziran model and Kryon UI. |
 
 Documentation, lock data, the ignored local override and the PNG showcase are

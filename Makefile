@@ -6,7 +6,7 @@ SOURCES := $(wildcard src/*.zi) $(wildcard tests/*.zi) ziran.toml ziran.lock scr
 NATIVE_FLAGS := -std=c99 -O2 -ffunction-sections -fdata-sections -Wl,--gc-sections
 HOST_TEST_ENV := python3 tests/private_desktop.py --headless env -u GTK_THEME HOME=$(CURDIR)/build/host-test-fixture XDG_CONFIG_HOME=$(CURDIR)/build/host-test-fixture/config XDG_DATA_HOME=$(CURDIR)/build/host-test-fixture/data-home
 
-.PHONY: build check test test-ui test-installed test-file-clipboard test-filenames test-bookmarks test-bookmarks-native test-tree test-tree-native run install clean test-saved
+.PHONY: build check test test-ui test-installed test-file-clipboard test-filenames test-bookmarks test-bookmarks-native test-tree test-tree-native test-location test-location-native run install clean test-saved
 
 build:
 	build-queue -- $(ZIRAN) build
@@ -92,3 +92,18 @@ test-tree-native: build/tree-sidebar-test
 
 test-tree: build test-tree-native
 	python3 tests/private_desktop.py python3 tests/tree_sidebar_test.py
+
+build/location-test: $(SOURCES)
+	build-queue -- $(ZIRAN) build --project --target=c --exe --entry location_test:main -o build/location-test-c tests/location_test.zi
+	cp build/location-test-c/location_test build/location-test
+
+test-location-native: build/location-test
+	python3 tests/private_desktop.py --headless build/location-test $(CURDIR)/build/location-test-fixture
+	build-queue -- $(ZIRAN) ir --project --entry location_test:main -o build/location-test-ir tests/location_test.zi
+	build-queue -- $(ZIRAN) build --project --target=c --exe --entry location_test:main -o build/location-test-saved-c build/location-test-ir/location_test.zir
+	python3 tests/private_desktop.py --headless build/location-test-saved-c/location_test $(CURDIR)/build/location-test-fixture
+	python3 tests/private_desktop.py --headless python3 tests/location_oom_test.py $(CURDIR)/build/location-test $(CURDIR)/build/location-test-saved-c/location_test
+
+test-location: build test-location-native
+	python3 tests/private_desktop.py python3 tests/location_thunar_probe.py
+	python3 tests/private_desktop.py python3 tests/location_test.py

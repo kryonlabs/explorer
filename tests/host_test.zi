@@ -21,6 +21,7 @@ Utf8 :: #import "std/utf8";
 FileDisplay :: #import "file_display";
 using Bookmarks :: #import "bookmarks";
 using LocalTree :: #import "tree_sidebar";
+using Location :: #import "location";
 Semantics :: #import "kryon/semantic";
 
 frame_seconds: float64;
@@ -40,6 +41,123 @@ DirectoryTreeBounds :: (session: Sessions.Session, label: string) -> Geometry.Re
         if row.semantic_kind == .SemanticTreeItem && row.semantic_label == label { return row.bounds }
     }
     return .{}
+}
+
+LocationField :: (host: *App.Host, input: string) {
+    host.field.length = App.CopyInto(host.field.bytes, input)
+    host.field.cursor = host.field.length; host.field.anchor = host.field.length
+}
+LocationHostFailure :: (host: *App.Host, stage: s32) -> bool {
+    print("location host stage %: cwd % input % prompt % error %\n", stage, host.manager.cwd,
+        TextView(host.field.bytes[:host.field.length]), cast(s32)host.manager.prompt, host.manager.error)
+    return false
+}
+BreadcrumbBounds :: (session: Sessions.Session, label: string) -> Geometry.Rectangle {
+    for index: cast(s32)0..Tree.TreeCount(session) - 1 {
+        node := Tree.TreeNodeAt(session, index)
+        if node.kind == cast(s32)Kinds.WidgetKind.WidgetKindButton && node.semantic_label == label { return node.bounds }
+    }
+    return .{}
+}
+BreadcrumbHostTest :: (host: *App.Host, session: Sessions.Session, root: string) -> bool {
+    folder: Text = Files.JoinPath(root, "breadcrumb-pane")
+    deep: Text = Files.JoinPath(TextView(folder), "a/b/c d é")
+    if !Files.CreateDirectories(TextView(deep)) || !Model.OpenPathTracked(*host.manager, TextView(deep)) ||
+        !Render(host, session, true) { return LocationHostFailure(host, 101) }
+    bounds := BreadcrumbBounds(session, "c d é")
+    if bounds.width <= 0.0 || bounds.x < 436.0 || bounds.x + bounds.width > 828.0 {
+        return LocationHostFailure(host, 102)
+    }
+    before := host.manager.back.count
+    if !Files.ReplaceFile(Files.JoinPath(TextView(deep), "fresh.txt"), "fresh") ||
+        !Click(host, session, bounds.x + bounds.width * 0.5, bounds.y + 10.0) ||
+        host.manager.cwd != TextView(deep) || host.manager.entries.count != 1 || host.manager.back.count != before ||
+        !Render(host, session, true) { return LocationHostFailure(host, 103) }
+    overflow := BreadcrumbBounds(session, "Ancestors")
+    if overflow.width <= 0.0 || !Click(host, session, overflow.x + 10.0, overflow.y + 10.0) ||
+        !host.breadcrumb_open || !Press(host, session, Keys.KeyHome) || !Press(host, session, Keys.KeyEnter) ||
+        host.manager.cwd != "/" || host.breadcrumb_open { return LocationHostFailure(host, 104) }
+    raw_name := u8.[114, 97, 119, 45, 255]
+    raw: Text = Files.JoinPath(TextView(folder), TextView(raw_name[:]))
+    if !Files.CreateDirectory(TextView(raw)) || !Model.OpenPathTracked(*host.manager, TextView(raw)) ||
+        !Render(host, session, true) || !LabelsValid(session) || BreadcrumbBounds(session, "raw-\\xFF").width <= 0.0 { return LocationHostFailure(host, 105) }
+    return Model.OpenPathTracked(*host.manager, root)
+}
+
+LocationErrorVisible :: (session: Sessions.Session) -> bool {
+    found := false
+    for index: cast(s32)0..Tree.TreeCount(session) - 1 {
+        node := Tree.TreeNodeAt(session, index)
+        if node.key == cast(u64)65 || node.key == cast(u64)66 { return false }
+        if node.key == cast(u64)228 {
+            // Editing replaces the ordinary status: no duplicate selection text
+            // and no diagnostic panel over toolbar or view controls.
+            found = node.bounds.width > 0.0 && node.bounds.height > 0.0 &&
+                node.bounds.x >= 406.0 && node.bounds.x + node.bounds.width <= 1200.0 &&
+                node.bounds.y >= 690.0 && node.bounds.y + node.bounds.height <= 720.0
+        }
+    }
+    return found
+}
+LocationHostTest :: (host: *App.Host, session: Sessions.Session, root: string) -> bool {
+    folder: Text = Files.JoinPath(root, "location-pane")
+    first: Text = Files.JoinPath(TextView(folder), "alpha space")
+    second: Text = Files.JoinPath(TextView(folder), "alpine")
+    file: Text = Files.JoinPath(TextView(folder), "alps.txt")
+    if !Files.CreateDirectories(TextView(first)) || !Files.CreateDirectory(TextView(second)) ||
+        !Files.ReplaceFile(TextView(file), "local") || !Model.OpenPathTracked(*host.manager, TextView(folder)) ||
+        !Render(host, session, true) { return LocationHostFailure(host, 1) }
+    key := host.manager.entries[host.manager.cursor].key
+    history := host.manager.back.count
+    if !Press(host, session, 76, Keys.KeyModifierControl) || host.manager.prompt != .PromptLocation ||
+        host.field.cursor != host.field.length || host.field.anchor != 0 ||
+        TextView(host.field.bytes[:host.field.length]) != TextView(folder) { return LocationHostFailure(host, 2) }
+    LocationField(host, "al")
+    if !Press(host, session, Keys.KeyTab) || TextView(host.field.bytes[:host.field.length]) != "alp" ||
+        !Press(host, session, Keys.KeyDown) || TextView(host.field.bytes[:host.field.length]) != "alpha space/" ||
+        !Press(host, session, Keys.KeyDown) || TextView(host.field.bytes[:host.field.length]) != "alpine/" ||
+        !Press(host, session, Keys.KeyUp) || TextView(host.field.bytes[:host.field.length]) != "alpha space/" ||
+        !Press(host, session, Keys.KeyEscape) || host.manager.prompt != .PromptNone ||
+        host.manager.cwd != TextView(folder) || host.manager.back.count != history ||
+        host.manager.entries[host.manager.cursor].key != key { return LocationHostFailure(host, 3) }
+    if !Press(host, session, 76, Keys.KeyModifierControl) { return LocationHostFailure(host, 4) }
+    LocationField(host, "alps.txt")
+    if !Press(host, session, Keys.KeyEnter) || host.manager.prompt != .PromptNone ||
+        host.manager.cwd != TextView(folder) || Model.EntryName(*host.manager, host.manager.cursor) != "alps.txt" ||
+        host.preview.opened { return LocationHostFailure(host, 5) }
+    if !Press(host, session, 76, Keys.KeyModifierControl) { return LocationHostFailure(host, 6) }
+    LocationField(host, "missing")
+    if !Press(host, session, Keys.KeyEnter) || host.manager.prompt != .PromptLocation ||
+        TextView(host.field.bytes[:host.field.length]) != "missing" || host.manager.cwd != TextView(folder) ||
+        host.manager.error == "" || !LocationErrorVisible(session) || !Press(host, session, Keys.KeyEscape) { return LocationHostFailure(host, 7) }
+    if !Press(host, session, 76, Keys.KeyModifierControl) { return LocationHostFailure(host, 8) }
+    LocationField(host, "al")
+    if !Press(host, session, Keys.KeyTab) || !Press(host, session, Keys.KeyDown) ||
+        !Files.CreateDirectory(Files.JoinPath(TextView(folder), "changed")) ||
+        !Press(host, session, Keys.KeyEnter) || host.manager.prompt != .PromptLocation ||
+        !Press(host, session, Keys.KeyEnter) || host.manager.prompt != .PromptLocation ||
+        host.manager.cwd != TextView(folder) || TextView(host.field.bytes[:host.field.length]) != "alpha space/" {
+        return LocationHostFailure(host, 9)
+    }
+    if !Press(host, session, Keys.KeyEscape) || !Press(host, session, 76, Keys.KeyModifierControl) { return LocationHostFailure(host, 10) }
+    LocationField(host, "alpha space")
+    unused Input.KeyboardModifiersSend(session, 0)
+    unused Input.KeyboardSend(session, Keys.KeyEnter)
+    if !Render(host, session, false) || host.manager.cwd != TextView(folder) || host.manager.prompt != .PromptLocation ||
+        !Render(host, session, true) || host.manager.cwd != TextView(first) || host.manager.prompt != .PromptNone {
+        return LocationHostFailure(host, 11)
+    }
+    // Narrow embedding keeps an inline editor inside the caller viewport.
+    App.OpenPrompt(host, .PromptLocation)
+    narrow := Geometry.Rectangle.{240.0, 120.0, 560.0, 600.0}
+    if !RenderAt(host, session, true, narrow) || !LabelsValid(session) { return LocationHostFailure(host, 12) }
+    for index: cast(s32)0..Tree.TreeCount(session) - 1 {
+        node := Tree.TreeNodeAt(session, index)
+        if node.key == cast(u64)222 && (node.bounds.x < narrow.x || node.bounds.x + node.bounds.width > narrow.x + narrow.width ||
+            node.bounds.y < narrow.y || node.bounds.y + node.bounds.height > narrow.y + narrow.height) { return LocationHostFailure(host, 13) }
+    }
+    if !Press(host, session, Keys.KeyEscape) || !Model.OpenPathTracked(*host.manager, root) { return LocationHostFailure(host, 14) }
+    return true
 }
 
 DirectoryTreeHostTest :: (host: *App.Host, session: Sessions.Session, root: string) -> bool {
@@ -825,6 +943,8 @@ main :: (argc: s32, argv: **u8) -> s32 {
     if !BookmarkHostTest(*host, session, root) { print("bookmark host activation/snapshot/refresh failed\n"); return 34 }
     if !DirectoryTreeHostTest(*host, session, root) { print("tree host toggle/reveal/disclosure/repeat/hidden/cycle/focus failed\n"); return 35 }
     if !DirectoryTreeDeepHostTest(*host, session, root) { print("tree deep programmatic/keyboard reveal/manual horizontal control failed\n"); return 36 }
+    if !BreadcrumbHostTest(*host, session, root) { print("breadcrumb host repeat/overflow/raw activation failed\n"); return 38 }
+    if !LocationHostTest(*host, session, root) { return 37 }
     App.Close(*host)
     if host.manager.entry_text.count != 0 || host.manager.cwd_text.bytes.count != 0 ||
         host.manager.clipboard.text.count != 0 || host.details_cells.count != 0 ||
@@ -836,7 +956,9 @@ main :: (argc: s32, argv: **u8) -> s32 {
         host.directory_tree.nodes.count != 0 || host.directory_tree.order.count != 0 ||
         host.tree_items.count != 0 || host.tree_rows.count != 0 || host.tree_attempt.bytes.count != 0 || host.tree_mode ||
         host.tree_horizontal != 0 || host.tree_horizontal_max != 0 ||
-        host.palette_loaded { return 12 }
+        host.location.candidates.count != 0 || host.location.order.count != 0 || host.location.base.bytes.count != 0 ||
+        host.ancestors.rows.count != 0 || host.ancestors.path.bytes.count != 0 || host.breadcrumb_items.count != 0 ||
+        host.completion_items.count != 0 || host.completion_flags.count != 0 || host.palette_loaded { return 12 }
     if host.started || !App.Prepare(*host, root) || host.manager.tabs.count != 1 ||
         host.manager.prompt != .PromptNone || host.field.length != 0 { return 8 }
     for mode: cast(s32)0..2 {

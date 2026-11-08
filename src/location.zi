@@ -1,0 +1,284 @@
+// Local file-manager paths and completion policy, independent of widget layout.
+#scope_module
+Files :: #import "std/file_tree_linux";
+Display :: #import "file_display";
+Model :: #import "model";
+Sort :: #import "std/sort";
+Utf8 :: #import "std/utf8";
+using Bytes :: #import "std/byte_text_linux";
+using Vectors :: #import "std/vec";
+
+#scope_export
+MAX_MATCHES :: 4096;
+MAX_SCAN :: 65536;
+MAX_ANCESTORS :: 2048;
+Candidate :: struct { name: Text; path: Text; caption: Text; info: Files.PathInfo; directory: bool; }
+State :: struct {
+    base: Text
+    home: Text
+    input: Text
+    preview: Text
+    parent: Text
+    stem: Text
+    prefix: Text
+    candidates: Vec(Candidate)
+    order: Vec(s32)
+    snapshot: Files.PathInfo
+    error: Text
+    selected: s32
+    valid: bool
+    escaped: bool
+    preview_escaped: bool
+}
+Value :: struct { text: Text; valid: bool; escaped: bool; }
+Ancestor :: struct { path: Text; caption: Text; key: u64; }
+Ancestors :: struct { path: Text; rows: Vec(Ancestor); error: Text; }
+
+Store :: (owner: *Text, value: string) {
+    next: Text = TextCopy(value); VecSwap(owner.bytes, next.bytes)
+}
+Fail :: (state: *State, message: string) -> bool {
+    Store(*state.error, message); state.valid = false; return false
+}
+Release :: (state: *State) {
+    VecFree(state.base.bytes); VecFree(state.home.bytes); VecFree(state.input.bytes)
+    VecFree(state.preview.bytes); VecFree(state.parent.bytes); VecFree(state.stem.bytes)
+    VecFree(state.prefix.bytes); VecFree(state.error.bytes); VecFree(state.candidates); VecFree(state.order)
+    state.valid = false; state.selected = -1; state.escaped = false; state.preview_escaped = false
+}
+Begin :: (state: *State, cwd: string, home: string) -> bool {
+    Release(state); Store(*state.base, cwd); Store(*state.home, home)
+    if state.base.bytes.count != cwd.count || state.home.bytes.count != home.count {
+        return Fail(state, "Cannot allocate location editor state")
+    }
+    return true
+}
+Decode :: (input: string, escaped: bool) -> Value {
+    result: Value
+    if !Utf8.Valid(input) { return .{} }
+    if escaped {
+        decoded := Display.ParseEditor(input)
+        result.valid = decoded.valid; result.text = decoded.value
+    } else { result.text = TextCopy(input); result.valid = result.text.bytes.count == input.count }
+    for byte: result.text.bytes { if byte == cast(u8)0 { result.valid = false } }
+    return result
+}
+Absolute :: (raw: string, base: string, home: string) -> Value {
+    result: Value
+    if raw == "" || raw.count >= 4096 { return .{} }
+    for byte: raw { if byte == cast(u8)0 { return .{} } }
+    // No shell expansion/evaluation, URI transport or named-user lookup.
+    // Only a leading URI scheme is remote syntax. An explicit local prefix
+    // (/, ./, ../, ~/ or a directory component) permits literal colon names.
+    for index: cast(s64)0..raw.count - 1 {
+        if raw[index] == #char "/" { break }
+        if index + 3 <= raw.count && raw[index:index + 3] == "://" { return .{} }
+    }
+    if raw[0] == #char "~" {
+        if raw != "~" && (raw.count < 2 || raw[1] != #char "/") { return .{} }
+        if home.count == 0 || home[0] != #char "/" { return .{} }
+        if raw == "~" { result.text = TextCopy(home) }
+        else { result.text = Files.JoinPath(home, raw[2:]) }
+    } else if raw[0] == #char "/" { result.text = TextCopy(raw) }
+    else if base.count > 0 && base[0] == #char "/" { result.text = Files.JoinPath(base, raw) }
+    result.valid = result.text.bytes.count > 0 && result.text.bytes.count < 4096
+    return result
+}
+Starts :: (text: string, prefix: string) -> bool {
+    return text.count >= prefix.count && text[0:prefix.count] == prefix
+}
+Encode :: (raw: string, escaped: bool) -> Value {
+    result: Value
+    result.escaped = escaped || Display.NeedsEscapes(raw)
+    result.text = Display.EditorText(raw, result.escaped)
+    result.valid = result.text.bytes.count > 0 && result.text.bytes.count <= 4096
+    return result
+}
+Join :: (stem: string, name: string, directory: bool) -> Text {
+    bytes: Vec(u8)
+    if !BuilderAppend(bytes, stem) || !BuilderAppend(bytes, name) ||
+        (directory && !BuilderAppend(bytes, "/")) { return .{} }
+    return TextFromBuilder(bytes)
+}
+
+// Queries stage every match. A failed or stale query never publishes a prefix
+// of suggestions or changes input, route, selection, source files or history.
+Query :: (state: *State, input: string, escaped: bool) -> bool {
+    decoded: Value = Decode(input, escaped)
+    if !decoded.valid { return Fail(state, "Invalid location byte escape or NUL") }
+    raw := TextView(decoded.text)
+    cut: s64 = 0
+    for index: cast(s64)0..raw.count - 1 { if raw[index] == #char "/" { cut = index + 1 } }
+    parent_input := ifx cut == 0 then "." else raw[0:cut]
+    absolute: Value = Absolute(parent_input, TextView(state.base), TextView(state.home))
+    if !absolute.valid { return Fail(state, "Enter a local relative, absolute or ~/ path up to 4095 bytes") }
+    parent: Text = Files.ResolvePath(TextView(absolute.text))
+    if parent.bytes.count == 0 { return Fail(state, "Completion folder is missing or inaccessible") }
+    before := Files.PathQuery(TextView(parent))
+    if !before.valid || before.info.kind != .Directory || !before.info.identity_valid {
+        return Fail(state, "Completion folder is missing, inaccessible or changed type")
+    }
+    cursor := Files.OpenDirectory(TextView(parent))
+    if !cursor.valid { return Fail(state, "Completion folder cannot be opened") }
+    open := true
+    defer { if open { unused Files.CloseDirectory(*cursor) } }
+    pending: Vec(Candidate)
+    scanned: s32 = 0
+    while true {
+        item := Files.NextDirectoryEntry(*cursor)
+        if !item.valid { break }
+        scanned += 1
+        if scanned > MAX_SCAN { return Fail(state, "Completion scan limit (65536 entries) reached") }
+        name := TextView(item.name[:item.name_count])
+        if name == "." || name == ".." || !Starts(name, raw[cut:]) { continue }
+        if pending.count >= MAX_MATCHES { return Fail(state, "Completion match limit (4096) reached; type more of the name") }
+        full: Text = Files.JoinPath(TextView(parent), name)
+        if full.bytes.count == 0 || full.bytes.count >= 4096 { return Fail(state, "Completion path cannot be represented") }
+        query := Files.PathQuery(TextView(full))
+        info := query.info
+        if !query.valid {
+            link := Files.PathQuery(TextView(full), false)
+            if !query.missing || !link.valid || link.info.kind != .Link { return Fail(state, "Completion entry disappeared or is inaccessible") }
+            info = link.info
+        }
+        candidate: Candidate
+        candidate.name = TextCopy(name); candidate.caption = Display.Caption(name)
+        if candidate.name.bytes.count != name.count || candidate.caption.bytes.count == 0 {
+            return Fail(state, "Cannot allocate completion text")
+        }
+        candidate.path = full; candidate.info = info; candidate.directory = query.valid && info.kind == .Directory
+        if !VecPush(pending, candidate) { return Fail(state, "Cannot allocate complete suggestion list") }
+    }
+    failed := cursor.failed
+    closed := Files.CloseDirectory(*cursor); open = false
+    after := Files.PathQuery(TextView(parent))
+    if failed || !closed || !after.valid || !Model.SameDirectorySnapshot(before.info, after.info) {
+        return Fail(state, "Completion folder changed or could not be read completely; retry Tab")
+    }
+    order: Vec(s32)
+    for group: cast(s32)0..1 {
+        names: Vec(string)
+        for *candidate: pending {
+            if candidate.directory == (group == 0) && !VecPush(names, TextView(candidate.name)) { return Fail(state, "Cannot order completions") }
+        }
+        Sort.SortText(names[:])
+        for name: names {
+            for index: cast(s32)0..cast(s32)pending.count - 1 {
+                if TextView(pending[index].name) == name { if !VecPush(order, index) { return Fail(state, "Cannot order completions") }; break }
+            }
+        }
+    }
+    owned_input: Text = TextCopy(input)
+    stem: Text = TextCopy(raw[0:cut]); prefix: Text = TextCopy(raw[cut:])
+    if owned_input.bytes.count != input.count || stem.bytes.count != cut || prefix.bytes.count != raw.count - cut {
+        return Fail(state, "Cannot store completion snapshot")
+    }
+    VecSwap(state.input.bytes, owned_input.bytes); VecSwap(state.parent.bytes, parent.bytes)
+    VecSwap(state.stem.bytes, stem.bytes); VecSwap(state.prefix.bytes, prefix.bytes)
+    VecSwap(state.candidates, pending); VecSwap(state.order, order)
+    VecFree(state.preview.bytes); Store(*state.error, "")
+    state.snapshot = after.info; state.selected = -1; state.valid = true; state.escaped = escaped
+    return true
+}
+Cached :: (state: *State, input: string, escaped: bool) -> bool {
+    return state.valid && ((input == TextView(state.input) && escaped == state.escaped) ||
+        (input == TextView(state.preview) && escaped == state.preview_escaped))
+}
+Validate :: (state: *State, candidate: s32 = -1) -> bool {
+    if !state.valid { return Fail(state, "Refresh completion with Tab before choosing a suggestion") }
+    current := Files.PathQuery(TextView(state.parent))
+    if !current.valid || !Model.SameDirectorySnapshot(state.snapshot, current.info) {
+        return Fail(state, "Completion folder changed; press Tab to refresh without changing input")
+    }
+    if candidate >= 0 {
+        item := *state.candidates[candidate]
+        query := Files.PathQuery(TextView(item.path), item.info.kind != .Link)
+        if !query.valid || !Model.SamePathIdentity(item.info, query.info) {
+            return Fail(state, "Completion entry disappeared or changed; press Tab to refresh")
+        }
+    }
+    return true
+}
+CandidateText :: (state: *State, index: s32) -> Text {
+    return Join(TextView(state.stem), TextView(state.candidates[index].name), state.candidates[index].directory)
+}
+SetPreview :: (state: *State, value: *Value) -> bool {
+    next: Text = TextCopy(TextView(value.text))
+    if next.bytes.count != value.text.bytes.count { return Fail(state, "Cannot retain completed path; input unchanged") }
+    VecSwap(state.preview.bytes, next.bytes); state.preview_escaped = value.escaped
+    return true
+}
+Choose :: (state: *State, row: s32) -> Value {
+    if row < 0 || row >= state.order.count { return .{} }
+    index := state.order[row]
+    if !Validate(state, index) { return .{} }
+    raw: Text = CandidateText(state, index)
+    result: Value = Encode(TextView(raw), state.escaped)
+    if !result.valid { unused Fail(state, "Completed path is too long for the editor"); return .{} }
+    if !SetPreview(state, *result) { return .{} }
+    state.selected = row
+    return result
+}
+Cycle :: (state: *State, direction: s32) -> Value {
+    if state.order.count == 0 { return .{} }
+    row := state.selected + direction
+    if row < 0 { row = cast(s32)state.order.count - 1 }
+    if row >= state.order.count { row = 0 }
+    return Choose(state, row)
+}
+Common :: (state: *State) -> Value {
+    if !Validate(state) || state.candidates.count == 0 { return .{} }
+    if state.candidates.count == 1 { return Choose(state, 0) }
+    name := TextView(state.candidates[0].name)
+    count := name.count
+    for *item: state.candidates {
+        next := TextView(item.name)
+        if next.count < count { count = next.count }
+        at: s64 = 0
+        while at < count && name[at] == next[at] { at += 1 }
+        count = at
+    }
+    // Never insert half a valid Unicode scalar as an ordinary completion.
+    if Utf8.Valid(name) { while count > state.prefix.bytes.count && !Utf8.Valid(name[0:count]) { count -= 1 } }
+    raw: Text = Join(TextView(state.stem), name[0:count], false)
+    result: Value = Encode(TextView(raw), state.escaped)
+    if !result.valid { unused Fail(state, "Completed path is too long for the editor"); return .{} }
+    if !SetPreview(state, *result) { return .{} }
+    return result
+}
+Submit :: (state: *State, manager: *Model.Manager, input: string, escaped: bool) -> bool {
+    if manager.cwd != TextView(state.base) { Model.SetError(manager, "Location changed while editing; cancel and reopen the location bar"); return false }
+    decoded: Value = Decode(input, escaped)
+    if !decoded.valid { Model.SetError(manager, "Invalid location byte escape or NUL"); return false }
+    absolute: Value = Absolute(TextView(decoded.text), TextView(state.base), TextView(state.home))
+    if !absolute.valid { Model.SetError(manager, "Enter a local relative, absolute or ~/ path up to 4095 bytes"); return false }
+    return Model.OpenLocationTracked(manager, TextView(absolute.text))
+}
+
+ReleaseAncestors :: (state: *Ancestors) { VecFree(state.path.bytes); VecFree(state.rows); VecFree(state.error.bytes) }
+BuildAncestors :: (state: *Ancestors, path: string) -> bool {
+    if path == TextView(state.path) { return true }
+    if path.count == 0 || path.count >= 4096 || path[0] != #char "/" {
+        Store(*state.error, "Cannot represent breadcrumb location"); return false
+    }
+    pending: Vec(Ancestor)
+    end: s64 = 1
+    while true {
+        start: s64 = 0
+        if end > 1 { start = end - 1; while start > 0 && path[start - 1] != #char "/" { start -= 1 } }
+        row: Ancestor
+        row.path = TextCopy(path[0:end]); row.caption = Display.Caption(ifx end == 1 then "/" else path[start:end])
+        row.key = Model.PathKey(path[0:end])
+        if row.path.bytes.count != end || row.caption.bytes.count == 0 || pending.count >= MAX_ANCESTORS {
+            Store(*state.error, "Breadcrumb allocation or ancestor limit reached"); return false
+        }
+        if !VecPush(pending, row) { Store(*state.error, "Cannot allocate breadcrumbs"); return false }
+        if end == path.count { break }
+        if path[end] == #char "/" { end += 1 }
+        while end < path.count && path[end] != #char "/" { end += 1 }
+    }
+    next: Text = TextCopy(path)
+    if next.bytes.count != path.count { Store(*state.error, "Cannot store breadcrumb location"); return false }
+    VecSwap(state.path.bytes, next.bytes); VecSwap(state.rows, pending); Store(*state.error, "")
+    return true
+}

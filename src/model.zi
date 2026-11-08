@@ -189,6 +189,7 @@ RenamePath :: (source: string, target: string) -> bool {
 SetError :: (manager: *Manager, message: string) {
     SetStoredText(*manager.error_text, message)
     manager.error = TextView(manager.error_text)
+    if manager.error_text.bytes.count != message.count { manager.error = "Operation failed; cannot allocate error text" }
 }
 
 SetStoredText :: (owner: *Text, value: string) {
@@ -302,7 +303,8 @@ AppendEntry :: (manager: *Manager, name: string, path: string,
     owned_name: Text = TextCopy(name)
     owned_path: Text = TextCopy(path)
     owned_caption: Text = Display.Caption(name)
-    if name != "" && owned_caption.bytes.count == 0 { return false }
+    if owned_name.bytes.count != name.count || owned_path.bytes.count != path.count ||
+        (name != "" && owned_caption.bytes.count == 0) { return false }
     if !VecPush(manager.entry_text, owned_name) || !VecPush(manager.entry_text, owned_path) ||
         !VecPush(manager.entry_text, owned_caption) { return false }
     entry.name = TextView(manager.entry_text[manager.entry_text.count - 3])
@@ -338,38 +340,124 @@ RememberTab :: (manager: *Manager) {
 }
 
 OpenPath :: (manager: *Manager, path: string) -> bool {
-    if path == "" { return false }
+    return OpenPathChecked(manager, path)
+}
+
+OpenPathChecked :: (manager: *Manager, path: string, select_name: string = "",
+    expected: Files.PathInfo = .{}, include_hidden: bool = false) -> bool {
+    if path == "" { SetError(manager, "Enter a local folder path"); return false }
     resolved: Text = Files.ResolvePath(path)
-    if resolved.bytes.count == 0 || Files.PathStatus(resolved).kind != .Directory {
+    before := Files.PathQuery(resolved)
+    if resolved.bytes.count == 0 || !before.valid || before.info.kind != .Directory || !before.info.identity_valid {
         SetError(manager, path)
         return false
     }
-    names: Vec(string)
-    if !Files.ListDirectory(resolved, *names) {
+    cursor := Files.OpenDirectory(resolved)
+    if !cursor.valid {
         SetError(manager, resolved)
         return false
     }
-    SetStoredText(*manager.cwd_text, resolved)
-    manager.cwd = TextView(manager.cwd_text)
-    ClearEntries(manager)
-    for name: names {
-        if name == "" || (!manager.show_hidden && name[0] == #char ".") { continue }
+    open := true
+    defer { if open { unused Files.CloseDirectory(*cursor) } }
+    // Build a complete new listing before changing route, selection or history.
+    pending: Manager
+    pending.cursor = -1; pending.anchor = -1
+    pending.show_hidden = manager.show_hidden || include_hidden
+    pending.sort_mode = manager.sort_mode; pending.sort_reverse = manager.sort_reverse
+    while true {
+        item := Files.NextDirectoryEntry(*cursor)
+        if !item.valid { break }
+        name := TextView(item.name[:item.name_count])
+        if name == "." || name == ".." || (!pending.show_hidden && name[0] == #char ".") { continue }
         full: Text = Files.JoinPath(resolved, name)
-        info := Files.PathStatus(full, true)
-        if info.kind == .Missing { info.kind = Files.PathKind.Other }
-        if !AppendEntry(manager, name, full, info) { break }
+        if full.bytes.count == 0 || full.bytes.count >= PATH_MAX {
+            SetError(manager, "Folder entry path cannot be represented; current location retained"); return false
+        }
+        query := Files.PathQuery(full)
+        info := query.info
+        if !query.valid {
+            link := Files.PathQuery(full, false)
+            if !query.missing || !link.valid || link.info.kind != .Link {
+                SetError(manager, "Folder entry disappeared or is inaccessible; current location retained"); return false
+            }
+            info = link.info; info.kind = .Other
+        }
+        if !AppendEntry(*pending, name, full, info) {
+            SetError(manager, "Cannot allocate complete folder listing; current location retained"); return false
+        }
     }
-    FreeNames(*names)
+    failed := cursor.failed
+    closed := Files.CloseDirectory(*cursor); open = false
+    after := Files.PathQuery(resolved)
+    if failed || !closed || !after.valid || !SameDirectorySnapshot(before.info, after.info) {
+        SetError(manager, "Folder changed or could not be read completely; current location retained"); return false
+    }
+    next_cwd: Text = TextCopy(resolved)
+    if next_cwd.bytes.count != resolved.bytes.count { SetError(manager, "Cannot store location; current location retained"); return false }
+    next_tab: Text
+    has_tab := manager.active_tab >= 0 && manager.active_tab < manager.tabs.count
+    if has_tab {
+        copy: Text = TextCopy(resolved)
+        if copy.bytes.count != resolved.bytes.count { SetError(manager, "Cannot store active tab; current location retained"); return false }
+        VecSwap(next_tab.bytes, copy.bytes)
+    }
+    SortEntries(*pending)
+    chosen: s32 = -1
+    if select_name != "" {
+        for index: cast(s32)0..cast(s32)pending.entries.count - 1 {
+            if pending.entries[index].name == select_name && SamePathIdentity(pending.entries[index].info, expected) { chosen = index; break }
+        }
+        if chosen < 0 { SetError(manager, "Location file disappeared or changed; current location retained"); return false }
+    }
+    VecSwap(manager.cwd_text.bytes, next_cwd.bytes)
+    manager.cwd = TextView(manager.cwd_text)
+    VecSwap(manager.entry_text, pending.entry_text)
+    VecSwap(manager.entries, pending.entries)
+    VecSwap(manager.selected, pending.selected)
+    manager.cursor = pending.cursor; manager.anchor = pending.anchor; manager.scroll = 0
+    manager.show_hidden = pending.show_hidden; manager.reveal_focus = true
     manager.search_active = false
     SetStoredText(*manager.search_query_text, "")
     manager.search_query = ""
     SetStoredText(*manager.search_root_text, "")
     manager.search_root = ""
     SetError(manager, "")
-    SortEntries(manager)
-    SelectFirst(manager)
-    RememberTab(manager)
+    if chosen >= 0 { SelectOne(manager, chosen) }
+    else { SelectFirst(manager) }
+    if has_tab {
+        VecSwap(manager.tab_text[manager.active_tab].bytes, next_tab.bytes)
+        manager.tabs[manager.active_tab] = TextView(manager.tab_text[manager.active_tab])
+    }
     return true
+}
+
+SamePathIdentity :: (left: Files.PathInfo, right: Files.PathInfo) -> bool {
+    return left.identity_valid && right.identity_valid && left.kind == right.kind &&
+        left.inode == right.inode && left.device_major == right.device_major && left.device_minor == right.device_minor
+}
+
+// A typed file location selects the file in its parent; it never executes it.
+OpenLocationTracked :: (manager: *Manager, path: string) -> bool {
+    query := Files.PathQuery(path)
+    if !query.valid { SetError(manager, ifx query.missing then "Location does not exist" else "Location is inaccessible or cannot be represented"); return false }
+    if query.info.kind == .Directory { return OpenPathTracked(manager, path) }
+    if query.info.kind != .File || !query.info.identity_valid { SetError(manager, "This location is not a supported local file or folder"); return false }
+    name: Text = TextCopy(Files.PathName(path))
+    parent: Text = TextCopy(Files.PathParent(path))
+    old: Text = TextCopy(manager.cwd)
+    if name.bytes.count == 0 || parent.bytes.count == 0 || old.bytes.count != manager.cwd.count {
+        SetError(manager, "Cannot prepare location navigation"); return false
+    }
+    if !OpenPathChecked(manager, TextView(parent), TextView(name), query.info, TextView(name)[0] == #char ".") { return false }
+    if TextView(old) != manager.cwd { PushHistory(*manager.back, TextView(old)); manager.forward.count = 0 }
+    return true
+}
+
+SameDirectorySnapshot :: (left: Files.PathInfo, right: Files.PathInfo) -> bool {
+    return left.identity_valid && right.identity_valid && left.kind == .Directory && right.kind == .Directory &&
+        left.inode == right.inode && left.device_major == right.device_major && left.device_minor == right.device_minor &&
+        left.modified == right.modified && left.modified_nanoseconds == right.modified_nanoseconds &&
+        left.changed == right.changed && left.changed_nanoseconds == right.changed_nanoseconds
 }
 
 PushHistory :: (history: *History, path: string) {
@@ -418,7 +506,7 @@ NavigateBack :: (manager: *Manager) -> bool {
     current_buffer: [PATH_MAX]u8
     current := ""
     if Strings.CopyCString(manager.cwd, current_buffer[:]) { current = TextUntilNul(current_buffer[:]) }
-    if !OpenPath(manager, path) { return false }
+    if !OpenPath(manager, path) { manager.back.count += 1; return false }
     PushHistory(*manager.forward, current)
     return true
 }
@@ -430,7 +518,7 @@ NavigateForward :: (manager: *Manager) -> bool {
     current_buffer: [PATH_MAX]u8
     current := ""
     if Strings.CopyCString(manager.cwd, current_buffer[:]) { current = TextUntilNul(current_buffer[:]) }
-    if !OpenPath(manager, path) { return false }
+    if !OpenPath(manager, path) { manager.forward.count += 1; return false }
     PushHistory(*manager.back, current)
     return true
 }

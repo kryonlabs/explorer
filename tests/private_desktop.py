@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """Run only test-owned applications on a private desktop and session bus."""
 import os
+import errno
 from pathlib import Path
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 
 
 def main():
@@ -32,7 +34,17 @@ def main():
             command = ["dbus-run-session", "--", "xvfb-run", "-a", *command]
         return subprocess.run(command, env=env).returncode
     finally:
-        shutil.rmtree(root)
+        # D-Bus-activated test services can finish their final state writes just
+        # after the private bus exits. Retry only this owned private directory.
+        for attempt in range(5):
+            try:
+                shutil.rmtree(root)
+                break
+            except FileNotFoundError:
+                break
+            except OSError as error:
+                if error.errno != errno.ENOTEMPTY or attempt == 4: raise
+                time.sleep(.1 * (attempt + 1))
 
 
 if __name__ == "__main__":

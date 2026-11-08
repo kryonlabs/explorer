@@ -39,6 +39,33 @@ in that mode are rejected without changing the filesystem; an escaped path
 that exceeds the editor's capacity reports an error instead of being truncated.
 Desktop clipboard publication still rejects paths that cannot be UTF-8 URIs.
 
+The path bar uses clickable local breadcrumbs. Its Ancestors menu retains
+hidden parents when the bar is narrow; clicking the current folder refreshes it.
+The … button or Ctrl+L opens an inline location editor with the current path
+selected. Enter opens a folder, or selects a regular file in its parent without
+executing it. Escape cancels without changing the route, selection or history.
+Relative paths resolve against the folder where editing started; `~` and `~/`
+use Home. Input is literal: no shell evaluation, named-user expansion or remote
+URI navigation; the editor accepts local path syntax. These local file/directory semantics follow
+[current upstream Thunar's location entry](https://raw.githubusercontent.com/xfce-mirror/thunar/master/thunar/thunar-location-entry.c).
+The installed Thunar 4.20.2 uses file launch instead; private native comparison
+there covers completion keys and cancellation, while Shelf tests verify safe
+file-parent selection directly.
+
+Tab at the end inserts the common prefix, appending `/` for one matching folder;
+otherwise it first moves to the end. Up/Down cycle the displayed suggestions;
+Enter navigates and clicking a suggestion fills the editor. Completion includes
+hidden entries, lists folders first and uses case-sensitive raw-name prefixes.
+Raw-byte or control-byte completions switch explicitly to byte-escape mode.
+An ordinary backslash remains literal until that mode is shown. Completion reads
+at most 65536 entries and retains at most 4096 matches; these limits do not cap
+folder listings. Missing, inaccessible, changed or unrepresentable paths retain
+the input and prior route. Stale suggestions require Tab to refresh.
+Directory listings and active-tab text commit only after a complete checked read;
+failed Back/Forward navigation retains history. Independent filesystem changes
+can still race after the final identity recheck. Paths are limited to 4095 raw
+bytes, editor text to 4096 bytes and breadcrumbs to 2048 ancestors.
+
 The Places sidebar loads local shortcuts from `$XDG_CONFIG_HOME/gtk-3.0/bookmarks`
 (or `$HOME/.config/gtk-3.0/bookmarks`). If that file is absent, it reads
 `$HOME/.gtk-bookmarks`; the first edit writes the GTK3 location and leaves the
@@ -125,6 +152,7 @@ make test-file-clipboard # native Shelf/Thunar interchange on a private desktop
 make test-filenames # raw-byte names, directories and operations on a private desktop
 make test-bookmarks # source/saved persistence and private GTK/sidebar GUI tests
 make test-tree      # source/saved lazy tree, host integration and private GUI
+make test-location  # source/saved paths, failure rollback, private Shelf/Thunar keys
 make install
 make test-installed
 ```

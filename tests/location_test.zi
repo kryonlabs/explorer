@@ -1,0 +1,156 @@
+using Location :: #import "location";
+using Model :: #import "model";
+using Bytes :: #import "std/byte_text_linux";
+using Vectors :: #import "std/vec";
+Files :: #import "std/file_tree_linux";
+Number :: #import "std/number_text";
+Utf8 :: #import "std/utf8";
+
+Run :: (root: string) -> bool {
+    unused Files.RemoveTree(root)
+    if !Files.CreateDirectories(root, 448) { return false }
+    alpha: Text = Files.JoinPath(root, "alpha space")
+    alpine: Text = Files.JoinPath(root, "alpine")
+    file: Text = Files.JoinPath(root, "alps.txt")
+    literal: Text = Files.JoinPath(root, "literal-\\x41")
+    hidden: Text = Files.JoinPath(root, ".hidden-file")
+    raw_bytes := u8.[114, 97, 119, 45, 255]
+    raw: Text = Files.JoinPath(root, TextView(raw_bytes[:]))
+    control: Text = Files.JoinPath(root, "line\né")
+    unicode: Text = Files.JoinPath(root, "unicode")
+    if !Files.CreateDirectory(TextView(alpha)) || !Files.CreateDirectory(TextView(alpine)) ||
+        !Files.ReplaceFile(TextView(file), "file") || !Files.ReplaceFile(TextView(literal), "literal") ||
+        !Files.ReplaceFile(TextView(hidden), "hidden") || !Files.CreateDirectory(TextView(raw)) ||
+        !Files.CreateDirectory(TextView(control)) || !Files.CreateDirectory(TextView(unicode)) ||
+        !Files.ReplaceFile(Files.JoinPath(TextView(unicode), "éclair"), "a") ||
+        !Files.ReplaceFile(Files.JoinPath(TextView(unicode), "êcole"), "b") { return false }
+    manager: Manager
+    Model.Init(*manager, root)
+    state: State
+    if !Location.Begin(*state, manager.cwd, root) || !Location.Query(*state, "al", false) || state.order.count != 3 { return false }
+    common: Value = Location.Common(*state)
+    if !common.valid || common.escaped || TextView(common.text) != "alp" { return false }
+    first: Value = Location.Cycle(*state, 1)
+    second: Value = Location.Cycle(*state, 1)
+    third: Value = Location.Cycle(*state, 1)
+    if TextView(first.text) != "alpha space/" || TextView(second.text) != "alpine/" || TextView(third.text) != "alps.txt" ||
+        !Location.Cached(*state, TextView(third.text), false) { return false }
+    if !Location.Submit(*state, *manager, TextView(third.text), false) ||
+        Model.EntryName(*manager, manager.cursor) != "alps.txt" || manager.cwd != root { return false }
+    if !Location.Query(*state, "raw-", false) { return false }
+    raw_result: Value = Location.Common(*state)
+    if !raw_result.valid || !raw_result.escaped || TextView(raw_result.text) != "raw-\\xFF/" ||
+        !Location.Submit(*state, *manager, TextView(raw_result.text), true) || manager.cwd != TextView(raw) { return false }
+    if !Location.Begin(*state, manager.cwd, root) || !Location.Submit(*state, *manager, "~", false) || manager.cwd != root { return false }
+    if !Location.Begin(*state, manager.cwd, root) || !Location.Submit(*state, *manager, "literal-\\x41", false) ||
+        Model.EntryName(*manager, manager.cursor) != "literal-\\x41" { return false }
+    if !Location.Submit(*state, *manager, ".hidden-file", false) || !manager.show_hidden ||
+        Model.EntryName(*manager, manager.cursor) != ".hidden-file" { return false }
+    if !Location.Query(*state, "line", false) { return false }
+    control_result: Value = Location.Common(*state)
+    if !control_result.escaped || TextView(control_result.text) != "line\\x0Aé/" { return false }
+    if !Location.Query(*state, "unicode/", false) { return false }
+    unicode_common: Value = Location.Common(*state)
+    if !unicode_common.valid || unicode_common.escaped || TextView(unicode_common.text) != "unicode/" ||
+        !Utf8.Valid(TextView(unicode_common.text)) { return false }
+    if !Location.Query(*state, "al", false) || !Files.ReplaceFile(Files.JoinPath(root, "altered"), "change") ||
+        Location.Validate(*state) || state.valid || state.error.bytes.count == 0 { return false }
+    old_selected := manager.cursor
+    old_count := manager.entries.count
+    old_back := manager.back.count
+    if !Files.SetPathMode(TextView(alpha), 0) { return false }
+    query_denied := !Location.Query(*state, "alpha space/", false)
+    nav_denied := !Location.Submit(*state, *manager, "alpha space", false)
+    unused Files.SetPathMode(TextView(alpha), 448)
+    if !query_denied || !nav_denied || manager.cwd != root || manager.cursor != old_selected ||
+        manager.entries.count != old_count || manager.back.count != old_back { return false }
+    if Location.Submit(*state, *manager, "missing", false) || manager.cwd != root ||
+        Location.Submit(*state, *manager, "bad\\xGG", true) ||
+        Location.Submit(*state, *manager, "sftp://remote/path", false) ||
+        Location.Submit(*state, *manager, "~another-user/path", false) || manager.cursor != old_selected { return false }
+    if !Location.Submit(*state, *manager, "./alpine/../alpha space", false) || manager.cwd != TextView(alpha) { return false }
+    if Location.Submit(*state, *manager, "../alpine", false) || manager.cwd != TextView(alpha) { return false }
+    if !Location.Begin(*state, manager.cwd, root) || !Location.Submit(*state, *manager, "../alpine", false) ||
+        manager.cwd != TextView(alpine) { return false }
+    ancestors: Ancestors
+    if !Location.BuildAncestors(*ancestors, TextView(raw)) || ancestors.rows.count < 2 ||
+        TextView(ancestors.rows[ancestors.rows.count - 1].path) != TextView(raw) ||
+        TextView(ancestors.rows[ancestors.rows.count - 1].caption) != "raw-\\xFF" { return false }
+    for *row: ancestors.rows { if row.key != Model.PathKey(TextView(row.path)) || !Utf8.Valid(TextView(row.caption)) { return false } }
+    // Legal absolute local paths may include a colon plus repeated slash.
+    colon: Text = Files.JoinPath(root, "proto:")
+    child: Text = Files.JoinPath(TextView(colon), "child")
+    colon_input: Text = Files.JoinPath(root, "proto://child")
+    if !Files.CreateDirectories(TextView(child)) || !Location.Begin(*state, manager.cwd, root) ||
+        !Location.Submit(*state, *manager, TextView(colon_input), false) || manager.cwd != TextView(child) ||
+        manager.tabs[manager.active_tab] != manager.cwd { return false }
+    if !Location.Begin(*state, root, root) { return false }
+    colon_inputs: [3]string = .["./proto://child", "~/proto://child", "nested/proto://child"]
+    for input: colon_inputs {
+        absolute: Value = Location.Absolute(input, root, root)
+        if !absolute.valid { return false }
+    }
+    if !Model.OpenPathTracked(*manager, root) || !Location.Submit(*state, *manager, "./proto://child", false) ||
+        manager.cwd != TextView(child) { return false }
+    // Failed Back/Forward preserve both stacks, route, selected entry and tab.
+    back_path: Text = Files.JoinPath(root, "history-back")
+    forward_path: Text = Files.JoinPath(root, "history-forward")
+    if !Files.CreateDirectory(TextView(back_path)) || !Files.CreateDirectory(TextView(forward_path)) ||
+        !Model.OpenPathTracked(*manager, TextView(back_path)) || manager.cursor != -1 || manager.anchor != -1 ||
+        Model.SelectedCount(*manager) != 0 ||
+        !Model.OpenPathTracked(*manager, TextView(forward_path)) ||
+        !Files.RemoveTree(TextView(back_path)) { return false }
+    back_count := manager.back.count; forward_count := manager.forward.count
+    if Model.NavigateBack(*manager) || manager.back.count != back_count || manager.forward.count != forward_count ||
+        manager.cwd != TextView(forward_path) || manager.tabs[manager.active_tab] != manager.cwd { return false }
+    if !Files.CreateDirectory(TextView(back_path)) || !Model.NavigateBack(*manager) ||
+        !Files.RemoveTree(TextView(forward_path)) { return false }
+    back_count = manager.back.count; forward_count = manager.forward.count
+    if Model.NavigateForward(*manager) || manager.back.count != back_count || manager.forward.count != forward_count ||
+        manager.cwd != TextView(back_path) || manager.tabs[manager.active_tab] != manager.cwd { return false }
+    if !Model.OpenPathTracked(*manager, TextView(alpine)) { return false }
+    many: Text = Files.JoinPath(root, "many")
+    if !Files.CreateDirectory(TextView(many)) { return false }
+    for index: cast(s32)0..4999 {
+        buffer: [32]u8
+        name := Number.FormatInteger(cast(s64)index, buffer[:])
+        path: Text = Files.JoinPath(TextView(many), name)
+        if !Files.ReplaceFile(TextView(path), "x") { return false }
+    }
+    if !Location.Begin(*state, manager.cwd, root) || Location.Query(*state, "../many/", false) ||
+        state.error.bytes.count == 0 || !Location.Submit(*state, *manager, "../many", false) || manager.entries.count != 5000 { return false }
+    Location.ReleaseAncestors(*ancestors); Location.Release(*state); Model.Dispose(*manager)
+    return true
+}
+
+RejectedNavigation :: (initial: string, target: string, mode: string) -> bool {
+    manager: Manager
+    Model.Init(*manager, initial)
+    if manager.cwd != initial || manager.entries.count == 0 { print("OOM probe could not initialize good route\n"); return false }
+    Model.SelectOne(*manager, 0)
+    key := manager.entries[0].key
+    count := manager.entries.count
+    before := manager.back.count
+    if mode == "--race" && !Files.ReplaceFile(Files.JoinPath(initial, "race-ready"), "READY") { return false }
+    if Model.OpenPathTracked(*manager, target) { print("Rejected navigation probe unexpectedly opened target\n"); return false }
+    if manager.cwd != initial || manager.entries.count != count || manager.entries[0].key != key ||
+        Model.SelectedCount(*manager) != 1 || manager.back.count != before || manager.tabs[manager.active_tab] != initial || manager.error == "" { return false }
+    if mode == "--oom" { print("Actual allocation failure preserved route/selection/history: %\n", manager.error) }
+    else if mode == "--path-limit" {
+        if manager.error != "Folder entry path cannot be represented; current location retained" { return false }
+        print("Unrepresentable child path preserved route/selection/history: %\n", manager.error)
+    } else { print("Concurrent directory mutation preserved route/selection/history: %\n", manager.error) }
+    Model.Dispose(*manager)
+    return true
+}
+main :: (argc: s32, argv: **u8) -> s32 {
+    if argc == 4 {
+        initial := Bytes.TextFromCString(argv[2]); target := Bytes.TextFromCString(argv[3])
+        return ifx RejectedNavigation(initial, target, Bytes.TextFromCString(argv[1])) then 0 else 1
+    }
+    if argc != 2 { return 64 }
+    root := Bytes.TextFromCString(argv[1])
+    if !Run(root) { print("Location literal/raw/relative/home/completion/transaction/limits test failed\n"); return 1 }
+    print("Location literal/raw/relative/home/completion/transaction/limits tests passed\n")
+    return 0
+}

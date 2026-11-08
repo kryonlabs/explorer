@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+- Add local breadcrumb navigation and an inline location editor with common-prefix
+  completion, keyboard suggestions, literal relative/Home paths and lossless raw
+  name editing. Failed or stale navigation retains the input, route and history;
+  complete folder listings and active-tab paths commit together.
+
 - Add a lazy local Tree side pane with cwd reveal, stable directory identities,
   hidden filtering, branch refresh and checked bounded reads that preserve good
   branches on errors and reject symbolic-link ancestor cycles.

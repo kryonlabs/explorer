@@ -18,6 +18,7 @@ FileDisplay :: #import "file_display";
 using Bookmarks :: #import "bookmarks";
 using LocalTree :: #import "tree_sidebar";
 Trees :: #import "data_views/TreeView";
+using Location :: #import "location";
 
 #scope_export
 HostSession :: struct {
@@ -85,6 +86,14 @@ Host :: struct {
     tree_horizontal: s32
     tree_horizontal_max: s32
     tree_press: s32
+    location: Location.State
+    ancestors: Location.Ancestors
+    completion_items: Vec(ListBoxItem)
+    completion_flags: Vec(bool)
+    completion_scroll: s32
+    breadcrumb_items: Vec(BreadcrumbItem)
+    breadcrumb_open: bool
+    actions_open: bool
 }
 
 CopyInto :: (target: []u8, value: string) -> s32 {
@@ -125,6 +134,11 @@ Prepare :: (host: *Host, start_path: string = "") -> bool {
 
 Close :: (host: *Host) {
     if host == null { return }
+    Location.Release(*host.location)
+    Location.ReleaseAncestors(*host.ancestors)
+    VecFree(host.completion_items); VecFree(host.completion_flags); VecFree(host.breadcrumb_items)
+    host.breadcrumb_open = false; host.actions_open = false
+    host.completion_scroll = 0
     FileClipboard.Close(*host.file_clipboard)
     Bookmarks.Release(*host.bookmarks)
     LocalTree.Release(*host.directory_tree)
@@ -168,6 +182,7 @@ PromptTitle :: (host: *Host) -> string {
 }
 
 OpenPrompt :: (host: *Host, prompt: Model.PromptKind) {
+    host.breadcrumb_open = false; host.actions_open = false
     host.manager.prompt = prompt
     host.field.length = 0
     host.field.cursor = 0
@@ -194,6 +209,14 @@ OpenPrompt :: (host: *Host, prompt: Model.PromptKind) {
     }
     host.field.length = CopyInto(host.field.bytes, TextView(caption))
     unused CopyInto(host.field_value[:], TextView(host.field.bytes[:host.field.length]))
+    if prompt == .PromptLocation {
+        if !Location.Begin(*host.location, host.manager.cwd, Model.HomePath()) {
+            Model.SetError(*host.manager, "Cannot prepare location editor")
+            CancelLocation(host); return
+        }
+        host.completion_scroll = 0
+        host.field.cursor = host.field.length; host.field.anchor = 0
+    }
 }
 
 FinishPrompt :: (host: *Host) {
@@ -201,6 +224,15 @@ FinishPrompt :: (host: *Host) {
     value_length := CopyInto(prompt_buffer[:], TextView(host.field.bytes[:host.field.length]))
     value := TextView(prompt_buffer[:value_length])
     prompt := host.manager.prompt
+    if prompt == .PromptLocation {
+        if host.location.selected >= 0 && host.location.preview.bytes.count > 0 &&
+            value == TextView(host.location.preview) && host.escaped_editor == host.location.preview_escaped &&
+            !Location.Validate(*host.location, host.location.order[host.location.selected]) {
+            LocationError(host); return
+        }
+        if Location.Submit(*host.location, *host.manager, value, host.escaped_editor) { CancelLocation(host) }
+        return
+    }
     decoded: FileDisplay.EditorValue = FileDisplay.ParseEditor(
         ifx host.escaped_editor then value else "")
     if !decoded.valid {
@@ -216,7 +248,6 @@ FinishPrompt :: (host: *Host) {
     if prompt == .PromptRename { unused Model.RenameSelection(*host.manager, value) }
     else if prompt == .PromptFolder { unused Model.CreateFolder(*host.manager, value) }
     else if prompt == .PromptFile { unused Model.CreateFile(*host.manager, value) }
-    else if prompt == .PromptLocation { unused Model.OpenPathTracked(*host.manager, value) }
     else if prompt == .PromptSearch { unused Model.Search(*host.manager, value) }
     host.field.length = 0
     host.field.focused = false
@@ -224,6 +255,189 @@ FinishPrompt :: (host: *Host) {
 }
 
 #scope_file
+CancelLocation :: (host: *Host) {
+    host.manager.prompt = .PromptNone
+    host.field.length = 0; host.field.focused = false; host.escaped_editor = false
+    Location.Release(*host.location); host.completion_scroll = 0
+}
+LocationError :: (host: *Host) {
+    Model.SetError(*host.manager, ifx host.location.error.bytes.count > 0 then
+        TextView(host.location.error) else ifx host.location.valid then "No matching local entries" else "Completion unavailable; input retained")
+}
+ApplyLocation :: (host: *Host, value: *Location.Value) {
+    if !value.valid { LocationError(host); return }
+    // Encode checks capacity; this copy must never truncate a raw path.
+    if value.text.bytes.count > host.field.bytes.count { Model.SetError(*host.manager, "Completed location is too long"); return }
+    host.field.length = CopyInto(host.field.bytes, TextView(value.text))
+    host.field.cursor = host.field.length; host.field.anchor = host.field.length
+    host.escaped_editor = value.escaped; host.field.focused = true
+    if host.location.selected >= 0 {
+        top := host.location.selected * 30
+        if top < host.completion_scroll { host.completion_scroll = top }
+        if top + 30 > host.completion_scroll + 240 { host.completion_scroll = top + 30 - 240 }
+    }
+}
+LocationKey :: (host: *Host, key: s32, modifiers: s32) -> bool {
+    if (modifiers & KeyModifierControl) != 0 || (key != KeyTab && key != KeyUp && key != KeyDown) { return false }
+    if key == KeyTab && host.field.cursor != host.field.length {
+        host.field.cursor = host.field.length; host.field.anchor = host.field.length; return true
+    }
+    value: Text = TextCopy(TextView(host.field.bytes[:host.field.length]))
+    if key == KeyTab && TextView(value) == "~" {
+        home: Location.Value = Location.Encode("~/", host.escaped_editor)
+        ApplyLocation(host, *home)
+        next: Text = TextCopy(TextView(host.field.bytes[:host.field.length]))
+        VecSwap(value.bytes, next.bytes)
+    }
+    if key == KeyTab || !Location.Cached(*host.location, TextView(value), host.escaped_editor) {
+        if !Location.Query(*host.location, TextView(value), host.escaped_editor) { LocationError(host); return true }
+    }
+    if key == KeyTab {
+        completion: Location.Value = Location.Common(*host.location)
+        ApplyLocation(host, *completion)
+    } else {
+        completion: Location.Value = Location.Cycle(*host.location, ifx key == KeyUp then -1 else 1)
+        ApplyLocation(host, *completion)
+    }
+    return true
+}
+CompletionWidget :: (host: *Host, session: UI.Session, bounds: Rectangle, focused: bool) -> s32 {
+    if !host.location.valid || host.location.order.count == 0 { return -1 }
+    if !VecResize(host.completion_items, host.location.order.count) ||
+        !VecResize(host.completion_flags, host.location.order.count) { Model.SetError(*host.manager, "Cannot display completions"); return -1 }
+    for index: cast(s32)0..cast(s32)host.location.order.count - 1 {
+        item := *host.location.candidates[host.location.order[index]]
+        host.completion_items[index] = ListBoxItem.{Model.PathKey(TextView(item.path)), TextView(item.caption)}
+        host.completion_flags[index] = index == host.location.selected
+    }
+    props := ListBoxMultiProps.{.key = cast(u64)224, .bounds = bounds, .row_height = 30,
+        .anchor = host.location.selected, .scroll_offset = host.completion_scroll,
+        .focused = false, .disabled = !focused}
+    if focused { props.scroll_delta = cast(s32)(-Input.PointerWheelTake(session, bounds) * 60.0) }
+    result := ListBoxMulti(session, props, host.completion_items[:], host.completion_flags[:])
+    host.completion_scroll = result.scroll_offset
+    unused VecResize(host.completion_items, 0)
+    return result.clicked_index
+}
+LocationBreadcrumbWidget :: (host: *Host, session: UI.Session, bounds: Rectangle,
+    focused: bool, key: s32) -> s32 {
+    if !Location.BuildAncestors(*host.ancestors, host.manager.cwd) {
+        Model.SetError(*host.manager, ifx host.ancestors.error.bytes.count > 0 then TextView(host.ancestors.error) else "Cannot prepare breadcrumbs"); return -1
+    }
+    if !VecResize(host.breadcrumb_items, host.ancestors.rows.count) {
+        Model.SetError(*host.manager, "Cannot display breadcrumb ancestors"); return -1
+    }
+    for index: cast(s32)0..cast(s32)host.ancestors.rows.count - 1 {
+        row := *host.ancestors.rows[index]
+        host.breadcrumb_items[index] = BreadcrumbItem.{.key = row.key, .label = TextView(row.caption)}
+    }
+    props := BreadcrumbProps.{.key = cast(u64)220, .bounds = bounds,
+        .active_index = cast(s32)host.ancestors.rows.count - 1, .focused_index = -1,
+        .focused = focused, .disabled = !focused || host.manager.prompt != .PromptNone,
+        .overflow_label = "Ancestors"}
+    if host.breadcrumb_open && focused {
+        props.menu_input = .{.navigating = key == KeyUp || key == KeyDown || key == KeyHome || key == KeyEnd,
+            .up = key == KeyUp, .down = key == KeyDown,
+            .home = key == KeyHome, .end = key == KeyEnd, .commit = key == KeyEnter, .escape = key == KeyEscape}
+    }
+    result := Breadcrumb(session, props, host.breadcrumb_items[:])
+    host.breadcrumb_open = result.open
+    unused VecResize(host.breadcrumb_items, 0)
+    return result.activated_index
+}
+DrawLocationBreadcrumb :: (host: *Host, session: UI.Session, bounds: Rectangle, focused: bool, key: s32) {
+    row := LocationBreadcrumbWidget(host, session, bounds, focused, key)
+    if row >= 0 && row < host.ancestors.rows.count {
+        unused Model.OpenPathTracked(*host.manager, TextView(host.ancestors.rows[row].path))
+    }
+}
+DrawNarrowActions :: (host: *Host, session: UI.Session, bounds: Rectangle, focused: bool, key: s32) -> bool {
+    labels: [12]string = .["New folder", "New file", "Rename", "Copy", "Paste", "Cut", "Duplicate", "Link", "Trash", "Show hidden", "Restore", "Preview"]
+    options: [12]DropdownOption
+    for index: cast(s32)0..11 {
+        options[index] = DropdownOption.{.key = cast(u64)(300 + index), .label = labels[index],
+            .disabled = index == 10 && host.manager.cwd != Model.TrashDirectory(false)}
+    }
+    props := DropdownProps.{.key = cast(u64)227, .bounds = bounds,
+        .placeholder = "Actions", .selected_index = -1,
+        .disabled = !focused || host.manager.prompt != .PromptNone}
+    if host.actions_open && focused {
+        props.menu_input = .{.navigating = key == KeyUp || key == KeyDown || key == KeyHome || key == KeyEnd,
+            .up = key == KeyUp, .down = key == KeyDown, .home = key == KeyHome, .end = key == KeyEnd,
+            .commit = key == KeyEnter, .escape = key == KeyEscape}
+    }
+    was_open := host.actions_open
+    result := Dropdown(session, props, options[:])
+    host.actions_open = result.open
+    if !result.changed { return was_open || result.open }
+    manager := *host.manager
+    choice := result.selected_index
+    if choice == 0 { OpenPrompt(host, .PromptFolder) }
+    else if choice == 1 { OpenPrompt(host, .PromptFile) }
+    else if choice == 2 { OpenPrompt(host, .PromptRename) }
+    else if choice == 3 { unused FileClipboard.Copy(*host.file_clipboard, manager, false) }
+    else if choice == 4 { unused FileClipboard.Paste(*host.file_clipboard, manager) }
+    else if choice == 5 { unused FileClipboard.Copy(*host.file_clipboard, manager, true) }
+    else if choice == 6 { unused Model.DuplicateSelection(manager) }
+    else if choice == 7 { unused Model.MakeLinkSelection(manager) }
+    else if choice == 8 { unused Model.DeleteSelection(manager, true) }
+    else if choice == 9 { manager.show_hidden = !manager.show_hidden; unused Model.Refresh(manager) }
+    else if choice == 10 { unused Model.RestoreSelection(manager) }
+    else if choice == 11 && manager.cursor >= 0 { OpenPreview(host, Model.EntryPath(manager, manager.cursor)) }
+    return true
+}
+DrawLocationEditor :: (host: *Host, session: UI.Session, bounds: Rectangle,
+    viewport: Rectangle, key: s32, modifiers: s32, typed_text: string, focused: bool) {
+    consumed := focused && LocationKey(host, key, modifiers)
+    unused CopyInto(host.field_value[:], TextView(host.field.bytes[:host.field.length]))
+    props := TextFieldProps.{.key = cast(u64)222, .bounds = bounds,
+        .value = TextView(host.field_value[:host.field.length]), .cursor = host.field.cursor,
+        .anchor = host.field.anchor, .scroll_x = host.field.scroll_x,
+        .focused = host.field.focused && focused, .max_bytes = 4096, .capture_tab = true}
+    props.input = Keys.TextFieldInputFor(ifx consumed then 0 else key, modifiers, ifx consumed then "" else typed_text)
+    props.input.focus = host.field.focused && focused
+    edited := TextField(session, props)
+    if edited.clipboard_write { unused SystemClipboardSet(edited.clipboard_text) }
+    if focused && ApplyFieldEdit(*host.field, edited.edit) {
+        host.field.cursor = edited.cursor; host.field.anchor = edited.anchor
+        host.field.scroll_x = edited.scroll_x; host.field.focused = edited.focused
+        if host.field.scroll_x < 0 { host.field.scroll_x = 0 }
+    }
+    if edited.committed { FinishPrompt(host); return }
+    if edited.escaped { CancelLocation(host); return }
+    if edited.edit.changed && focused {
+        host.completion_scroll = 0
+        input: Text = TextCopy(TextView(host.field.bytes[:host.field.length]))
+        if !Location.Query(*host.location, TextView(input), host.escaped_editor) { LocationError(host) }
+        else { Model.SetError(*host.manager, "") }
+    }
+    height := cast(float32)host.location.order.count * 30.0
+    if height > 240.0 { height = 240.0 }
+    if bounds.y + bounds.height + height + 28.0 > viewport.y + viewport.height {
+        height = viewport.y + viewport.height - bounds.y - bounds.height - 28.0
+    }
+    if !host.location.valid { height = 0.0 }
+    if height > 0.0 {
+        popup := Rectangle.{bounds.x, bounds.y + bounds.height, bounds.width, height}
+        Box(session, BoxProps.{.key = cast(u64)223, .bounds = popup, .fill = ColorFromPacked(host.palette.base)})
+        row := CompletionWidget(host, session, popup, focused)
+        if row >= 0 {
+            value: Location.Value = Location.Choose(*host.location, row)
+            ApplyLocation(host, *value)
+        }
+    }
+}
+DrawLocationStatus :: (host: *Host, session: UI.Session, viewport: Rectangle) {
+    bounds := Rectangle.{viewport.x + 166.0, viewport.y + viewport.height - 26.0, viewport.width - 174.0, 22.0}
+    if host.manager.error != "" {
+        error: Text = FileDisplay.Caption(host.manager.error)
+        Text(session, TextProps.{.key = cast(u64)228, .bounds = bounds, .text = TextView(error), .font = 14})
+    } else {
+        Text(session, TextProps.{.key = cast(u64)225, .bounds = bounds,
+            .text = ifx host.escaped_editor then "Byte escapes: \\xNN; \\\\ backslash" else
+                "Tab completes · ↑↓ choose · Enter opens · Esc cancels", .font = 14})
+    }
+}
 ApplyFieldEdit :: (state: *FieldState, edit: UI.TextFieldEdit) -> bool {
     if state == null { return false }
     if !edit.changed { return true }
@@ -903,7 +1117,6 @@ Draw :: (host: *Host, host_session: HostSession, host_viewport: HostViewport,
         DrawPreview(host, session, viewport, 0, 0, focused)
         return 0
     }
-    field_input := Keys.TextFieldInputFor(key, modifiers, typed_text)
 
     if manager.prompt == .PromptNone && (modifiers & KeyModifierControl) != 0 {
         if key == 69 { TreeMode(host, !host.tree_mode); key = 0 }
@@ -921,6 +1134,8 @@ Draw :: (host: *Host, host_session: HostSession, host_viewport: HostViewport,
         else if key == 51 { host.tree_focused = false; Model.SetView(manager, .ViewCompact); key = 0 }
     }
 
+    narrow := viewport.width < 720.0
+    body_offset: float32 = ifx narrow then 40.0 else 0.0
     toolbar := Rectangle.{viewport.x + 8.0, viewport.y + 8.0, viewport.width - 16.0, 40.0}
     if Button(session, 1, "Back", Rectangle.{toolbar.x, toolbar.y, 58.0, 36.0}) {
         unused Model.NavigateBack(manager)
@@ -934,10 +1149,15 @@ Draw :: (host: *Host, host_session: HostSession, host_viewport: HostViewport,
     path_bounds := Rectangle.{toolbar.x + 188.0, toolbar.y + 5.0,
         viewport.width - 530.0, 26.0}
     if path_bounds.width < 160.0 { path_bounds.width = 160.0 }
-    cwd_caption: Text = FileDisplay.Caption(manager.cwd)
-    Text(session, TextProps.{.key = cast(u64)20, .bounds = path_bounds,
-        .text = TextView(cwd_caption), .font = 15})
+    if narrow { path_bounds = .{viewport.x + 8.0, viewport.y + 92.0, viewport.width - 54.0, 32.0} }
+    else { path_bounds.width -= 38.0 }
+    if Button(session, 226, "…", .{path_bounds.x + path_bounds.width + 4.0, path_bounds.y, 34.0, path_bounds.height},
+        focused && manager.prompt == .PromptNone) { OpenPrompt(host, .PromptLocation) }
+    breadcrumb_handled := host.breadcrumb_open
+    if manager.prompt != .PromptLocation { DrawLocationBreadcrumb(host, session, path_bounds, focused, key) }
+    if breadcrumb_handled || host.breadcrumb_open { key = 0 }
 
+    if !narrow {
     action_x := viewport.x + viewport.width - 328.0
     if Button(session, 4, "Folder", Rectangle.{action_x, toolbar.y, 68.0, 36.0}) { OpenPrompt(host, .PromptFolder) }
     if Button(session, 5, "File", Rectangle.{action_x + 74.0, toolbar.y, 50.0, 36.0}) { OpenPrompt(host, .PromptFile) }
@@ -945,7 +1165,9 @@ Draw :: (host: *Host, host_session: HostSession, host_viewport: HostViewport,
     if Button(session, 7, "Copy", Rectangle.{action_x + 208.0, toolbar.y, 56.0, 36.0}) { unused FileClipboard.Copy(*host.file_clipboard, manager, false) }
     if Button(session, 8, "Paste", Rectangle.{action_x + 270.0, toolbar.y, 58.0, 36.0}) { unused FileClipboard.Paste(*host.file_clipboard, manager) }
 
+    }
     second := Rectangle.{viewport.x + 8.0, viewport.y + 52.0, viewport.width - 16.0, 38.0}
+    if !narrow {
     if Button(session, 9, "Cut", Rectangle.{second.x, second.y, 46.0, 32.0}) { unused FileClipboard.Copy(*host.file_clipboard, manager, true) }
     if Button(session, 10, "Duplicate", Rectangle.{second.x + 52.0, second.y, 88.0, 32.0}) { unused Model.DuplicateSelection(manager) }
     if Button(session, 11, "Link", Rectangle.{second.x + 146.0, second.y, 50.0, 32.0}) { unused Model.MakeLinkSelection(manager) }
@@ -962,12 +1184,14 @@ Draw :: (host: *Host, host_session: HostSession, host_viewport: HostViewport,
         Button(session, 67, "Preview", .{second.x + 340.0, second.y, 84.0, 32.0}) && manager.cursor >= 0 {
         OpenPreview(host, Model.EntryPath(manager, manager.cursor))
     }
-    if manager.error != "" {
+    if manager.error != "" && manager.prompt != .PromptLocation {
         error_caption: Text = FileDisplay.Caption(manager.error)
         Text(session, TextProps.{.key = cast(u64)21,
             .bounds = .{second.x + 420.0, second.y + 5.0, viewport.width - 716.0, 22.0},
             .text = TextView(error_caption), .font = 13, .disabled = true})
     }
+    }
+    if narrow && DrawNarrowActions(host, session, .{viewport.x + viewport.width - 168.0, toolbar.y, 160.0, 36.0}, focused, key) { key = 0 }
     tabs_x := viewport.x + viewport.width - 300.0
     if Button(session, 15, "+", Rectangle.{tabs_x, second.y, 32.0, 32.0}) {
         unused Model.NewTab(manager)
@@ -992,7 +1216,7 @@ Draw :: (host: *Host, host_session: HostSession, host_viewport: HostViewport,
         tab_index += 1
     }
 
-    sidebar := Rectangle.{viewport.x + 8.0, viewport.y + 96.0, 150.0, viewport.height - 106.0}
+    sidebar := Rectangle.{viewport.x + 8.0, viewport.y + 96.0 + body_offset, 150.0, viewport.height - 106.0 - body_offset}
     if focused {
         press := Input.TreeLastPress(session)
         if press.serial != host.tree_press {
@@ -1021,7 +1245,7 @@ Draw :: (host: *Host, host_session: HostSession, host_viewport: HostViewport,
     }
 
     view_x := viewport.x + 166.0
-    view_y := viewport.y + 96.0
+    view_y := viewport.y + 96.0 + body_offset
     if Button(session, 41, ifx manager.view_mode == .ViewIcon then "[Icon]" else "Icon",
         .{view_x, view_y, 66.0, 32.0}) { Model.SetView(manager, .ViewIcon) }
     if Button(session, 42, ifx manager.view_mode == .ViewList then "[List]" else "List",
@@ -1044,6 +1268,7 @@ Draw :: (host: *Host, host_session: HostSession, host_viewport: HostViewport,
         Model.SetSort(manager, manager.sort_mode, !manager.sort_reverse)
         host.last_click_ms = 0
     }
+    if manager.prompt != .PromptLocation {
     selected_buffer: [16]u8
     selected_count := Number.FormatInteger(Model.SelectedCount(manager), selected_buffer[:])
     Text(session, TextProps.{.key = cast(u64)65,
@@ -1052,8 +1277,9 @@ Draw :: (host: *Host, host_session: HostSession, host_viewport: HostViewport,
     Text(session, TextProps.{.key = cast(u64)66,
         .bounds = .{view_x + 64.0, viewport.y + viewport.height - 26.0, 120.0, 22.0},
         .text = "selected", .font = 13})
-    list_bounds := Rectangle.{viewport.x + 166.0, viewport.y + 136.0, viewport.width - 174.0,
-        viewport.height - 168.0}
+    }
+    list_bounds := Rectangle.{viewport.x + 166.0, viewport.y + 136.0 + body_offset, viewport.width - 174.0,
+        viewport.height - 168.0 - body_offset}
     if list_bounds.width < 1.0 { list_bounds.width = 1.0 }
     if list_bounds.height < 1.0 { list_bounds.height = 1.0 }
     if manager.view_mode == .ViewList {
@@ -1064,7 +1290,11 @@ Draw :: (host: *Host, host_session: HostSession, host_viewport: HostViewport,
             modifiers, focused && manager.prompt == .PromptNone)
     }
 
-    if manager.prompt != .PromptNone {
+    if manager.prompt == .PromptLocation {
+        DrawLocationEditor(host, session, path_bounds, viewport, key, modifiers, typed_text, focused)
+        if manager.prompt == .PromptLocation { DrawLocationStatus(host, session, viewport) }
+    }
+    if manager.prompt != .PromptNone && manager.prompt != .PromptLocation {
         prompt_bounds := Rectangle.{viewport.x + viewport.width * 0.5 - 220.0,
             viewport.y + viewport.height * 0.5 - 46.0, 440.0, 92.0}
         Box(session, BoxProps.{.key = cast(u64)50, .bounds = prompt_bounds,
@@ -1079,7 +1309,7 @@ Draw :: (host: *Host, host_session: HostSession, host_viewport: HostViewport,
             .cursor = host.field.cursor, .anchor = host.field.anchor,
             .scroll_x = host.field.scroll_x, .focused = host.field.focused && focused,
             .max_bytes = 4096}
-        props.input = field_input
+        props.input = Keys.TextFieldInputFor(key, modifiers, typed_text)
         props.input.focus = host.field.focused && focused
         edited := TextField(session, props)
         if edited.clipboard_write { unused SystemClipboardSet(edited.clipboard_text) }

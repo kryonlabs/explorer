@@ -292,12 +292,16 @@ def main():
                     with Image.open(capture("theme-" + name.lower() + "-text")) as shot:
                         rendered = shot.convert("RGB")
                         assert foreground_count(rendered, (12, 80, width // 2, 110), fg) > 8, (name, "preview text")
-                    key("Escape", "ctrl+l")
+                    key("Escape", "ctrl+l", "End")
                     with Image.open(capture("theme-" + name.lower() + "-prompt")) as shot:
                         rendered = shot.convert("RGB")
-                        left, top = width // 2 - 220, height // 2 - 46
-                        assert close(rendered.getpixel((left + 2, top + 2)), base), (name, "prompt surface")
-                        assert foreground_count(rendered, (left + 16, top + 12, left + 424, top + 34), fg) > 8, (name, "prompt text")
+                        # Ctrl+L now edits inline; both path and native completion
+                        # hint must follow the same configured theme.
+                        left, top = 196, 13
+                        right = left + width - 568
+                        assert close(rendered.getpixel((width - 10, height - 5)), bg), (name, "location status surface")
+                        assert foreground_count(rendered, (left + 8, top + 2, right - 8, top + 24), fg) > 8, (name, "location text")
+                        assert foreground_count(rendered, (166, height - 26, width - 8, height - 4), fg) > 8, (name, "location status hint")
                     key("Escape")
             if options.system_theme_config:
                 theme_tests(system=True)
