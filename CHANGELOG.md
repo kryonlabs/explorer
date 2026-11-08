@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- Exchange desktop file copy/cut/paste selections with Thunar through native
+  X11/XWayland MIME clipboard transport, including URI escaping, transactional
+  payload validation, ownership changes and pending-cut retry handling.
 - Follow the system GTK light/dark palette in views, icons, prompts and previews,
   refresh colors while running and preserve the embedding host's palette.
 - Added image thumbnails and a large image preview with fit, actual size, zoom,

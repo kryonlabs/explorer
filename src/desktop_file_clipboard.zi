@@ -1,0 +1,103 @@
+#scope_module
+Model :: #import "model";
+Files :: #import "file_clipboard";
+Native :: #import "kryon/MimeClipboardLinux";
+
+#scope_export
+State :: struct {
+    owned: u64
+    cut_owner: u64
+    cut_payload: Text
+    cut_mime: string
+}
+
+ForgetCut :: (state: *State) {
+    state.cut_owner = 0
+    state.cut_mime = ""
+    VecFree(state.cut_payload.bytes)
+}
+
+Close :: (state: *State) {
+    if state.owned != 0 { unused Native.MimeClipboardRelease(state.owned) }
+    state.owned = 0
+    ForgetCut(state)
+}
+
+Poll :: () { unused Native.MimeClipboardPump(32) }
+
+Copy :: (state: *State, manager: *Model.Manager, cut: bool) -> bool {
+    pending: Model.Clipboard
+    if !Model.SnapshotSelection(manager, cut, *pending) { return false }
+    available := Native.MimeClipboardOpen()
+    if available {
+        uris: Text = Files.Encode(*pending, Files.URI_LIST)
+        gnome: Text = Files.Encode(*pending, Files.GNOME_FILES)
+        if uris.bytes.count == 0 || gnome.bytes.count == 0 {
+            Model.SetError(manager, "File selection cannot be represented on the desktop clipboard")
+            return false
+        }
+        payloads := Native.MimeClipboardPayload.[
+            .{.mime = Files.URI_LIST, .bytes = uris.bytes[:uris.bytes.count]},
+            .{.mime = Files.GNOME_FILES, .bytes = gnome.bytes[:gnome.bytes.count]}]
+        result := Native.MimeClipboardPublish(payloads[:])
+        if result.status != .Ok {
+            Model.SetError(manager, "Desktop clipboard publication failed; internal selection retained")
+            return false
+        }
+        state.owned = result.owner
+    }
+    VecSwap(manager.clipboard.paths, pending.paths)
+    VecSwap(manager.clipboard.text, pending.text)
+    manager.clipboard.mode = pending.mode
+    ForgetCut(state)
+    return true
+}
+
+Paste :: (state: *State, manager: *Model.Manager) -> bool {
+    if !Native.MimeClipboardOpen() { return Model.Paste(manager) }
+    buffer: Vec(u8)
+    if !VecResize(buffer, Files.MAX_PAYLOAD) {
+        Model.SetError(manager, "Cannot allocate desktop file clipboard buffer"); return false
+    }
+    mime := Files.GNOME_FILES
+    result := Native.MimeClipboardRead(mime, buffer[:buffer.count], 1000)
+    if result.status == .Absent {
+        mime = Files.URI_LIST
+        result = Native.MimeClipboardRead(mime, buffer[:buffer.count], 1000)
+    }
+    if result.status == .Absent {
+        Model.SetError(manager, "Desktop clipboard contains no files"); return false
+    }
+    if result.status != .Ok || result.owner == 0 || result.owner != Native.MimeClipboardOwner() {
+        Model.SetError(manager, "Desktop file clipboard could not be read completely"); return false
+    }
+    payload := TextView(result.bytes)
+    repeated_cut := state.cut_owner == result.owner && state.cut_mime == mime &&
+        TextView(state.cut_payload) == payload
+    if !repeated_cut {
+        if !Files.Parse(*manager.clipboard, mime, payload) {
+            Model.SetError(manager, "Desktop file clipboard is empty, invalid or contains unsupported URIs")
+            return false
+        }
+        ForgetCut(state)
+        if manager.clipboard.mode == .ClipboardCut {
+            remembered: Text = TextCopy(payload)
+            if remembered.bytes.count != payload.count {
+                Model.SetError(manager, "Cannot retain desktop cut selection"); return false
+            }
+            VecSwap(state.cut_payload.bytes, remembered.bytes)
+            state.cut_owner = result.owner
+            state.cut_mime = mime
+        }
+    }
+    if repeated_cut && manager.clipboard.paths.count == 0 {
+        Model.SetError(manager, "This cut selection has already been pasted"); return false
+    }
+    cut := manager.clipboard.mode == .ClipboardCut
+    ok := Model.Paste(manager)
+    if cut && manager.clipboard.paths.count == 0 && state.owned == result.owner {
+        unused Native.MimeClipboardRelease(state.owned)
+        state.owned = 0
+    }
+    return ok
+}

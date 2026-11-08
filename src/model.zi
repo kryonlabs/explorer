@@ -840,21 +840,34 @@ RestoreSelection :: (manager: *Manager) -> bool {
     return Refresh(manager)
 }
 
-CopySelection :: (manager: *Manager, cut: bool) -> bool {
-    VecFree(manager.clipboard.paths)
-    VecFree(manager.clipboard.text)
-    paths := SelectedPaths(manager)
-    for path: paths {
+SnapshotSelection :: (manager: *Manager, cut: bool, clipboard: *Clipboard) -> bool {
+    // Clipboard snapshots include the whole selection. The bounded operation
+    // helper is for other actions; never publish a silently truncated list.
+    pending: Clipboard
+    for index: cast(s32)0..manager.entries.count - 1 {
+        if !manager.selected[index] { continue }
+        path := manager.entries[index].path
         owned: Text = TextCopy(path)
-        if !VecPush(manager.clipboard.text, owned) { break }
-        view := TextView(manager.clipboard.text[manager.clipboard.text.count - 1])
-        if !VecPush(manager.clipboard.paths, view) { break }
+        if owned.bytes.count != path.count {
+            SetError(manager, "Cannot retain the complete file selection"); return false
+        }
+        if !VecPush(pending.text, owned) {
+            SetError(manager, "Cannot retain the complete file selection"); return false
+        }
+        view := TextView(pending.text[pending.text.count - 1])
+        if !VecPush(pending.paths, view) {
+            SetError(manager, "Cannot retain the complete file selection"); return false
+        }
     }
-    VecFree(paths)
-    if manager.clipboard.paths.count == 0 { manager.clipboard.mode = .ClipboardNone }
-    else if cut { manager.clipboard.mode = .ClipboardCut }
-    else { manager.clipboard.mode = .ClipboardCopy }
-    return manager.clipboard.paths.count > 0
+    if pending.paths.count == 0 { return false }
+    VecSwap(clipboard.paths, pending.paths)
+    VecSwap(clipboard.text, pending.text)
+    clipboard.mode = ifx cut then .ClipboardCut else .ClipboardCopy
+    return true
+}
+
+CopySelection :: (manager: *Manager, cut: bool) -> bool {
+    return SnapshotSelection(manager, cut, *manager.clipboard)
 }
 
 IsWithin :: (directory: string, ancestor: string) -> bool {

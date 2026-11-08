@@ -1,0 +1,45 @@
+Model :: #import "model";
+Files :: #import "file_clipboard";
+Desktop :: #import "desktop_file_clipboard";
+Native :: #import "kryon/MimeClipboardLinux";
+
+// Native adapter test without a renderer: filenames may contain bytes that
+// cannot be represented as a UTF-8 URI. A failed publish must retain both lists.
+#program_export
+main :: (argc: s32, argv: **u8) -> s32 {
+    if !Native.MimeClipboardOpen() { return 1 }
+    manager: Model.Manager
+    state: Desktop.State
+    if !Files.Parse(*manager.clipboard, Files.GNOME_FILES, "cut\nfile:///prior\n") { return 2 }
+    raw := u8.[47, 255]
+    if !Model.AppendEntry(*manager, "unsupported path", TextView(raw[:]), .{.kind = .File}) { return 3 }
+    Model.SelectOne(*manager, 0)
+    owner := Native.MimeClipboardOwner()
+    if argc > 1 {
+        // An owner may keep its window and bytes while changing MIME targets.
+        // Cached GNOME cut progress must never bypass URI-list validation.
+        state.cut_owner = owner
+        state.cut_mime = Files.GNOME_FILES
+        remembered: Text = TextCopy("cut\nfile:///prior\n")
+        VecSwap(state.cut_payload.bytes, remembered.bytes)
+        if Desktop.Paste(*state, *manager) ||
+            manager.error != "Desktop file clipboard is empty, invalid or contains unsupported URIs" ||
+            manager.clipboard.paths.count != 1 || manager.clipboard.paths[0] != "/prior" ||
+            Native.MimeClipboardOwner() != owner { return 6 }
+        Desktop.Close(*state)
+        Model.Dispose(*manager)
+        Native.MimeClipboardClose()
+        print("native clipboard MIME change validates before using cached cut progress\n")
+        return 0
+    }
+    if owner == 0 || Desktop.Copy(*state, *manager, false) ||
+        manager.error == "" || manager.clipboard.mode != .ClipboardCut ||
+        manager.clipboard.paths.count != 1 || manager.clipboard.paths[0] != "/prior" ||
+        Native.MimeClipboardOwner() != owner { return 4 }
+    Desktop.Close(*state)
+    if Native.MimeClipboardOwner() != owner { return 5 }
+    Model.Dispose(*manager)
+    Native.MimeClipboardClose()
+    print("native clipboard publication rejection preserves internal selection and foreign owner\n")
+    return 0
+}

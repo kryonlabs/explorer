@@ -5,6 +5,101 @@ Strings :: #import "std/c_string";
 using Bytes :: #import "std/byte_text_linux";
 Preview :: #import "preview";
 Utf8 :: #import "std/utf8";
+FileClipboard :: #import "file_clipboard";
+Number :: #import "std/number_text";
+
+FileClipboardTest :: (root: string) -> bool {
+    clipboard: Model.Clipboard
+    if !FileClipboard.Parse(*clipboard, FileClipboard.GNOME_FILES,
+        "cut\nfile:///a%20b/%E4%B8%96%E7%95%8C%0A%25%23%3F\nFILE://LOCALHOST/b\n") ||
+        clipboard.mode != .ClipboardCut || clipboard.paths.count != 2 ||
+        clipboard.paths[0] != "/a b/世界\n%#?" || clipboard.paths[1] != "/b" { return false }
+    encoded: Text = FileClipboard.Encode(*clipboard, FileClipboard.GNOME_FILES)
+    roundtrip: Model.Clipboard
+    if !FileClipboard.Parse(*roundtrip, FileClipboard.GNOME_FILES, TextView(encoded)) ||
+        roundtrip.paths[0] != clipboard.paths[0] || roundtrip.mode != .ClipboardCut { return false }
+    uris: Text = FileClipboard.Encode(*clipboard, FileClipboard.URI_LIST)
+    if !FileClipboard.Parse(*roundtrip, FileClipboard.URI_LIST, TextView(uris)) ||
+        roundtrip.mode != .ClipboardCopy || roundtrip.paths[0] != clipboard.paths[0] { return false }
+    bad := string.["", "copy\n", "move\nfile:///a", "cut\nfile://server/a",
+        "cut\nfile:///a\nhttps://example.com/b", "cut\nfile:///a%",
+        "cut\nfile:///a%ZZ", "cut\nfile:///a%00b", "cut\nfile:///a%FF",
+        "cut\nfile:///a?query", "cut\nfile:///a#fragment", "cut\nfile:///a b",
+        "cut\nfile:///a\nfile:///a", "cut\nfile:relative", "cut\nfile:///",
+        "cut\nfile://", "cut\nfile://localhost"]
+    for payload: bad {
+        if FileClipboard.Parse(*clipboard, FileClipboard.GNOME_FILES, payload) ||
+            clipboard.paths.count != 2 || clipboard.paths[0] != "/a b/世界\n%#?" ||
+            clipboard.mode != .ClipboardCut { return false }
+    }
+    if !FileClipboard.Parse(*roundtrip, FileClipboard.URI_LIST, "# comment\r\n\r\nfile:///a\r\n") ||
+        roundtrip.paths.count != 1 || roundtrip.paths[0] != "/a" { return false }
+    invalid_bytes := u8.[47, 255]
+    unrepresentable: Model.Clipboard
+    unrepresentable.mode = .ClipboardCopy
+    if !VecPush(unrepresentable.paths, TextView(invalid_bytes[:])) { return false }
+    rejected: Text = FileClipboard.Encode(*unrepresentable, FileClipboard.URI_LIST)
+    if rejected.bytes.count != 0 { return false }
+    too_many: Vec(u8)
+    for entry: 0..Model.MAX_ENTRIES { BuilderPrint(*too_many, "file:///entry-%\n", entry) }
+    if FileClipboard.Parse(*clipboard, FileClipboard.URI_LIST, TextView(too_many[:])) ||
+        clipboard.paths.count != 2 || clipboard.mode != .ClipboardCut { return false }
+
+    source: Text = Files.JoinPath(root, "clipboard-source")
+    destination: Text = Files.JoinPath(root, "clipboard-destination")
+    path: Text = Files.JoinPath(source, "é space\n%#.txt")
+    if !Files.CreateDirectories(source) || !Files.CreateDirectories(destination) ||
+        !Files.ReplaceFile(path, "clipboard safety") { return false }
+    manager: Model.Manager
+    Model.Init(*manager, source)
+    Model.SelectOne(*manager, 0)
+    if !Model.CopySelection(*manager, false) { return false }
+    copy: Text = FileClipboard.Encode(*manager.clipboard, FileClipboard.GNOME_FILES)
+    if !Model.OpenPathTracked(*manager, destination) ||
+        !FileClipboard.Parse(*manager.clipboard, FileClipboard.GNOME_FILES, TextView(copy)) ||
+        !Model.Paste(*manager) || !Files.PathExists(path) ||
+        !Files.PathExists(Files.JoinPath(destination, "é space\n%#.txt")) { return false }
+    if FileClipboard.Parse(*manager.clipboard, FileClipboard.GNOME_FILES,
+        "cut\nfile:///valid\nfile://remote/unsafe") || !Files.PathExists(path) { return false }
+    if !Model.OpenPathTracked(*manager, source) { return false }
+    Model.SelectOne(*manager, 0)
+    if !Model.CopySelection(*manager, true) { return false }
+    cut: Text = FileClipboard.Encode(*manager.clipboard, FileClipboard.GNOME_FILES)
+    if !Model.OpenPathTracked(*manager, destination) ||
+        !FileClipboard.Parse(*manager.clipboard, FileClipboard.GNOME_FILES, TextView(cut)) ||
+        !Model.Paste(*manager) || Files.PathExists(path) || manager.clipboard.paths.count != 0 {
+        return false
+    }
+    Model.Dispose(*manager)
+    large := Files.JoinPath(root, "clipboard-large")
+    if !Files.CreateDirectories(large) { return false }
+    for index: 0..299 {
+        name: [32]u8
+        if !Files.ReplaceFile(Files.JoinPath(large, Number.FormatInteger(index, name[:])), "large selection") { return false }
+    }
+    Model.Init(*manager, large)
+    for mode: 0..1 {
+        if !Model.OpenPathTracked(*manager, large) { return false }
+        Model.SelectAll(*manager)
+        if !Model.CopySelection(*manager, mode == 1) || manager.clipboard.paths.count != 300 { return false }
+        payload: Text = FileClipboard.Encode(*manager.clipboard, FileClipboard.GNOME_FILES)
+        if !FileClipboard.Parse(*roundtrip, FileClipboard.GNOME_FILES, TextView(payload)) ||
+            roundtrip.paths.count != 300 || roundtrip.mode != manager.clipboard.mode { return false }
+        target := Files.JoinPath(root, ifx mode == 0 then "large-copy" else "large-cut")
+        if !Files.CreateDirectories(target) || !Model.OpenPathTracked(*manager, target) { return false }
+        // No selection must preserve the previous complete clipboard snapshot.
+        if Model.CopySelection(*manager, false) || manager.clipboard.paths.count != 300 ||
+            !Model.Paste(*manager) { return false }
+        for index: 0..299 {
+            name: [32]u8
+            filename := Number.FormatInteger(index, name[:])
+            if !Files.PathExists(Files.JoinPath(target, filename)) ||
+                Files.PathExists(Files.JoinPath(large, filename)) == (mode == 1) { return false }
+        }
+    }
+    Model.Dispose(*manager)
+    return true
+}
 
 PreviewTest :: (root: string) -> bool {
     state: Preview.State
@@ -163,7 +258,9 @@ main :: (argc: s32, argv: **u8) -> s32 {
     }
     root := Bytes.TextFromCString(argv[1])
     unused Files.RemoveTree(root)
-    if !Files.CreateDirectories(root) { return 66 }
+    if !Files.CreateDirectories(root, 448) ||
+        !Files.CreateDirectories(Files.JoinPath(root, "data-home"), 448) { return 66 }
+    if !FileClipboardTest(root) { print("file clipboard parse/roundtrip/safety failed\n"); return 72 }
     if !PreviewTest(root) { print("bounded preview ownership/format test failed\n"); return 71 }
 
     data_home := Files.JoinPath(root, "data-home")

@@ -1,0 +1,39 @@
+#!/usr/bin/env python3
+"""Run only test-owned applications on a private desktop and session bus."""
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import tempfile
+
+
+def main():
+    build = Path(__file__).resolve().parents[1] / "build"
+    build.mkdir(exist_ok=True)
+    root = Path(tempfile.mkdtemp(prefix="private-desktop-", dir=build))
+    try:
+        env = os.environ.copy()
+        for key in ("DISPLAY", "WAYLAND_DISPLAY", "WAYLAND_SOCKET", "XAUTHORITY",
+                    "DBUS_SESSION_BUS_ADDRESS", "SESSION_MANAGER", "ICEAUTHORITY"):
+            env.pop(key, None)
+        for key, folder in (("HOME", "home"), ("XDG_CONFIG_HOME", "config"),
+                            ("XDG_DATA_HOME", "data"), ("XDG_CACHE_HOME", "cache"),
+                            ("XDG_STATE_HOME", "state"), ("XDG_RUNTIME_DIR", "runtime"),
+                            ("TMPDIR", "tmp")):
+            path = root / folder
+            path.mkdir(mode=0o700)
+            env[key] = str(path)
+        env.update(YUE_DESKTOP_RECOVERY="0", SDL_VIDEODRIVER="x11")
+        command = sys.argv[1:]
+        if command[0] == "--headless":
+            command = command[1:]
+        else:
+            command = ["dbus-run-session", "--", "xvfb-run", "-a", *command]
+        return subprocess.run(command, env=env).returncode
+    finally:
+        shutil.rmtree(root)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

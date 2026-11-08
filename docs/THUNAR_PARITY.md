@@ -19,7 +19,7 @@ specific so each missing row can become an independent implementation task.
 | Copy, move and links | Partial | Recursive copy/cut/paste, duplicate and symbolic links work; add progress, pause/cancel and conflict resolution. |
 | Trash | Partial | XDG Trash/files plus `.trashinfo`, deletion timestamps and restore work; add permanent-delete UI, empty trash, size and age columns. |
 | Drag and drop | Missing | Add internal/file-list drag payloads, drop targets and drop-menu semantics. |
-| Clipboard | Partial | Shelf has an internal file clipboard; add desktop file clipboard interchange. |
+| Clipboard | Partial | Desktop X11/XWayland copy/cut/paste uses text/uri-list and x-special/gnome-copied-files, with local URI validation and internal fallback when transport is unavailable. Native Wayland and clipboard-manager persistence remain; foreign identical same-window cut generations cannot be distinguished. |
 | Properties and permissions | Missing | Add single/multiple summaries, usage, metadata and permission/ownership editing with errors. |
 | File search | Partial | Case-insensitive recursive filename search; add filtering, content search, cancellation and result navigation. |
 | Hidden files | Done | Toggle and filtered directory/search scans work. |

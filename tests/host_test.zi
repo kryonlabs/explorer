@@ -22,6 +22,30 @@ frame_seconds: float64;
 frame_wheel: float32;
 theme_pixels: [576000]u32;
 
+ClipboardHostTest :: (host: *App.Host, session: Sessions.Session, root: string) -> bool {
+    Preview.Close(*host.preview)
+    host.manager.prompt = .PromptNone
+    source := Files.JoinPath(root, "clipboard-host-source")
+    target := Files.JoinPath(root, "clipboard-host-target")
+    path := Files.JoinPath(source, "clipboard.txt")
+    if !Files.CreateDirectories(source) || !Files.CreateDirectories(target) ||
+        !Files.ReplaceFile(path, "host clipboard") || !Model.OpenPath(*host.manager, source) { return false }
+    Model.SelectOne(*host.manager, 0)
+    if !Press(host, session, 67, Keys.KeyModifierControl) ||
+        host.manager.clipboard.mode != .ClipboardCopy ||
+        !Model.OpenPath(*host.manager, target) ||
+        !Press(host, session, 86, Keys.KeyModifierControl) ||
+        !Files.PathExists(Files.JoinPath(target, "clipboard.txt")) || !Files.PathExists(path) { return false }
+    if !Model.OpenPath(*host.manager, source) { return false }
+    Model.SelectOne(*host.manager, 0)
+    if !Press(host, session, 88, Keys.KeyModifierControl) ||
+        host.manager.clipboard.mode != .ClipboardCut ||
+        !Model.OpenPath(*host.manager, target) ||
+        !Press(host, session, 86, Keys.KeyModifierControl) || Files.PathExists(path) ||
+        host.manager.clipboard.paths.count != 0 { return false }
+    return true
+}
+
 Render :: (host: *App.Host, session: Sessions.Session, focused: bool) -> bool {
     viewport := Geometry.Rectangle.{240.0, 120.0, 960.0, 600.0}
     return RenderAt(host, session, focused, viewport)
@@ -463,7 +487,9 @@ main :: (argc: s32, argv: **u8) -> s32 {
     if argc != 2 { return 64 }
     root := Bytes.TextFromCString(argv[1])
     unused Files.RemoveTree(root)
-    if !Files.CreateDirectories(root) { return 65 }
+    if !Files.CreateDirectories(root, 448) ||
+        !Files.CreateDirectories(Files.JoinPath(root, "config"), 448) ||
+        !Files.CreateDirectories(Files.JoinPath(root, "data-home"), 448) { return 65 }
     if !Files.ReplaceFile(Files.JoinPath(root, "fixture.txt"), "fixture") { return 66 }
     host: App.Host
     if !App.Prepare(*host, root) { return 1 }
@@ -526,6 +552,7 @@ main :: (argc: s32, argv: **u8) -> s32 {
     }
     if !LargeViewTest(*host, session, root) { print("large view storage/reveal failed\n"); return 25 }
     if !PreviewHostTest(*host, session, root) { print("preview image/text/input/viewport behavior failed\n"); return 30 }
+    if !ClipboardHostTest(*host, session, root) { print("headless file clipboard shortcuts failed\n"); return 32 }
     App.Close(*host)
     if host.manager.entry_text.count != 0 || host.manager.cwd_text.bytes.count != 0 ||
         host.manager.clipboard.text.count != 0 || host.details_cells.count != 0 ||

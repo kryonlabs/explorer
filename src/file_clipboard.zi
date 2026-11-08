@@ -1,0 +1,139 @@
+// Shelf file-list policy. Transport and selection ownership belong to Kryon.
+#scope_module
+Model :: #import "model";
+Utf8 :: #import "std/utf8";
+using Bytes :: #import "std/byte_text_linux";
+
+#scope_export
+URI_LIST :: "text/uri-list";
+GNOME_FILES :: "x-special/gnome-copied-files";
+MAX_PAYLOAD :: 1048576;
+
+Release :: (clipboard: *Model.Clipboard) {
+    VecFree(clipboard.paths)
+    VecFree(clipboard.text)
+    clipboard.mode = .ClipboardNone
+}
+
+// Only local absolute UTF-8 paths are representable by Shelf's file model.
+LocalPath :: (path: string) -> bool {
+    if path.count < 2 || path.count >= 4096 || path[0] != #char "/" || !Utf8.Valid(path) { return false }
+    for byte: path { if byte == cast(u8)0 { return false } }
+    return true
+}
+
+Decode :: (uri: string) -> Text {
+    path := ""
+    if uri.count < 5 || Model.LowerASCII(uri[0]) != #char "f" ||
+        Model.LowerASCII(uri[1]) != #char "i" || Model.LowerASCII(uri[2]) != #char "l" ||
+        Model.LowerASCII(uri[3]) != #char "e" || uri[4] != #char ":" { return .{} }
+    if uri.count >= 7 && uri[5:7] == "//" {
+        rest := uri[7:]
+        if rest.count > 0 && rest[0] == #char "/" { path = rest }
+        else if rest.count > 10 && rest[9] == #char "/" {
+            local := "localhost"
+            same := true
+            for index: 0..8 { same = same && Model.LowerASCII(rest[index]) == local[index] }
+            if same { path = rest[9:] }
+        }
+    } else { path = uri[5:] }
+    if path == "" { return .{} }
+    bytes: Vec(u8)
+    at: s64 = 0
+    while at < path.count {
+        byte := path[at]
+        if byte == #char "%" {
+            if at + 2 >= path.count { VecFree(bytes); return .{} }
+            high := Model.HexValue(path[at + 1])
+            low := Model.HexValue(path[at + 2])
+            if high < 0 || low < 0 { VecFree(bytes); return .{} }
+            byte = cast(u8)(high * 16 + low)
+            at += 2
+        } else if byte <= cast(u8)32 || byte == #char "?" || byte == #char "#" {
+            VecFree(bytes); return .{}
+        }
+        if !VecPush(bytes, byte) { VecFree(bytes); return .{} }
+        at += 1
+    }
+    text: Text
+    text.bytes = bytes
+    if !LocalPath(TextView(text)) { VecFree(text.bytes); return .{} }
+    return text
+}
+
+// Transactional: an invalid or empty list leaves the prior internal list intact.
+Parse :: (clipboard: *Model.Clipboard, mime: string, payload: string) -> bool {
+    if payload.count == 0 || payload.count > MAX_PAYLOAD { return false }
+    pending: Model.Clipboard
+    pending.mode = .ClipboardCopy
+    start: s64 = 0
+    if mime == GNOME_FILES {
+        if payload.count >= 5 && payload[0:5] == "copy\n" { start = 5 }
+        else if payload.count >= 4 && payload[0:4] == "cut\n" { start = 4; pending.mode = .ClipboardCut }
+        else { return false }
+    } else if mime != URI_LIST { return false }
+    while start < payload.count {
+        end := start
+        while end < payload.count && payload[end] != #char "\n" { end += 1 }
+        line := payload[start:end]
+        if line.count > 0 && line[line.count - 1] == #char "\r" { line = line[0:line.count - 1] }
+        if line.count > 0 && !(mime == URI_LIST && line[0] == #char "#") {
+            path: Text = Decode(line)
+            if path.bytes.count == 0 { return false }
+            if pending.text.count >= Model.MAX_ENTRIES { VecFree(path.bytes); return false }
+            if !VecPush(pending.text, path) { return false }
+            view := TextView(pending.text[pending.text.count - 1])
+            prior_index: s64 = 0
+            while prior_index < pending.paths.count {
+                if pending.paths[prior_index] == view { return false }
+                prior_index += 1
+            }
+            if !VecPush(pending.paths, view) { return false }
+        }
+        start = end + 1
+    }
+    if pending.paths.count == 0 { return false }
+    Release(clipboard)
+    VecSwap(clipboard.paths, pending.paths)
+    VecSwap(clipboard.text, pending.text)
+    clipboard.mode = pending.mode
+    return true
+}
+
+Append :: (bytes: *Vec(u8), text: string) -> bool {
+    for byte: text { if !VecPush(bytes.*, byte) { return false } }
+    return true
+}
+
+// Empty means failure; never publish a partial or lossy file list.
+Encode :: (clipboard: *Model.Clipboard, mime: string) -> Text {
+    bytes: Vec(u8)
+    ok := true
+    if clipboard.paths.count == 0 || clipboard.mode == .ClipboardNone { return .{} }
+    if mime == GNOME_FILES {
+        ok = Append(*bytes, ifx clipboard.mode == .ClipboardCut then "cut\n" else "copy\n")
+    } else if mime != URI_LIST { return .{} }
+    digits := "0123456789ABCDEF"
+    for path: clipboard.paths {
+        if !LocalPath(path) { VecFree(bytes); return .{} }
+        ok = ok && Append(*bytes, "file://")
+        for byte: path {
+            safe := (byte >= #char "a" && byte <= #char "z") ||
+                (byte >= #char "A" && byte <= #char "Z") ||
+                (byte >= #char "0" && byte <= #char "9") ||
+                byte == #char "/" || byte == #char "-" || byte == #char "_" ||
+                byte == #char "." || byte == #char "~"
+            if safe { ok = ok && VecPush(bytes, byte) }
+            else {
+                ok = ok && VecPush(bytes, #char "%")
+                ok = ok && VecPush(bytes, digits[cast(s32)byte / 16])
+                ok = ok && VecPush(bytes, digits[cast(s32)byte % 16])
+            }
+        }
+        ok = ok && Append(*bytes, ifx mime == URI_LIST then "\r\n" else "\n")
+    }
+    if !ok || bytes.count > MAX_PAYLOAD { VecFree(bytes); return .{} }
+    result: Text
+    result.bytes = bytes
+    return result
+}

@@ -41,11 +41,16 @@ def main():
         parser.error("system theme smoke needs config, CSS and the expected RGB palette")
     fixture = repo / "build/ui-test-fixture"
     shutil.rmtree(fixture, ignore_errors=True)
+    fixture.mkdir(mode=0o700)
+    for folder in ("data-home", ".config", ".cache", ".state"):
+        (fixture / folder).mkdir(mode=0o700)
     destination = fixture / "destination"
     destination.mkdir(parents=True)
     env = os.environ.copy()
     env.update(HOME=str(fixture), XDG_DATA_HOME=str(fixture / "data-home"),
                XDG_CONFIG_HOME=str(fixture / ".config"),
+               XDG_CACHE_HOME=str(fixture / ".cache"),
+               XDG_STATE_HOME=str(fixture / ".state"),
                YUE_DESKTOP_RECOVERY="0", SDL_VIDEODRIVER="x11")
     env.pop("GTK_THEME", None)
     theme_colors = {

@@ -13,6 +13,7 @@ Preview :: #import "preview";
 using FormatText :: #import "std/format";
 SystemTheme :: #import "kryon/SystemThemeLinux";
 Palettes :: #import "kryon/widget_palette";
+FileClipboard :: #import "desktop_file_clipboard";
 
 #scope_export
 HostSession :: struct {
@@ -60,6 +61,7 @@ Host :: struct {
     palette: Palettes.WidgetPalette
     palette_ms: s64
     palette_loaded: bool
+    file_clipboard: FileClipboard.State
 }
 
 CopyInto :: (target: []u8, value: string) -> s32 {
@@ -88,6 +90,7 @@ Prepare :: (host: *Host, start_path: string = "") -> bool {
 
 Close :: (host: *Host) {
     if host == null { return }
+    FileClipboard.Close(*host.file_clipboard)
     if host.started { Model.Dispose(*host.manager) }
     VecFree(host.last_click_path.bytes)
     VecFree(host.details_cells)
@@ -596,6 +599,7 @@ RefreshTheme :: (host: *Host) {
 Draw :: (host: *Host, host_session: HostSession, host_viewport: HostViewport,
     focused: bool = true) -> s32 {
     if host == null || !host.started { return 1 }
+    FileClipboard.Poll()
     ui_session: UI.Session
     ui_session.slot = host_session.slot
     ui_session.epoch = host_session.epoch
@@ -647,6 +651,9 @@ Draw :: (host: *Host, host_session: HostSession, host_viewport: HostViewport,
         else if key == 84 { unused Model.NewTab(manager); key = 0 }
         else if key == KeyTab { Model.NextTab(manager); key = 0 }
         else if key == 65 { Model.SelectAll(manager); key = 0 }
+        else if key == 67 { unused FileClipboard.Copy(*host.file_clipboard, manager, false); key = 0 }
+        else if key == 88 { unused FileClipboard.Copy(*host.file_clipboard, manager, true); key = 0 }
+        else if key == 86 { unused FileClipboard.Paste(*host.file_clipboard, manager); key = 0 }
         else if key == 49 { Model.SetView(manager, .ViewIcon); key = 0 }
         else if key == 50 { Model.SetView(manager, .ViewList); key = 0 }
         else if key == 51 { Model.SetView(manager, .ViewCompact); key = 0 }
@@ -672,11 +679,11 @@ Draw :: (host: *Host, host_session: HostSession, host_viewport: HostViewport,
     if Button(session, 4, "Folder", Rectangle.{action_x, toolbar.y, 68.0, 36.0}) { OpenPrompt(host, .PromptFolder) }
     if Button(session, 5, "File", Rectangle.{action_x + 74.0, toolbar.y, 50.0, 36.0}) { OpenPrompt(host, .PromptFile) }
     if Button(session, 6, "Rename", Rectangle.{action_x + 130.0, toolbar.y, 72.0, 36.0}) { OpenPrompt(host, .PromptRename) }
-    if Button(session, 7, "Copy", Rectangle.{action_x + 208.0, toolbar.y, 56.0, 36.0}) { unused Model.CopySelection(manager, false) }
-    if Button(session, 8, "Paste", Rectangle.{action_x + 270.0, toolbar.y, 58.0, 36.0}) { unused Model.Paste(manager) }
+    if Button(session, 7, "Copy", Rectangle.{action_x + 208.0, toolbar.y, 56.0, 36.0}) { unused FileClipboard.Copy(*host.file_clipboard, manager, false) }
+    if Button(session, 8, "Paste", Rectangle.{action_x + 270.0, toolbar.y, 58.0, 36.0}) { unused FileClipboard.Paste(*host.file_clipboard, manager) }
 
     second := Rectangle.{viewport.x + 8.0, viewport.y + 52.0, viewport.width - 16.0, 38.0}
-    if Button(session, 9, "Cut", Rectangle.{second.x, second.y, 46.0, 32.0}) { unused Model.CopySelection(manager, true) }
+    if Button(session, 9, "Cut", Rectangle.{second.x, second.y, 46.0, 32.0}) { unused FileClipboard.Copy(*host.file_clipboard, manager, true) }
     if Button(session, 10, "Duplicate", Rectangle.{second.x + 52.0, second.y, 88.0, 32.0}) { unused Model.DuplicateSelection(manager) }
     if Button(session, 11, "Link", Rectangle.{second.x + 146.0, second.y, 50.0, 32.0}) { unused Model.MakeLinkSelection(manager) }
     if Button(session, 12, "Trash", Rectangle.{second.x + 202.0, second.y, 56.0, 32.0}) { unused Model.DeleteSelection(manager, true) }

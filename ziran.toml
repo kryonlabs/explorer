@@ -4,10 +4,11 @@ entry = "src/app.zi"
 module_roots = ["src", "tests"]
 bridge_modules = ["app"]
 tool = "kryon"
+links = ["xcb"]
 
 [toolchain]
 git = "https://github.com/ziranlang/ziran.git"
-ref = "master"
+ref = "c37371586264af9ee3db233d5eaf5d6176d4bdf7"
 
 [dependencies.kryon]
 git = "https://github.com/kryonlabs/kryon.git"
@@ -40,4 +41,4 @@ categories = "Utility;FileManager;Core;"
 
 [dependencies.data_views]
 git = "https://github.com/kryonlabs/data-views.git"
-ref = "master"
+ref = "696d62ea8cc8b2a458a4cf0a407edf912f471313"
