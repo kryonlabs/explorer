@@ -10,7 +10,7 @@ main :: (argc: s32, argv: **u8) -> s32 {
     if !Native.MimeClipboardOpen() { return 1 }
     manager: Model.Manager
     state: Desktop.State
-    if !Files.Parse(*manager.clipboard, Files.GNOME_FILES, "cut\nfile:///prior\n") { return 2 }
+    if !Files.Parse(*state.clipboard, Files.GNOME_FILES, "cut\nfile:///prior\n") { return 2 }
     raw := u8.[47, 255]
     if !Model.AppendEntry(*manager, "unsupported path", TextView(raw[:]), .{.kind = .File}) { return 3 }
     Model.SelectOne(*manager, 0)
@@ -22,19 +22,26 @@ main :: (argc: s32, argv: **u8) -> s32 {
         state.cut_mime = Files.GNOME_FILES
         remembered: Text = TextCopy("cut\nfile:///prior\n")
         VecSwap(state.cut_payload.bytes, remembered.bytes)
-        if Desktop.Paste(*state, *manager) ||
-            manager.error != "Desktop file clipboard is empty, invalid or contains unsupported URIs" ||
-            manager.clipboard.paths.count != 1 || manager.clipboard.paths[0] != "/prior" ||
+        destination: Model.Manager
+        if !Model.AppendEntry(*destination, "destination snapshot", "/destination", .{.kind = .File}) { return 7 }
+        Model.SelectOne(*destination, 0)
+        destination.scroll = 31
+        if Desktop.Paste(*state, *destination) ||
+            destination.entries.count != 1 || Model.SelectedCount(*destination) != 1 || destination.scroll != 31 ||
+            manager.entries.count != 1 || Model.SelectedCount(*manager) != 1 || manager.error != "" ||
+            destination.error != "Desktop file clipboard is empty, invalid or contains unsupported URIs" ||
+            state.clipboard.paths.count != 1 || state.clipboard.paths[0] != "/prior" ||
             Native.MimeClipboardOwner() != owner { return 6 }
         Desktop.Close(*state)
+        Model.Dispose(*destination)
         Model.Dispose(*manager)
         Native.MimeClipboardClose()
         print("native clipboard MIME change validates before using cached cut progress\n")
         return 0
     }
     if owner == 0 || Desktop.Copy(*state, *manager, false) ||
-        manager.error == "" || manager.clipboard.mode != .ClipboardCut ||
-        manager.clipboard.paths.count != 1 || manager.clipboard.paths[0] != "/prior" ||
+        manager.error == "" || state.clipboard.mode != .ClipboardCut ||
+        state.clipboard.paths.count != 1 || state.clipboard.paths[0] != "/prior" ||
         Native.MimeClipboardOwner() != owner { return 4 }
     Desktop.Close(*state)
     if Native.MimeClipboardOwner() != owner { return 5 }

@@ -13,7 +13,7 @@ specific so each missing row can become an independent implementation task.
 | Tree side pane | Partial | Lazy local Home/File System tree, expansion state, cwd ancestor reveal, hidden filtering, explicit branch refresh, safe raw-name captions and horizontal scrolling/reveal exist. Add remote/device trees and automatic filesystem watching. |
 | Location bar and path bar | Partial | Native local breadcrumbs with ancestor overflow, inline Ctrl+L editor, bounded raw-name completion and checked folder/file selection exist. Add remote URI providers and broader path-bar preferences. |
 | Tabs | Partial | Native stable-key labels, active state, close controls, scrolling overflow and pointer/keyboard reorder exist; dynamic tabs retain independent raw routes/history/selection/focus/scroll. Add detached windows and persistent sessions. |
-| Split view | Missing | Add synchronized dual-pane state and per-pane tabs/selection. |
+| Split view | Partial | Local dual panes use a native draggable divider with independent tabs, navigation, selection, scrolling and settings, shared clipboard and explicit active-pane actions. Collapse retains the other pane in memory; add persistent layout and remote providers. |
 | Open With and default apps | Partial | Files delegate to `kryon/open_uri`; add application chooser, MIME database and defaults. |
 | MIME handling | Missing | Add shared MIME detection, type labels, icons and inheritance-aware choices. |
 | Copy, move and links | Partial | Recursive copy/cut/paste, duplicate and symbolic links work; add progress, pause/cancel and conflict resolution. |

@@ -83,7 +83,22 @@ folder completely before changing the active route; surviving entries restore
 selection by raw path and filesystem identity. A missing, unreadable, changing
 or allocation-failed target leaves the previous usable tab active, including
 when closing the active tab. Search results remain cached until refresh.
-Split panes, detached windows and persistent sessions are not implemented.
+Detached windows and persistent sessions are not implemented.
+
+F3 or the Split button opens two local panes with a draggable divider. Each
+pane keeps its own tabs, history, selection, scrolling, view settings, search
+and Tree state. Click a pane or use Other pane to make it active; the shared
+location bar, sidebar and file actions follow that pane. Tab traversal,
+Ctrl+Tab tab cycling and location completion keep their existing shortcuts.
+Editors, previews and open menus retain their original pane until dismissed.
+
+Single shows the active pane across the full file area. Shelf keeps the other
+pane and its tabs in memory; F3 restores it after a checked refresh. An unreadable
+or allocation-failed pane stays hidden with an error, while the usable pane
+remains available. This retention lasts only for the current Host lifetime.
+The shared file clipboard supports copy/cut between panes, including native
+desktop interchange and the internal fallback without a display. Failed refresh
+of the other pane cannot undo an already completed file operation.
 
 The Places sidebar loads local shortcuts from `$XDG_CONFIG_HOME/gtk-3.0/bookmarks`
 (or `$HOME/.config/gtk-3.0/bookmarks`). If that file is absent, it reads
@@ -173,6 +188,7 @@ make test-bookmarks # source/saved persistence and private GTK/sidebar GUI tests
 make test-tree      # source/saved lazy tree, host integration and private GUI
 make test-location  # source/saved paths, failure rollback, private Shelf/Thunar keys
 make test-tabs      # dynamic state/real allocation failure and private native tabs
+make test-split     # independent panes, real failures, native focus/drag and Thunar
 make install
 make test-installed
 ```

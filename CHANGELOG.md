@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+- Add local split view with a native draggable divider, independent pane tabs
+  and navigation state, explicit active-pane actions and a shared file clipboard.
+  Collapsing retains both panes in memory; failed creation or re-enable preserves
+  the usable pane and reports the error.
+
 - Replace numbered tab controls with a native labeled strip, close buttons,
   scrolling overflow and drag/keyboard reorder. Dynamic tabs retain independent
   history, selection, focus, scrolling and view state; failed navigation keeps

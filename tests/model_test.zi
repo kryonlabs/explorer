@@ -299,6 +299,26 @@ ViewSortTest :: () -> bool {
     return true
 }
 
+ExactPaneModelTest :: (root: string) -> bool {
+    folder: Text = Files.JoinPath(root, "exact-pane-model")
+    missing: Text = Files.JoinPath(root, "missing-exact-pane")
+    if !Files.CreateDirectories(folder) || !Files.ReplaceFile(Files.JoinPath(folder, "selected"), "owned") { return false }
+    manager: Manager
+    if Model.InitChecked(*manager, missing) || manager.cwd != "" || manager.tabs.count != 0 { return false }
+    Model.Dispose(*manager)
+    if !Model.InitChecked(*manager, folder) { return false }
+    Model.SelectOne(*manager, 0); manager.scroll = 17; manager.reveal_focus = false
+    key := Model.TabKey(*manager, 0)
+    if !Files.ReplaceFile(Files.JoinPath(folder, "00-inserted"), "owned") ||
+        !Model.ReloadPreserving(*manager) || Model.EntryName(*manager, manager.cursor) != "selected" ||
+        Model.SelectedCount(*manager) != 1 || manager.scroll != 17 || Model.TabKey(*manager, 0) != key { return false }
+    if !Files.RemoveTree(folder) || Model.ReloadPreserving(*manager) || manager.cwd != TextView(folder) ||
+        Model.EntryName(*manager, manager.cursor) != "selected" || Model.SelectedCount(*manager) != 1 ||
+        manager.entries.count != 2 || manager.scroll != 17 || manager.error == "" { return false }
+    Model.Dispose(*manager)
+    return true
+}
+
 #program_export
 main :: (argc: s32, argv: **u8) -> s32 {
     if !ViewSortTest() { print("view/sort identity test failed\n"); return 70 }
@@ -310,6 +330,7 @@ main :: (argc: s32, argv: **u8) -> s32 {
     unused Files.RemoveTree(root)
     if !Files.CreateDirectories(root, 448) ||
         !Files.CreateDirectories(Files.JoinPath(root, "data-home"), 448) { return 66 }
+    if !ExactPaneModelTest(root) { print("exact pane initialization/identity refresh rollback failed\n"); return 76 }
     if !FileDisplayTest(root) { print("raw filename caption/identity/filesystem roundtrip failed\n"); return 73 }
     if !FileClipboardTest(root) { print("file clipboard parse/roundtrip/safety failed\n"); return 72 }
     if !PreviewTest(root) { print("bounded preview ownership/format test failed\n"); return 71 }

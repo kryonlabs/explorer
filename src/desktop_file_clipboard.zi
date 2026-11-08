@@ -5,6 +5,8 @@ Native :: #import "kryon/MimeClipboardLinux";
 
 #scope_export
 State :: struct {
+    clipboard: Model.Clipboard
+    changed: u64
     owned: u64
     cut_owner: u64
     cut_payload: Text
@@ -20,6 +22,8 @@ ForgetCut :: (state: *State) {
 Close :: (state: *State) {
     if state.owned != 0 { unused Native.MimeClipboardRelease(state.owned) }
     state.owned = 0
+    VecFree(state.clipboard.paths); VecFree(state.clipboard.text)
+    state.clipboard.mode = .ClipboardNone
     ForgetCut(state)
 }
 
@@ -46,15 +50,15 @@ Copy :: (state: *State, manager: *Model.Manager, cut: bool) -> bool {
         }
         state.owned = result.owner
     }
-    VecSwap(manager.clipboard.paths, pending.paths)
-    VecSwap(manager.clipboard.text, pending.text)
-    manager.clipboard.mode = pending.mode
+    VecSwap(state.clipboard.paths, pending.paths)
+    VecSwap(state.clipboard.text, pending.text)
+    state.clipboard.mode = pending.mode
     ForgetCut(state)
     return true
 }
 
 Paste :: (state: *State, manager: *Model.Manager) -> bool {
-    if !Native.MimeClipboardOpen() { return Model.Paste(manager) }
+    if !Native.MimeClipboardOpen() { return Model.PasteClipboard(manager, *state.clipboard, *state.changed) }
     buffer: Vec(u8)
     if !VecResize(buffer, Files.MAX_PAYLOAD) {
         Model.SetError(manager, "Cannot allocate desktop file clipboard buffer"); return false
@@ -75,12 +79,12 @@ Paste :: (state: *State, manager: *Model.Manager) -> bool {
     repeated_cut := state.cut_owner == result.owner && state.cut_mime == mime &&
         TextView(state.cut_payload) == payload
     if !repeated_cut {
-        if !Files.Parse(*manager.clipboard, mime, payload) {
+        if !Files.Parse(*state.clipboard, mime, payload) {
             Model.SetError(manager, "Desktop file clipboard is empty, invalid or contains unsupported URIs")
             return false
         }
         ForgetCut(state)
-        if manager.clipboard.mode == .ClipboardCut {
+        if state.clipboard.mode == .ClipboardCut {
             remembered: Text = TextCopy(payload)
             if remembered.bytes.count != payload.count {
                 Model.SetError(manager, "Cannot retain desktop cut selection"); return false
@@ -90,12 +94,12 @@ Paste :: (state: *State, manager: *Model.Manager) -> bool {
             state.cut_mime = mime
         }
     }
-    if repeated_cut && manager.clipboard.paths.count == 0 {
+    if repeated_cut && state.clipboard.paths.count == 0 {
         Model.SetError(manager, "This cut selection has already been pasted"); return false
     }
-    cut := manager.clipboard.mode == .ClipboardCut
-    ok := Model.Paste(manager)
-    if cut && manager.clipboard.paths.count == 0 && state.owned == result.owner {
+    cut := state.clipboard.mode == .ClipboardCut
+    ok := Model.PasteClipboard(manager, *state.clipboard, *state.changed)
+    if cut && state.clipboard.paths.count == 0 && state.owned == result.owner {
         unused Native.MimeClipboardRelease(state.owned)
         state.owned = 0
     }

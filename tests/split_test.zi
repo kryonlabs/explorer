@@ -1,0 +1,330 @@
+using App :: #import "app_host";
+using Model :: #import "model";
+Desktop :: #import "desktop_file_clipboard";
+HostTests :: #import "host_test";
+Files :: #import "std/file_tree_linux";
+WholeFiles :: #import "std/file";
+Number :: #import "std/number_text";
+using Bytes :: #import "std/byte_text_linux";
+Input :: #import "kryon/tree_input";
+Keys :: #import "kryon/input_protocol";
+Sessions :: #import "kryon/session";
+Frames :: #import "kryon/tree_draw";
+Tree :: #import "kryon/tree";
+Scrolls :: #import "kryon/scroll_device";
+Pixmap :: #import "kryon/pixmap";
+Geometry :: #import "kryon/geometry";
+
+frame_seconds: float64;
+
+Fail :: (stage: s32) -> bool { print("split stage % failed\n", stage); return false }
+Select :: (manager: *Model.Manager, name: string) -> bool {
+    for i: cast(s32)0..cast(s32)manager.entries.count - 1 {
+        if Model.EntryName(manager, i) == name { Model.SelectOne(manager, i); return true }
+    }
+    return false
+}
+
+Run :: (root: string) -> bool {
+    unused Files.RemoveTree(root)
+    a: Text = Files.JoinPath(root, "a/same é")
+    b: Text = Files.JoinPath(root, "b/same é")
+    if !Files.CreateDirectories(a) || !Files.CreateDirectories(b) ||
+        !Files.ReplaceFile(Files.JoinPath(a, "selected"), "owned") ||
+        !Files.ReplaceFile(Files.JoinPath(a, "second"), "two") ||
+        !Files.ReplaceFile(Files.JoinPath(b, "other"), "other") { return Fail(1) }
+    host: App.Host
+    if !App.Prepare(*host, a) { return Fail(2) }
+    defer { App.Close(*host) }
+    if !Select(*host.manager, "selected") { return Fail(3) }
+    host.manager.scroll = 19; host.manager.reveal_focus = false
+    host.manager.view_mode = .ViewCompact
+    if !App.EnableSplit(*host) || !host.split || host.active_pane != 0 ||
+        host.manager.scroll != 19 || Model.SelectedCount(*host.manager) != 1 { return Fail(4) }
+    right := App.PaneManager(*host, 1)
+    if right.cwd != TextView(a) || right.view_mode != .ViewCompact ||
+        right.tabs.count != 1 || !Model.OpenPathTracked(right, b) || !Select(right, "other") { return Fail(5) }
+    right.scroll = 7; right.reveal_focus = false; right.view_mode = .ViewList
+    for i: cast(s32)1..63 {
+        if !Model.NewTab(right, b) || !Model.NewTab(*host.manager, a) { return Fail(6) }
+    }
+    if host.manager.tabs.count != 64 || right.tabs.count != 64 ||
+        !Model.SwitchTab(*host.manager, 0) || !Model.SwitchTab(right, 0) ||
+        host.manager.scroll != 19 || right.scroll != 7 || Model.SelectedCount(right) != 1 ||
+        Model.SelectedCount(*host.manager) != 1 { return Fail(7) }
+    if !App.ActivatePane(*host, 1) || App.ActiveManager(*host).cwd != TextView(b) ||
+        !App.ToggleSplit(*host) || host.split || host.active_pane != 1 ||
+        !App.EnableSplit(*host) || right.scroll != 7 || host.active_pane != 1 ||
+        !App.ActivatePane(*host, 0) || !App.ToggleSplit(*host) ||
+        !App.EnableSplit(*host) || host.manager.scroll != 19 { return Fail(8) }
+    // The one clipboard snapshot is shared even when no display exists.
+    if !Desktop.Copy(*host.file_clipboard, *host.manager, false) ||
+        !App.ActivatePane(*host, 1) || !Desktop.Paste(*host.file_clipboard, right) ||
+        !Files.PathExists(Files.JoinPath(b, "selected")) || !Files.PathExists(Files.JoinPath(a, "selected")) { return Fail(9) }
+    if !Select(right, "other") || !Desktop.Copy(*host.file_clipboard, right, true) ||
+        !App.ActivatePane(*host, 0) || !Desktop.Paste(*host.file_clipboard, *host.manager) ||
+        Files.PathExists(Files.JoinPath(b, "other")) || !Files.PathExists(Files.JoinPath(a, "other")) ||
+        Desktop.Paste(*host.file_clipboard, right) { return Fail(10) }
+    // Model-only callers retain their independent public Paste API.
+    if !Select(*host.manager, "selected") || !Model.CopySelection(*host.manager, false) ||
+        !Model.OpenPath(*host.manager, b) || !Model.Paste(*host.manager) { return Fail(11) }
+    raw_bytes := u8.[114, 97, 119, 255, 10]
+    raw: Text = Files.JoinPath(root, TextView(raw_bytes[:]))
+    if !Files.CreateDirectory(raw) || !Model.NewTab(right, raw) ||
+        right.cwd != TextView(raw) || !Model.SwitchTab(right, 0) { return Fail(12) }
+    while right.tabs.count > 1 { if !Model.CloseTab(right, cast(s32)right.tabs.count - 1) { return Fail(13) } }
+    if Model.CloseTab(right, 0) || right.tabs.count != 1 { return Fail(14) }
+    if !Model.Search(right, "selected") || !App.ActivatePane(*host, 1) ||
+        !App.ToggleSplit(*host) || !App.EnableSplit(*host) || !right.search_active ||
+        right.search_query != "selected" { return Fail(15) }
+    App.Close(*host)
+    if host.secondary.count != 0 || host.manager.tabs.count != 0 || host.view.tab_labels.count != 0 ||
+        host.file_clipboard.clipboard.paths.count != 0 || !App.Prepare(*host, a) || host.active_pane != 0 || host.split { return Fail(16) }
+    return true
+}
+
+HasEntry :: (manager: *Model.Manager, name: string) -> bool {
+    for index: cast(s32)0..cast(s32)manager.entries.count - 1 {
+        if Model.EntryName(manager, index) == name { return true }
+    }
+    return false
+}
+
+Submit :: (host: *App.Host, prompt: Model.PromptKind, value: string) {
+    App.OpenPrompt(host, prompt)
+    HostTests.LocationField(host, value)
+    App.FinishPrompt(host)
+}
+
+PromptSync :: (root: string) -> bool {
+    folder: Text = Files.JoinPath(root, "prompt-sync")
+    raw_bytes := u8.[115, 101, 108, 101, 99, 116, 255, 10]
+    raw := TextView(raw_bytes[:])
+    if !Files.CreateDirectories(folder) || !Files.ReplaceFile(Files.JoinPath(folder, raw), "raw-owned") ||
+        !Files.ReplaceFile(Files.JoinPath(folder, "rename-me"), "rename-owned") { return Fail(60) }
+    host: App.Host
+    if !App.Prepare(*host, folder) || !App.EnableSplit(*host) { return Fail(61) }
+    defer { App.Close(*host) }
+    right := App.PaneManager(*host, 1)
+    if !Select(right, raw) { return Fail(62) }
+    right.scroll = 31; right.reveal_focus = false
+    Submit(*host, .PromptFile, "created")
+    if host.manager.error != "" || !HasEntry(right, "created") ||
+        Model.EntryName(right, right.cursor) != raw || Model.SelectedCount(right) != 1 || right.scroll != 31 { return Fail(63) }
+    Submit(*host, .PromptFolder, "folder")
+    if host.manager.error != "" || !HasEntry(right, "folder") ||
+        Model.EntryName(right, right.cursor) != raw || Model.SelectedCount(right) != 1 || right.scroll != 31 { return Fail(64) }
+    if !Select(*host.manager, "rename-me") { return Fail(65) }
+    Submit(*host, .PromptRename, "renamed")
+    if host.manager.error != "" || !HasEntry(right, "renamed") || HasEntry(right, "rename-me") ||
+        Model.EntryName(right, right.cursor) != raw || Model.SelectedCount(right) != 1 || right.scroll != 31 { return Fail(66) }
+    count := right.entries.count
+    Submit(*host, .PromptFile, "created")
+    if host.manager.error == "" || right.entries.count != count ||
+        Model.EntryName(right, right.cursor) != raw || right.scroll != 31 { return Fail(67) }
+    peer: Text = Files.JoinPath(root, "failed-peer-refresh")
+    if !Files.CreateDirectories(peer) || !Files.ReplaceFile(Files.JoinPath(peer, "cached"), "owned") ||
+        !Model.OpenPath(right, peer) || !Select(right, "cached") || !Files.RemoveTree(peer) { return Fail(68) }
+    Submit(*host, .PromptFile, "succeeded")
+    if host.manager.error != "" || !Files.PathExists(Files.JoinPath(folder, "succeeded")) ||
+        right.cwd != TextView(peer) || right.error == "" || Model.EntryName(right, right.cursor) != "cached" { return Fail(69) }
+    Model.SetError(right, "")
+    Submit(*host, .PromptSearch, "created")
+    if right.error != "" || right.cwd != TextView(peer) || right.entries.count != 1 { return Fail(70) }
+    return true
+}
+
+StaleRequests :: (root: string) -> bool {
+    a: Text = Files.JoinPath(root, "stale-A")
+    b: Text = Files.JoinPath(root, "stale-B")
+    if !Files.CreateDirectories(a) || !Files.CreateDirectories(b) ||
+        !Files.ReplaceFile(Files.JoinPath(a, "original"), "original") ||
+        !Files.ReplaceFile(Files.JoinPath(a, "unrelated"), "unrelated") { return Fail(80) }
+    host: App.Host
+    if !App.Prepare(*host, a) || !App.EnableSplit(*host) { return Fail(81) }
+    defer { App.Close(*host) }
+    App.OpenPrompt(*host, .PromptFile)
+    HostTests.LocationField(*host, "stale-file")
+    if !Model.NewTab(*host.manager, b) { return Fail(82) }
+    App.FinishPrompt(*host)
+    if host.manager.prompt != .PromptNone || host.manager.error == "" ||
+        Files.PathExists(Files.JoinPath(a, "stale-file")) || Files.PathExists(Files.JoinPath(b, "stale-file")) { return Fail(83) }
+    if !Model.SwitchTab(*host.manager, 0) { return Fail(84) }
+    App.OpenPrompt(*host, .PromptFolder)
+    HostTests.LocationField(*host, "stale-folder")
+    if !Model.OpenPath(*host.manager, b) { return Fail(85) }
+    App.FinishPrompt(*host)
+    if host.manager.prompt != .PromptNone || host.manager.error == "" ||
+        Files.PathExists(Files.JoinPath(b, "stale-folder")) { return Fail(86) }
+    if !Model.OpenPath(*host.manager, a) || !Select(*host.manager, "original") { return Fail(87) }
+    App.OpenPrompt(*host, .PromptRename)
+    HostTests.LocationField(*host, "wrong-target")
+    if !Select(*host.manager, "unrelated") { return Fail(88) }
+    App.FinishPrompt(*host)
+    if host.manager.error == "" || Files.PathExists(Files.JoinPath(a, "wrong-target")) ||
+        !Files.PathExists(Files.JoinPath(a, "original")) || !Files.PathExists(Files.JoinPath(a, "unrelated")) { return Fail(89) }
+    return true
+}
+
+PaneTabNode :: (session: Sessions.Session, key: u64, pane: s32) -> s32 {
+    at: s32 = 0
+    while at < Tree.TreeCount(session) {
+        node := Tree.TreeNodeAt(session, at)
+        if node.key == key && node.semantic_kind == .SemanticTab {
+            parent := node.parent
+            while parent >= 0 {
+                ancestor := Tree.TreeNodeAt(session, parent)
+                if ancestor.key == cast(u64)(550 + pane) { return at }
+                parent = ancestor.parent
+            }
+        }
+        at += 1
+    }
+    return -1
+}
+
+WheelFrame :: (host: *App.Host, session: Sessions.Session, wheel: float32) -> bool {
+    frame_seconds += 0.017
+    unused Input.PointerWheelTake(session, Geometry.Rectangle.{0.0, 0.0, 2000.0, 2000.0})
+    unused Input.PointerWheelSend(session, 480.0, 400.0, wheel)
+    Scrolls.BeginScrollFrame(session, .{480.0, 400.0}, false, false, false, wheel, frame_seconds)
+    Pixmap.PixmapBegin(cast(u32)0xffffffff)
+    viewport := Geometry.Rectangle.{240.0, 120.0, 960.0, 600.0}
+    if cast(s32)Frames.BeginFrame(session, cast(u64)1, viewport) != 0 { return false }
+    if App.Draw(host, App.HostSession.{session.slot, session.epoch},
+        App.HostViewport.{viewport.x, viewport.y, viewport.width, viewport.height}) != 0 { return false }
+    return cast(s32)Frames.EndFrame(session) == 0
+}
+
+FooterBounds :: (session: Sessions.Session, key: u64) -> Geometry.Rectangle {
+    for index: cast(s32)0..Tree.TreeCount(session) - 1 {
+        node := Tree.TreeNodeAt(session, index)
+        if node.key == key { return node.bounds }
+    }
+    return .{}
+}
+
+SmallFooter :: (host: *App.Host, session: Sessions.Session) -> bool {
+    viewport := Geometry.Rectangle.{240.0, 120.0, 440.0, 600.0}
+    manager := App.ActiveManager(host)
+    Model.SetError(manager, "")
+    if !HostTests.RenderAt(host, session, true, viewport) ||
+        FooterBounds(session, 66).width != 0.0 { return Fail(90) }
+    Model.SetError(manager, "Cannot refresh retained split pane; current pane retained")
+    if !HostTests.RenderAt(host, session, true, viewport) { return Fail(91) }
+    error := FooterBounds(session, 21)
+    controls := FooterBounds(session, 240)
+    panes := FooterBounds(session, 548)
+    if error.width < 250.0 || error.height < 32.0 || error.y + error.height > controls.y ||
+        panes.y + panes.height > error.y { return Fail(92) }
+    Model.SetError(manager, "")
+    unused Input.KeyboardModifiersSend(session, Keys.KeyModifierControl)
+    unused Input.KeyboardSend(session, 76)
+    if !HostTests.RenderAt(host, session, true, viewport) || manager.prompt != .PromptLocation { return Fail(93) }
+    help := FooterBounds(session, 225)
+    if help.height < 32.0 || help.y + help.height > viewport.y + viewport.height { return Fail(94) }
+    unused Input.KeyboardModifiersSend(session, 0)
+    unused Input.KeyboardSend(session, Keys.KeyEscape)
+    if !HostTests.RenderAt(host, session, true, viewport) || manager.prompt != .PromptNone { return Fail(95) }
+    print("Split 440px footer: complete help/error above viewport edge and controls; no partial label\n")
+    return true
+}
+
+Native :: (root: string) -> bool {
+    for file_index: cast(s32)0..119 {
+        digits: [16]u8
+        name: Text = TextCopy(Number.FormatInteger(file_index, digits[:]))
+        if !Files.ReplaceFile(Files.JoinPath(root, TextView(name)), "owned") { return Fail(29) }
+    }
+    host: App.Host
+    if !App.Prepare(*host, root) { return Fail(30) }
+    host.manager.view_mode = .ViewList
+    defer { App.Close(*host) }
+    session := Sessions.SessionOpen()
+    if !Sessions.SessionValid(session) { return Fail(31) }
+    defer { unused Frames.CloseSession(session) }
+    if !HostTests.Render(*host, session, true) || !HostTests.Press(*host, session, Keys.KeyF3) ||
+        !host.split || host.active_pane != 0 { return Fail(32) }
+    right := App.PaneManager(*host, 1)
+    for tab_index: cast(s32)1..16 { if !Model.NewTab(right) || !Model.NewTab(*host.manager) { return Fail(33) } }
+    if !HostTests.Render(*host, session, true) { return Fail(34) }
+    // Native hit on the actual retained right tab, not synthetic focus flags.
+    tab_node := PaneTabNode(session, Model.TabKey(right, right.active_tab), 1)
+    if tab_node < 0 { return Fail(341) }
+    tab_bounds := Tree.TreeNodeAt(session, tab_node).bounds
+    if !HostTests.Click(*host, session, tab_bounds.x + 20.0, tab_bounds.y + 16.0) || host.active_pane != 1 { return Fail(35) }
+    if !HostTests.Press(*host, session, Keys.KeyHome) || right.active_tab != 0 ||
+        !HostTests.Press(*host, session, Keys.KeyEnd) || right.active_tab != 16 || host.manager.active_tab != 16 { return Fail(42) }
+    if !HostTests.Press(*host, session, 84, Keys.KeyModifierControl) || right.tabs.count != 18 ||
+        host.manager.tabs.count != 17 { return Fail(43) }
+    // Wheel routing is independent of keyboard/active ownership for each of
+    // TableView, icon and compact grids, with identical raw row and tab keys.
+    for mode: cast(s32)0..2 {
+        Model.SetView(*host.manager, cast(Model.ViewMode)mode)
+        Model.SetView(right, cast(Model.ViewMode)mode)
+        if !WheelFrame(*host, session, 0.0) { return Fail(44) }
+        before_right := right.scroll
+        if !WheelFrame(*host, session, -6.0) || host.manager.scroll <= 0 ||
+            right.scroll != before_right || host.active_pane != 1 {
+            print("split wheel mode %: left % right %/% active %\n", mode, host.manager.scroll, right.scroll, before_right, host.active_pane)
+            return Fail(45)
+        }
+    }
+    if !HostTests.Press(*host, session, 76, Keys.KeyModifierControl) || right.prompt != .PromptLocation ||
+        App.ActivatePane(*host, 0) || App.ToggleSplit(*host) ||
+        !HostTests.Press(*host, session, Keys.KeyTab) || right.prompt != .PromptLocation ||
+        !HostTests.Press(*host, session, Keys.KeyEscape) { return Fail(36) }
+    if !Select(right, "0") || !HostTests.Press(*host, session, 80, Keys.KeyModifierControl) { return Fail(461) }
+    if !host.preview.opened || App.ActivatePane(*host, 0) || App.ToggleSplit(*host) ||
+        !HostTests.Press(*host, session, Keys.KeyF3) || !host.split || host.active_pane != 1 ||
+        !HostTests.Press(*host, session, Keys.KeyEscape) || host.preview.opened { return Fail(46) }
+    // Public embedding may switch tabs while the preview owns input. A stale
+    // Enter must close that preview, never activate an entry on its new tab.
+    if !HostTests.Press(*host, session, 80, Keys.KeyModifierControl) || !host.preview.opened ||
+        !Model.NewTab(right) || !HostTests.Press(*host, session, Keys.KeyEnter) ||
+        host.preview.opened || right.error == "" || !Model.CloseTab(right, right.active_tab) { return Fail(47) }
+    // Native divider drag, with release beyond the edge clamped by canonical PanedView.
+    before := host.divider
+    x := 406.0 + cast(float32)before
+    unused Input.TreePointerUpdate(session, Input.PointerFrame.{x, 450.0, true, true, false})
+    if !HostTests.Render(*host, session, true) { return Fail(37) }
+    unused Input.TreePointerUpdate(session, Input.PointerFrame.{x + 120.0, 450.0, true, false, false})
+    if !HostTests.Render(*host, session, true) || host.divider <= before { return Fail(38) }
+    unused Input.TreePointerUpdate(session, Input.PointerFrame.{2000.0, 450.0, false, false, true})
+    if !HostTests.Render(*host, session, true) || host.divider > 686 { return Fail(39) }
+    unused Input.KeyboardModifiersSend(session, Keys.KeyModifierControl)
+    unused Input.KeyboardSend(session, 84)
+    count := right.tabs.count
+    if !HostTests.Render(*host, session, false) || right.tabs.count != count || Input.KeyboardTake(session) != 84 { return Fail(40) }
+    unused Input.KeyboardModifiersSend(session, 0)
+    if !HostTests.Press(*host, session, Keys.KeyF3) || host.split || host.active_pane != 1 ||
+        !HostTests.Press(*host, session, Keys.KeyF3) || !host.split || host.active_pane != 1 { return Fail(41) }
+    return SmallFooter(*host, session)
+}
+
+Rejected :: (root: string, mode: string) -> bool {
+    host: App.Host
+    if !App.Prepare(*host, root) || !Select(*host.manager, "selected") { return Fail(50) }
+    defer { App.Close(*host) }
+    host.manager.scroll = 31; host.manager.reveal_focus = false
+    key := Model.TabKey(*host.manager, 0); count := host.manager.entries.count
+    if !Files.ReplaceFile(Files.JoinPath(root, "ready"), "READY") { return Fail(51) }
+    gate: [1]u8
+    if WholeFiles.Read(WholeFiles.FileHandle.{.fd = 0, .valid = true}, gate[:]) != 1 { return Fail(52) }
+    if App.EnableSplit(*host) || host.split || host.secondary.count != 0 || host.active_pane != 0 ||
+        host.manager.cwd != root || host.manager.entries.count != count || host.manager.scroll != 31 ||
+        host.manager.reveal_focus || Model.SelectedCount(*host.manager) != 1 ||
+        Model.TabKey(*host.manager, 0) != key || host.manager.error == "" { return Fail(53) }
+    print("Rejected secondary creation % retained route/identity/selection/scroll and cleaned staging\n", mode)
+    return true
+}
+
+#program_export
+main :: (argc: s32, argv: **u8) -> s32 {
+    if argc == 3 { return ifx Rejected(Bytes.TextFromCString(argv[2]), Bytes.TextFromCString(argv[1])) then 0 else 1 }
+    if argc != 2 { return 64 }
+    root := Bytes.TextFromCString(argv[1])
+    if !Run(root) || !PromptSync(root) || !StaleRequests(root) || !Native(root) { return 1 }
+    print("Split64 per-pane state/shared clipboard/headless/model compatibility/native focus/divider/lifecycle passed\n")
+    return 0
+}

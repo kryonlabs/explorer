@@ -168,25 +168,25 @@ DirectoryTreeHostTest :: (host: *App.Host, session: Sessions.Session, root: stri
     nested: Text = Files.JoinPath(TextView(alpha), "nested")
     hidden: Text = Files.JoinPath(TextView(alpha), ".hidden")
     loop: Text = Files.JoinPath(TextView(alpha), "loop")
-    if host.tree_mode || !Files.CreateDirectories(TextView(nested)) || !Files.CreateDirectory(TextView(hidden)) ||
+    if host.view.tree_mode || !Files.CreateDirectories(TextView(nested)) || !Files.CreateDirectory(TextView(hidden)) ||
         !Model.CreateSymbolicLink(TextView(folder), TextView(loop)) ||
         !Model.OpenPathTracked(*host.manager, TextView(nested)) { return false }
-    if !Press(host, session, 69, Keys.KeyModifierControl) || !host.tree_mode ||
+    if !Press(host, session, 69, Keys.KeyModifierControl) || !host.view.tree_mode ||
         !Render(host, session, true) || !LabelsValid(session) { return false }
-    selected := host.directory_tree.selected
-    a := LocalTree.Find(*host.directory_tree, TextView(alpha))
-    if selected == 0 || a == 0 || TextView(host.directory_tree.nodes[LocalTree.Index(*host.directory_tree, selected)].path) != TextView(nested) { return false }
+    selected := host.view.directory_tree.selected
+    a := LocalTree.Find(*host.view.directory_tree, TextView(alpha))
+    if selected == 0 || a == 0 || TextView(host.view.directory_tree.nodes[LocalTree.Index(*host.view.directory_tree, selected)].path) != TextView(nested) { return false }
     bounds := DirectoryTreeBounds(session, "alpha\\x0Aé")
-    depth := host.directory_tree.nodes[LocalTree.Index(*host.directory_tree, a)].depth
-    marker_x := bounds.x + 8.0 + cast(float32)depth * 18.0 + 6.0 - cast(float32)host.tree_horizontal
+    depth := host.view.directory_tree.nodes[LocalTree.Index(*host.view.directory_tree, a)].depth
+    marker_x := bounds.x + 8.0 + cast(float32)depth * 18.0 + 6.0 - cast(float32)host.view.tree_horizontal
     if bounds.width <= 0.0 || bounds.x != 248.0 || bounds.x + bounds.width > 398.0 ||
         !Click(host, session, marker_x, bounds.y + 10.0) ||
-        host.directory_tree.nodes[LocalTree.Index(*host.directory_tree, a)].expanded ||
+        host.view.directory_tree.nodes[LocalTree.Index(*host.view.directory_tree, a)].expanded ||
         host.manager.cwd != TextView(nested) || !Render(host, session, true) { return false }
     bounds = DirectoryTreeBounds(session, "alpha\\x0Aé")
     if !Click(host, session, marker_x, bounds.y + 10.0) ||
-        !host.directory_tree.nodes[LocalTree.Index(*host.directory_tree, a)].expanded ||
-        host.directory_tree.selected != selected || !Render(host, session, true) { return false }
+        !host.view.directory_tree.nodes[LocalTree.Index(*host.view.directory_tree, a)].expanded ||
+        host.view.directory_tree.selected != selected || !Render(host, session, true) { return false }
     bounds = DirectoryTreeBounds(session, "alpha\\x0Aé")
     if !Click(host, session, bounds.x + 120.0, bounds.y + 10.0) || host.manager.cwd != TextView(alpha) ||
         !Render(host, session, true) { return false }
@@ -194,14 +194,14 @@ DirectoryTreeHostTest :: (host: *App.Host, session: Sessions.Session, root: stri
     added: Text = Files.JoinPath(TextView(alpha), "refresh-proof.txt")
     if !Files.ReplaceFile(TextView(added), "fresh") ||
         !Click(host, session, bounds.x + 120.0, bounds.y + 10.0) || host.manager.entries.count != count + 1 { return false }
-    loop_id := LocalTree.Find(*host.directory_tree, TextView(loop), a)
-    host.directory_tree.selected = loop_id
-    host.tree_focused = true
-    if !Press(host, session, Keys.KeyRight) || host.directory_tree.error.bytes.count == 0 ||
-        host.manager.cwd != TextView(alpha) || host.directory_tree.nodes[LocalTree.Index(*host.directory_tree, loop_id)].expanded { return false }
-    host.directory_tree.selected = a
-    if !Press(host, session, Keys.KeyLeft) || host.directory_tree.nodes[LocalTree.Index(*host.directory_tree, a)].expanded ||
-        !Press(host, session, Keys.KeyRight) || !host.directory_tree.nodes[LocalTree.Index(*host.directory_tree, a)].expanded { return false }
+    loop_id := LocalTree.Find(*host.view.directory_tree, TextView(loop), a)
+    host.view.directory_tree.selected = loop_id
+    host.view.tree_focused = true
+    if !Press(host, session, Keys.KeyRight) || host.view.directory_tree.error.bytes.count == 0 ||
+        host.manager.cwd != TextView(alpha) || host.view.directory_tree.nodes[LocalTree.Index(*host.view.directory_tree, loop_id)].expanded { return false }
+    host.view.directory_tree.selected = a
+    if !Press(host, session, Keys.KeyLeft) || host.view.directory_tree.nodes[LocalTree.Index(*host.view.directory_tree, a)].expanded ||
+        !Press(host, session, Keys.KeyRight) || !host.view.directory_tree.nodes[LocalTree.Index(*host.view.directory_tree, a)].expanded { return false }
     host.manager.show_hidden = false
     if !Render(host, session, true) || DirectoryTreeBounds(session, ".hidden").width > 0.0 { return false }
     host.manager.show_hidden = true
@@ -209,14 +209,14 @@ DirectoryTreeHostTest :: (host: *App.Host, session: Sessions.Session, root: stri
     host.manager.show_hidden = false
     unused Input.KeyboardModifiersSend(session, Keys.KeyModifierControl)
     unused Input.KeyboardSend(session, 66)
-    if !Render(host, session, false) || !host.tree_mode || !Render(host, session, true) || host.tree_mode { return false }
-    if !Press(host, session, 69, Keys.KeyModifierControl) || !host.tree_mode ||
-        !Press(host, session, 69, Keys.KeyModifierControl) || host.tree_mode { return false }
+    if !Render(host, session, false) || !host.view.tree_mode || !Render(host, session, true) || host.view.tree_mode { return false }
+    if !Press(host, session, 69, Keys.KeyModifierControl) || !host.view.tree_mode ||
+        !Press(host, session, 69, Keys.KeyModifierControl) || host.view.tree_mode { return false }
     return true
 }
 
 DirectoryTreeDeepFailure :: (host: *App.Host, stage: s32) -> bool {
-    print("tree deep stage %: horizontal %/% vertical % selected % error %\n", stage, host.tree_horizontal, host.tree_horizontal_max, host.tree_scroll, host.directory_tree.selected, TextView(host.directory_tree.error))
+    print("tree deep stage %: horizontal %/% vertical % selected % error %\n", stage, host.view.tree_horizontal, host.view.tree_horizontal_max, host.view.tree_scroll, host.view.directory_tree.selected, TextView(host.view.directory_tree.error))
     return false
 }
 
@@ -231,33 +231,33 @@ DirectoryTreeDeepHostTest :: (host: *App.Host, session: Sessions.Session, root: 
     target: Text = Files.JoinPath(TextView(deep), "long Unicode folder é with a long label")
     if !Files.CreateDirectory(TextView(target)) || !Model.OpenPathTracked(*host.manager, TextView(target)) { return DirectoryTreeDeepFailure(host, 3) }
     if !Press(host, session, 69, Keys.KeyModifierControl) { return DirectoryTreeDeepFailure(host, 4) }
-    if !Render(host, session, true) || !Render(host, session, true) || host.tree_horizontal <= 0 ||
-        host.tree_horizontal_max < host.tree_horizontal || !LabelsValid(session) { return DirectoryTreeDeepFailure(host, 5) }
-    selected := host.directory_tree.selected
+    if !Render(host, session, true) || !Render(host, session, true) || host.view.tree_horizontal <= 0 ||
+        host.view.tree_horizontal_max < host.view.tree_horizontal || !LabelsValid(session) { return DirectoryTreeDeepFailure(host, 5) }
+    selected := host.view.directory_tree.selected
     row := DirectoryTreeBounds(session, "long Unicode folder é with a long label")
     if row.width <= 0.0 || row.x < 248.0 || row.x + row.width > 398.0 { return DirectoryTreeDeepFailure(host, 6) }
-    original := host.tree_horizontal
+    original := host.view.tree_horizontal
     // Real app controls change the offset; idle rendering must preserve it.
-    if !Click(host, session, 280.0, 695.0) || host.tree_horizontal >= original { return DirectoryTreeDeepFailure(host, 7) }
-    manual := host.tree_horizontal
-    if !Render(host, session, true) || host.tree_horizontal != manual ||
-        !Click(host, session, 360.0, 695.0) || host.tree_horizontal <= manual { return DirectoryTreeDeepFailure(host, 8) }
-    wheel_before := host.tree_horizontal
-    vertical_before := host.tree_scroll
+    if !Click(host, session, 280.0, 695.0) || host.view.tree_horizontal >= original { return DirectoryTreeDeepFailure(host, 7) }
+    manual := host.view.tree_horizontal
+    if !Render(host, session, true) || host.view.tree_horizontal != manual ||
+        !Click(host, session, 360.0, 695.0) || host.view.tree_horizontal <= manual { return DirectoryTreeDeepFailure(host, 8) }
+    wheel_before := host.view.tree_horizontal
+    vertical_before := host.view.tree_scroll
     unused Input.KeyboardModifiersSend(session, Keys.KeyModifierShift)
     unused Input.PointerWheelSend(session, 280.0, 400.0, 1.0)
-    if !Render(host, session, true) || host.tree_horizontal >= wheel_before || host.tree_scroll != vertical_before { return DirectoryTreeDeepFailure(host, 9) }
+    if !Render(host, session, true) || host.view.tree_horizontal >= wheel_before || host.view.tree_scroll != vertical_before { return DirectoryTreeDeepFailure(host, 9) }
     unused Input.KeyboardModifiersSend(session, 0)
-    manual = host.tree_horizontal
-    if !Render(host, session, true) || host.tree_horizontal != manual { return DirectoryTreeDeepFailure(host, 10) }
-    host.tree_focused = true
-    if !Press(host, session, Keys.KeyRight) || !host.directory_tree.nodes[LocalTree.Index(*host.directory_tree, selected)].loaded ||
-        host.directory_tree.nodes[LocalTree.Index(*host.directory_tree, selected)].child_count != 0 ||
-        !Press(host, session, Keys.KeyLeft) || host.directory_tree.selected == selected ||
-        !Press(host, session, Keys.KeyRight) || host.directory_tree.selected != selected || host.tree_horizontal <= 0 { return DirectoryTreeDeepFailure(host, 11) }
-    if !Model.OpenPathTracked(*host.manager, root) || !Render(host, session, true) || host.tree_horizontal > 32 { return DirectoryTreeDeepFailure(host, 12) }
+    manual = host.view.tree_horizontal
+    if !Render(host, session, true) || host.view.tree_horizontal != manual { return DirectoryTreeDeepFailure(host, 10) }
+    host.view.tree_focused = true
+    if !Press(host, session, Keys.KeyRight) || !host.view.directory_tree.nodes[LocalTree.Index(*host.view.directory_tree, selected)].loaded ||
+        host.view.directory_tree.nodes[LocalTree.Index(*host.view.directory_tree, selected)].child_count != 0 ||
+        !Press(host, session, Keys.KeyLeft) || host.view.directory_tree.selected == selected ||
+        !Press(host, session, Keys.KeyRight) || host.view.directory_tree.selected != selected || host.view.tree_horizontal <= 0 { return DirectoryTreeDeepFailure(host, 11) }
+    if !Model.OpenPathTracked(*host.manager, root) || !Render(host, session, true) || host.view.tree_horizontal > 32 { return DirectoryTreeDeepFailure(host, 12) }
     if !Model.OpenPathTracked(*host.manager, TextView(target)) || !Render(host, session, false) ||
-        !host.tree_reveal || !Render(host, session, true) || host.tree_reveal || host.tree_horizontal <= 0 {
+        !host.view.tree_reveal || !Render(host, session, true) || host.view.tree_reveal || host.view.tree_horizontal <= 0 {
         return DirectoryTreeDeepFailure(host, 13)
     }
     return Press(host, session, 66, Keys.KeyModifierControl)
@@ -418,17 +418,17 @@ ClipboardHostTest :: (host: *App.Host, session: Sessions.Session, root: string) 
         !Files.ReplaceFile(path, "host clipboard") || !Model.OpenPath(*host.manager, source) { return false }
     Model.SelectOne(*host.manager, 0)
     if !Press(host, session, 67, Keys.KeyModifierControl) ||
-        host.manager.clipboard.mode != .ClipboardCopy ||
+        host.file_clipboard.clipboard.mode != .ClipboardCopy ||
         !Model.OpenPath(*host.manager, target) ||
         !Press(host, session, 86, Keys.KeyModifierControl) ||
         !Files.PathExists(Files.JoinPath(target, "clipboard.txt")) || !Files.PathExists(path) { return false }
     if !Model.OpenPath(*host.manager, source) { return false }
     Model.SelectOne(*host.manager, 0)
     if !Press(host, session, 88, Keys.KeyModifierControl) ||
-        host.manager.clipboard.mode != .ClipboardCut ||
+        host.file_clipboard.clipboard.mode != .ClipboardCut ||
         !Model.OpenPath(*host.manager, target) ||
         !Press(host, session, 86, Keys.KeyModifierControl) || Files.PathExists(path) ||
-        host.manager.clipboard.paths.count != 0 { return false }
+        host.file_clipboard.clipboard.paths.count != 0 { return false }
     return true
 }
 
@@ -514,13 +514,13 @@ DetailsTest :: (host: *App.Host, session: Sessions.Session, root: string) -> boo
     // Header dividers resize the same caller-owned widths used next frame.
     unused Input.TreePointerUpdate(session, Input.PointerFrame.{706.0, 270.0, true, true, false})
     unused Input.TreePointerUpdate(session, Input.PointerFrame.{746.0, 270.0, true, false, false})
-    if !Render(host, session, true) || host.column_widths[0] != 340 { return false }
+    if !Render(host, session, true) || host.view.column_widths[0] != 340 { return false }
     unused Input.TreePointerUpdate(session, Input.PointerFrame.{746.0, 270.0, false, false, true})
     if !Render(host, session, true) || !Press(host, session, Keys.KeyHome) ||
         !Press(host, session, Keys.KeyEnter) || host.manager.cwd != folder { return false }
     if !Model.NavigateBack(*host.manager) || !Render(host, session, true) { return false }
     // First click selects; only a second plain click within the bounded window opens.
-    host.last_click_ms = 0
+    host.view.last_click_ms = 0
     if !Click(host, session, 430.0, 306.0) || host.manager.cwd != root ||
         !Click(host, session, 430.0, 306.0) || host.manager.cwd != folder { return false }
     return true
@@ -574,7 +574,7 @@ GridTest :: (host: *App.Host, session: Sessions.Session, root: string,
         if Tree.TreeNodeAt(session, index).kind == cast(s32)Kinds.WidgetKind.WidgetKindImage { images += 1 }
     }
     if images <= 0 || images >= host.manager.entries.count { return GridFailure(host, 6) }
-    host.last_click_ms = 0
+    host.view.last_click_ms = 0
     if !ClickEntry(host, session, 0) || host.manager.cwd != root ||
         !ClickEntry(host, session, 2, Keys.KeyModifierControl) || Model.SelectedCount(*host.manager) != 2 ||
         !ClickEntry(host, session, 3, Keys.KeyModifierShift) || Model.SelectedCount(*host.manager) != 2 ||
@@ -622,7 +622,7 @@ GridTest :: (host: *App.Host, session: Sessions.Session, root: string,
     if !Press(host, session, Keys.KeyHome) || !Press(host, session, Keys.KeyEnter) ||
         host.manager.cwd != Files.JoinPath(root, "00-folder") { return GridFailure(host, 21) }
     if !Model.NavigateBack(*host.manager) || !Press(host, session, Keys.KeyHome) { return GridFailure(host, 22) }
-    host.last_click_ms = 0
+    host.view.last_click_ms = 0
     if !ClickEntry(host, session, 0) || host.manager.cwd != root ||
         !ClickEntry(host, session, 0) || host.manager.cwd != Files.JoinPath(root, "00-folder") { return GridFailure(host, 23) }
     if !Press(host, session, Keys.KeyHome) || !Press(host, session, Keys.KeyEnd) ||
@@ -887,7 +887,7 @@ TabsHostTest :: (root: string) -> bool {
     if !Sessions.SessionValid(session) { return TabHostFailure(3) }
     defer { unused Frames.CloseSession(session) }
     for index: cast(s32)0..15 { if !Model.NewTab(*host.manager) { return TabHostFailure(4) } }
-    if !Render(*host, session, true) || host.tab_scroll <= 0 { return TabHostFailure(5) }
+    if !Render(*host, session, true) || host.view.tab_scroll <= 0 { return TabHostFailure(5) }
     last := Model.TabKey(*host.manager, host.manager.active_tab)
     node := TabNode(session, last)
     if node < 0 { return TabHostFailure(601) }
@@ -1010,15 +1010,15 @@ main :: (argc: s32, argv: **u8) -> s32 {
     if !LocationHostTest(*host, session, root) { return 37 }
     App.Close(*host)
     if host.manager.entry_text.count != 0 || host.manager.cwd_text.bytes.count != 0 ||
-        host.manager.clipboard.text.count != 0 || host.details_cells.count != 0 ||
-        host.details_rows.count != 0 || host.grid_items.count != 0 ||
-        host.last_click_path.bytes.count != 0 || host.preview.opened ||
+        host.file_clipboard.clipboard.text.count != 0 || host.view.details_cells.count != 0 ||
+        host.view.details_rows.count != 0 || host.view.grid_items.count != 0 ||
+        host.view.last_click_path.bytes.count != 0 || host.preview.opened ||
         host.preview.path.bytes.count != 0 || host.preview.body.bytes.count != 0 ||
         host.bookmarks.document.storage.count != 0 || host.bookmarks.document.rows.count != 0 ||
         host.bookmarks.document.text.bytes.count != 0 || host.bookmark_items.count != 0 || host.bookmark_flags.count != 0 ||
-        host.directory_tree.nodes.count != 0 || host.directory_tree.order.count != 0 ||
-        host.tree_items.count != 0 || host.tree_rows.count != 0 || host.tree_attempt.bytes.count != 0 || host.tree_mode ||
-        host.tree_horizontal != 0 || host.tree_horizontal_max != 0 ||
+        host.view.directory_tree.nodes.count != 0 || host.view.directory_tree.order.count != 0 ||
+        host.view.tree_items.count != 0 || host.view.tree_rows.count != 0 || host.view.tree_attempt.bytes.count != 0 || host.view.tree_mode ||
+        host.view.tree_horizontal != 0 || host.view.tree_horizontal_max != 0 ||
         host.location.candidates.count != 0 || host.location.order.count != 0 || host.location.base.bytes.count != 0 ||
         host.ancestors.rows.count != 0 || host.ancestors.path.bytes.count != 0 || host.breadcrumb_items.count != 0 ||
         host.completion_items.count != 0 || host.completion_flags.count != 0 || host.palette_loaded { return 12 }

@@ -6,7 +6,7 @@ SOURCES := $(wildcard src/*.zi) $(wildcard tests/*.zi) ziran.toml ziran.lock scr
 NATIVE_FLAGS := -std=c99 -O2 -ffunction-sections -fdata-sections -Wl,--gc-sections
 HOST_TEST_ENV := python3 tests/private_desktop.py --headless env -u GTK_THEME HOME=$(CURDIR)/build/host-test-fixture XDG_CONFIG_HOME=$(CURDIR)/build/host-test-fixture/config XDG_DATA_HOME=$(CURDIR)/build/host-test-fixture/data-home
 
-.PHONY: test-tabs test-tabs-native build check test test-ui test-installed test-file-clipboard test-filenames test-bookmarks test-bookmarks-native test-tree test-tree-native test-location test-location-native run install clean test-saved
+.PHONY: test-split test-split-native test-tabs test-tabs-native build check test test-ui test-installed test-file-clipboard test-filenames test-bookmarks test-bookmarks-native test-tree test-tree-native test-location test-location-native run install clean test-saved
 
 build:
 	build-queue -- $(ZIRAN) build
@@ -121,3 +121,17 @@ test-tabs-native: build/tabs-test
 
 test-tabs: build test-tabs-native
 	python3 tests/private_desktop.py python3 tests/tabs_test.py
+
+build/split-test: $(SOURCES)
+	build-queue -- $(ZIRAN) build --project --target=c --exe --entry split_test:main -o build/split-test-c tests/split_test.zi
+	cp build/split-test-c/split_test build/split-test
+
+test-split-native: build/split-test
+	python3 tests/private_desktop.py --headless build/split-test $(CURDIR)/build/split-test-fixture
+	build-queue -- $(ZIRAN) ir --project --entry split_test:main -o build/split-test-ir tests/split_test.zi
+	build-queue -- $(ZIRAN) build --project --target=c --exe --entry split_test:main -o build/split-test-saved-c build/split-test-ir/split_test.zir
+	python3 tests/private_desktop.py --headless build/split-test-saved-c/split_test $(CURDIR)/build/split-test-fixture
+	python3 tests/split_failure_test.py build/split-test build/split-test-saved-c/split_test
+
+test-split: build test-split-native
+	python3 tests/private_desktop.py python3 tests/split_test.py

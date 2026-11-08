@@ -598,10 +598,24 @@ Init :: (manager: *Manager, start_path: string = "") {
     manager.sort_mode = .SortName
     path := ifx start_path != "" then start_path else HomePath()
     if !OpenPath(manager, path) { unused OpenPath(manager, "/") }
+    unused FirstTab(manager)
+}
+
+// Exact initialization for a staged pane; unlike Init, it never falls back to /.
+InitChecked :: (manager: *Manager, path: string, hidden: bool = false,
+    sort: SortMode = .SortName, reverse: bool = false, view: ViewMode = .ViewIcon) -> bool {
+    if manager == null || manager.tabs.count != 0 || manager.cwd != "" { return false }
+    manager.show_hidden = hidden; manager.sort_mode = sort
+    manager.sort_reverse = reverse; manager.view_mode = view
+    if !OpenPath(manager, path) { return false }
+    return FirstTab(manager)
+}
+
+FirstTab :: (manager: *Manager) -> bool {
     first_path: Text = TextCopy(manager.cwd)
     if manager.cwd == "" || first_path.bytes.count != manager.cwd.count ||
         !EnsureTabSlot(manager, 0) || !VecReserve(manager.tab_slots, 1) || !VecReserve(manager.tabs, 1) {
-        SetError(manager, "Cannot allocate first tab"); return
+        SetError(manager, "Cannot allocate first tab"); return false
     }
     unused VecPush(manager.tab_slots, 0); unused VecPush(manager.tabs, "")
     VecSwap(manager.tab_text[0].bytes, first_path.bytes)
@@ -609,6 +623,7 @@ Init :: (manager: *Manager, start_path: string = "") {
     manager.tab_states[0].key = cast(u64)10000
     manager.next_tab_key = cast(u64)10001
     manager.active_tab = 0
+    return true
 }
 
 Dispose :: (manager: *Manager) {
@@ -794,6 +809,20 @@ SwitchTab :: (manager: *Manager, index: s32) -> bool {
     return true
 }
 
+// Refresh a pane after external/file-operation changes while restoring selection
+// by raw identity. No live listing is moved until a complete read succeeds.
+ReloadPreserving :: (manager: *Manager) -> bool {
+    if manager.tabs.count == 0 { return false }
+    pending: Manager
+    pending.show_hidden = manager.show_hidden; pending.sort_mode = manager.sort_mode
+    pending.sort_reverse = manager.sort_reverse; pending.view_mode = manager.view_mode
+    if !OpenPath(*pending, manager.cwd) { TabReadError(manager, pending.error, manager.cwd); return false }
+    StoreTab(manager)
+    RestoreTab(*pending, *manager.tab_states[manager.tab_slots[manager.active_tab]])
+    CommitTab(manager, *pending)
+    return true
+}
+
 SyncTabViews :: (manager: *Manager) {
     for target: cast(s64)0..manager.tabs.count - 1 {
         manager.tabs[target] = TextView(manager.tab_text[manager.tab_slots[target]])
@@ -953,17 +982,18 @@ RefreshError :: (manager: *Manager, message: string) -> bool {
     return false
 }
 
-CreateFolder :: (manager: *Manager, name: string) -> bool {
+CreateFolder :: (manager: *Manager, name: string, changed: *bool = null) -> bool {
     if !ValidName(name) { SetError(manager, "Enter a file name without slashes"); return false }
     path: Text = Files.JoinPath(manager.cwd, name)
     if PathPresent(path) || !Files.CreateDirectory(path) {
         SetError(manager, path)
         return false
     }
+    if changed != null { changed[0] = true }
     return Refresh(manager)
 }
 
-CreateFile :: (manager: *Manager, name: string) -> bool {
+CreateFile :: (manager: *Manager, name: string, changed: *bool = null) -> bool {
     if !ValidName(name) { SetError(manager, "Enter a file name without slashes"); return false }
     path: Text = Files.JoinPath(manager.cwd, name)
     file := WholeFiles.OpenNew(path)
@@ -971,11 +1001,13 @@ CreateFile :: (manager: *Manager, name: string) -> bool {
         SetError(manager, path)
         return false
     }
+    if changed != null { changed[0] = true }
     if !WholeFiles.CloseFile(file) { SetError(manager, path); return false }
+    if changed != null { changed[0] = true }
     return Refresh(manager)
 }
 
-RenameSelection :: (manager: *Manager, name: string) -> bool {
+RenameSelection :: (manager: *Manager, name: string, changed: *bool = null) -> bool {
     if !ValidName(name) || SelectedCount(manager) != 1 { return false }
     index := FirstSelected(manager)
     if index < 0 { return false }
@@ -985,6 +1017,7 @@ RenameSelection :: (manager: *Manager, name: string) -> bool {
         SetError(manager, target)
         return false
     }
+    if changed != null { changed[0] = true }
     return Refresh(manager)
 }
 
@@ -1167,14 +1200,18 @@ CopyPath :: (source: string, target: string) -> bool {
 }
 
 Paste :: (manager: *Manager) -> bool {
-    if manager.clipboard.paths.count == 0 { return false }
+    return PasteClipboard(manager, *manager.clipboard)
+}
+
+PasteClipboard :: (manager: *Manager, clipboard: *Clipboard, changed: *u64 = null) -> bool {
+    if clipboard.paths.count == 0 { return false }
     ok := true
     completed: s64 = 0
     failed_path := ""
-    for path: manager.clipboard.paths {
+    for path: clipboard.paths {
         target: Text = UniquePath(manager.cwd, Files.PathName(path))
         moved: bool
-        if manager.clipboard.mode == .ClipboardCut { moved = RenamePath(path, target) }
+        if clipboard.mode == .ClipboardCut { moved = RenamePath(path, target) }
         else { moved = CopyPath(path, target) }
         if !moved {
             failed_path = path
@@ -1182,13 +1219,14 @@ Paste :: (manager: *Manager) -> bool {
             break
         }
         completed += 1
+        if changed != null { changed[0] += cast(u64)1 }
     }
-    if manager.clipboard.mode == .ClipboardCut {
-        for index: completed..manager.clipboard.paths.count - 1 {
-            manager.clipboard.paths[index - completed] = manager.clipboard.paths[index]
+    if clipboard.mode == .ClipboardCut {
+        for index: completed..clipboard.paths.count - 1 {
+            clipboard.paths[index - completed] = clipboard.paths[index]
         }
-        unused VecResize(manager.clipboard.paths, manager.clipboard.paths.count - completed)
-        if manager.clipboard.paths.count == 0 { manager.clipboard.mode = .ClipboardNone }
+        unused VecResize(clipboard.paths, clipboard.paths.count - completed)
+        if clipboard.paths.count == 0 { clipboard.mode = .ClipboardNone }
     }
     if !ok { return RefreshError(manager, failed_path) }
     return Refresh(manager)
