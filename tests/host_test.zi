@@ -20,6 +20,8 @@ using FormatText :: #import "std/format";
 Utf8 :: #import "std/utf8";
 FileDisplay :: #import "file_display";
 using Bookmarks :: #import "bookmarks";
+using LocalTree :: #import "tree_sidebar";
+Semantics :: #import "kryon/semantic";
 
 frame_seconds: float64;
 frame_wheel: float32;
@@ -30,6 +32,117 @@ LabelsValid :: (session: Sessions.Session) -> bool {
         if !Utf8.Valid(Tree.TreeNodeAt(session, index).semantic_label) { return false }
     }
     return true
+}
+
+DirectoryTreeBounds :: (session: Sessions.Session, label: string) -> Geometry.Rectangle {
+    for index: cast(s32)0..Tree.TreeCount(session) - 1 {
+        row := Tree.TreeNodeAt(session, index)
+        if row.semantic_kind == .SemanticTreeItem && row.semantic_label == label { return row.bounds }
+    }
+    return .{}
+}
+
+DirectoryTreeHostTest :: (host: *App.Host, session: Sessions.Session, root: string) -> bool {
+    host.manager.prompt = .PromptNone
+    host.field.focused = false
+    folder: Text = Files.JoinPath(root, "tree-pane")
+    alpha: Text = Files.JoinPath(TextView(folder), "alpha\né")
+    nested: Text = Files.JoinPath(TextView(alpha), "nested")
+    hidden: Text = Files.JoinPath(TextView(alpha), ".hidden")
+    loop: Text = Files.JoinPath(TextView(alpha), "loop")
+    if host.tree_mode || !Files.CreateDirectories(TextView(nested)) || !Files.CreateDirectory(TextView(hidden)) ||
+        !Model.CreateSymbolicLink(TextView(folder), TextView(loop)) ||
+        !Model.OpenPathTracked(*host.manager, TextView(nested)) { return false }
+    if !Press(host, session, 69, Keys.KeyModifierControl) || !host.tree_mode ||
+        !Render(host, session, true) || !LabelsValid(session) { return false }
+    selected := host.directory_tree.selected
+    a := LocalTree.Find(*host.directory_tree, TextView(alpha))
+    if selected == 0 || a == 0 || TextView(host.directory_tree.nodes[LocalTree.Index(*host.directory_tree, selected)].path) != TextView(nested) { return false }
+    bounds := DirectoryTreeBounds(session, "alpha\\x0Aé")
+    depth := host.directory_tree.nodes[LocalTree.Index(*host.directory_tree, a)].depth
+    marker_x := bounds.x + 8.0 + cast(float32)depth * 18.0 + 6.0 - cast(float32)host.tree_horizontal
+    if bounds.width <= 0.0 || bounds.x != 248.0 || bounds.x + bounds.width > 398.0 ||
+        !Click(host, session, marker_x, bounds.y + 10.0) ||
+        host.directory_tree.nodes[LocalTree.Index(*host.directory_tree, a)].expanded ||
+        host.manager.cwd != TextView(nested) || !Render(host, session, true) { return false }
+    bounds = DirectoryTreeBounds(session, "alpha\\x0Aé")
+    if !Click(host, session, marker_x, bounds.y + 10.0) ||
+        !host.directory_tree.nodes[LocalTree.Index(*host.directory_tree, a)].expanded ||
+        host.directory_tree.selected != selected || !Render(host, session, true) { return false }
+    bounds = DirectoryTreeBounds(session, "alpha\\x0Aé")
+    if !Click(host, session, bounds.x + 120.0, bounds.y + 10.0) || host.manager.cwd != TextView(alpha) ||
+        !Render(host, session, true) { return false }
+    count := host.manager.entries.count
+    added: Text = Files.JoinPath(TextView(alpha), "refresh-proof.txt")
+    if !Files.ReplaceFile(TextView(added), "fresh") ||
+        !Click(host, session, bounds.x + 120.0, bounds.y + 10.0) || host.manager.entries.count != count + 1 { return false }
+    loop_id := LocalTree.Find(*host.directory_tree, TextView(loop), a)
+    host.directory_tree.selected = loop_id
+    host.tree_focused = true
+    if !Press(host, session, Keys.KeyRight) || host.directory_tree.error.bytes.count == 0 ||
+        host.manager.cwd != TextView(alpha) || host.directory_tree.nodes[LocalTree.Index(*host.directory_tree, loop_id)].expanded { return false }
+    host.directory_tree.selected = a
+    if !Press(host, session, Keys.KeyLeft) || host.directory_tree.nodes[LocalTree.Index(*host.directory_tree, a)].expanded ||
+        !Press(host, session, Keys.KeyRight) || !host.directory_tree.nodes[LocalTree.Index(*host.directory_tree, a)].expanded { return false }
+    host.manager.show_hidden = false
+    if !Render(host, session, true) || DirectoryTreeBounds(session, ".hidden").width > 0.0 { return false }
+    host.manager.show_hidden = true
+    if !Render(host, session, true) || DirectoryTreeBounds(session, ".hidden").width <= 0.0 { return false }
+    host.manager.show_hidden = false
+    unused Input.KeyboardModifiersSend(session, Keys.KeyModifierControl)
+    unused Input.KeyboardSend(session, 66)
+    if !Render(host, session, false) || !host.tree_mode || !Render(host, session, true) || host.tree_mode { return false }
+    if !Press(host, session, 69, Keys.KeyModifierControl) || !host.tree_mode ||
+        !Press(host, session, 69, Keys.KeyModifierControl) || host.tree_mode { return false }
+    return true
+}
+
+DirectoryTreeDeepFailure :: (host: *App.Host, stage: s32) -> bool {
+    print("tree deep stage %: horizontal %/% vertical % selected % error %\n", stage, host.tree_horizontal, host.tree_horizontal_max, host.tree_scroll, host.directory_tree.selected, TextView(host.directory_tree.error))
+    return false
+}
+
+DirectoryTreeDeepHostTest :: (host: *App.Host, session: Sessions.Session, root: string) -> bool {
+    deep: Text = Files.JoinPath(root, "tree-deep")
+    if !Files.CreateDirectory(TextView(deep)) { return DirectoryTreeDeepFailure(host, 1) }
+    for depth: cast(s32)0..11 {
+        next: Text = Files.JoinPath(TextView(deep), "d")
+        VecSwap(deep.bytes, next.bytes)
+        if !Files.CreateDirectory(TextView(deep)) { return DirectoryTreeDeepFailure(host, 2) }
+    }
+    target: Text = Files.JoinPath(TextView(deep), "long Unicode folder é with a long label")
+    if !Files.CreateDirectory(TextView(target)) || !Model.OpenPathTracked(*host.manager, TextView(target)) { return DirectoryTreeDeepFailure(host, 3) }
+    if !Press(host, session, 69, Keys.KeyModifierControl) { return DirectoryTreeDeepFailure(host, 4) }
+    if !Render(host, session, true) || !Render(host, session, true) || host.tree_horizontal <= 0 ||
+        host.tree_horizontal_max < host.tree_horizontal || !LabelsValid(session) { return DirectoryTreeDeepFailure(host, 5) }
+    selected := host.directory_tree.selected
+    row := DirectoryTreeBounds(session, "long Unicode folder é with a long label")
+    if row.width <= 0.0 || row.x < 248.0 || row.x + row.width > 398.0 { return DirectoryTreeDeepFailure(host, 6) }
+    original := host.tree_horizontal
+    // Real app controls change the offset; idle rendering must preserve it.
+    if !Click(host, session, 280.0, 695.0) || host.tree_horizontal >= original { return DirectoryTreeDeepFailure(host, 7) }
+    manual := host.tree_horizontal
+    if !Render(host, session, true) || host.tree_horizontal != manual ||
+        !Click(host, session, 360.0, 695.0) || host.tree_horizontal <= manual { return DirectoryTreeDeepFailure(host, 8) }
+    wheel_before := host.tree_horizontal
+    vertical_before := host.tree_scroll
+    unused Input.KeyboardModifiersSend(session, Keys.KeyModifierShift)
+    unused Input.PointerWheelSend(session, 280.0, 400.0, 1.0)
+    if !Render(host, session, true) || host.tree_horizontal >= wheel_before || host.tree_scroll != vertical_before { return DirectoryTreeDeepFailure(host, 9) }
+    unused Input.KeyboardModifiersSend(session, 0)
+    manual = host.tree_horizontal
+    if !Render(host, session, true) || host.tree_horizontal != manual { return DirectoryTreeDeepFailure(host, 10) }
+    host.tree_focused = true
+    if !Press(host, session, Keys.KeyRight) || !host.directory_tree.nodes[LocalTree.Index(*host.directory_tree, selected)].loaded ||
+        host.directory_tree.nodes[LocalTree.Index(*host.directory_tree, selected)].child_count != 0 ||
+        !Press(host, session, Keys.KeyLeft) || host.directory_tree.selected == selected ||
+        !Press(host, session, Keys.KeyRight) || host.directory_tree.selected != selected || host.tree_horizontal <= 0 { return DirectoryTreeDeepFailure(host, 11) }
+    if !Model.OpenPathTracked(*host.manager, root) || !Render(host, session, true) || host.tree_horizontal > 32 { return DirectoryTreeDeepFailure(host, 12) }
+    if !Model.OpenPathTracked(*host.manager, TextView(target)) || !Render(host, session, false) ||
+        !host.tree_reveal || !Render(host, session, true) || host.tree_reveal || host.tree_horizontal <= 0 {
+        return DirectoryTreeDeepFailure(host, 13)
+    }
+    return Press(host, session, 66, Keys.KeyModifierControl)
 }
 
 BookmarkHostTest :: (host: *App.Host, session: Sessions.Session, root: string) -> bool {
@@ -710,6 +823,8 @@ main :: (argc: s32, argv: **u8) -> s32 {
     if !ClipboardHostTest(*host, session, root) { print("headless file clipboard shortcuts failed\n"); return 32 }
     if !RawFilenameHostTest(*host, session, root) { print("raw filename host labels/prompts/identity failed\n"); return 33 }
     if !BookmarkHostTest(*host, session, root) { print("bookmark host activation/snapshot/refresh failed\n"); return 34 }
+    if !DirectoryTreeHostTest(*host, session, root) { print("tree host toggle/reveal/disclosure/repeat/hidden/cycle/focus failed\n"); return 35 }
+    if !DirectoryTreeDeepHostTest(*host, session, root) { print("tree deep programmatic/keyboard reveal/manual horizontal control failed\n"); return 36 }
     App.Close(*host)
     if host.manager.entry_text.count != 0 || host.manager.cwd_text.bytes.count != 0 ||
         host.manager.clipboard.text.count != 0 || host.details_cells.count != 0 ||
@@ -718,6 +833,9 @@ main :: (argc: s32, argv: **u8) -> s32 {
         host.preview.path.bytes.count != 0 || host.preview.body.bytes.count != 0 ||
         host.bookmarks.document.storage.count != 0 || host.bookmarks.document.rows.count != 0 ||
         host.bookmarks.document.text.bytes.count != 0 || host.bookmark_items.count != 0 || host.bookmark_flags.count != 0 ||
+        host.directory_tree.nodes.count != 0 || host.directory_tree.order.count != 0 ||
+        host.tree_items.count != 0 || host.tree_rows.count != 0 || host.tree_attempt.bytes.count != 0 || host.tree_mode ||
+        host.tree_horizontal != 0 || host.tree_horizontal_max != 0 ||
         host.palette_loaded { return 12 }
     if host.started || !App.Prepare(*host, root) || host.manager.tabs.count != 1 ||
         host.manager.prompt != .PromptNone || host.field.length != 0 { return 8 }

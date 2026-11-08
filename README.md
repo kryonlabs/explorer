@@ -60,6 +60,30 @@ more than 4096 local rows, or captions above 1024 bytes report a load/save error
 instead of being truncated. Embedded NUL also rejects the whole file because
 GTK would stop reading there. Remote navigation and device shortcuts remain pending.
 
+Places remains the default side pane. Tree opens the local Home/File System
+tree; Ctrl+E switches between Tree and Places, and Ctrl+B returns to Places
+([Thunar bindings](https://raw.githubusercontent.com/xfce-mirror/thunar/master/thunar/thunar-window.c)).
+Expand markers load one directory at a time. Folder labels open that folder,
+including repeated clicks on the selected folder. Navigation reveals cwd's
+ancestors. With Tree focused, arrows select/expand/collapse and Enter opens the
+selected folder; Ctrl+1/2/3 returns keyboard navigation to the file view.
+Deep selected folders reveal their marker and label automatically. When content
+overflows, Left/Right buttons at the pane's bottom and Shift+wheel scroll
+horizontally; manual scrolling persists until a navigation or reveal request.
+Hidden applies to the tree too; a hidden cwd ancestor stays
+visible. Refresh branch reloads the selected directory. Matching raw paths and
+filesystem identities retain their expansion, selection and cached descendants.
+Removed or replaced identities discard their old caches. Raw Unix names use
+the same safe captions as the file views.
+
+Reads are staged and checked before replacing a branch. Inaccessible or changing
+directories, disappearing entries, symlink ancestor cycles and resource limits
+report an error while retaining the prior branch. Limits are 4096 cached rows,
+64 levels, 4095 path bytes and 65536 scanned entries per directory. The tree
+does not watch filesystem changes automatically; refresh explicitly. Long labels
+can be explored with horizontal scrolling. Remote locations, devices and
+drag/drop remain pending; switching panes preserves bookmark records.
+
 Copy, Cut and Paste (also Ctrl+C/X/V outside prompts) exchange local file
 selections with desktop file managers on X11/XWayland. Shelf publishes both
 `text/uri-list` and `x-special/gnome-copied-files`; URI-only lists copy, while
@@ -100,6 +124,7 @@ make test-ui    # desktop interaction on a private Xvfb display
 make test-file-clipboard # native Shelf/Thunar interchange on a private desktop
 make test-filenames # raw-byte names, directories and operations on a private desktop
 make test-bookmarks # source/saved persistence and private GTK/sidebar GUI tests
+make test-tree      # source/saved lazy tree, host integration and private GUI
 make install
 make test-installed
 ```

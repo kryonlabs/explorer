@@ -1,0 +1,120 @@
+using Tree :: #import "tree_sidebar";
+using Bytes :: #import "std/byte_text_linux";
+using Vectors :: #import "std/vec";
+Number :: #import "std/number_text";
+Model :: #import "model";
+DateTime :: #import "std/date_time_linux";
+Files :: #import "std/file_tree_linux";
+Utf8 :: #import "std/utf8";
+
+Run :: (root: string) -> bool {
+    unused Files.RemoveTree(root)
+    if !Files.CreateDirectories(root, 448) { return false }
+    alpha: Text = Files.JoinPath(root, "alpha space\né")
+    nested: Text = Files.JoinPath(TextView(alpha), "nested")
+    hidden: Text = Files.JoinPath(root, ".hidden")
+    raw_bytes := u8.[114, 97, 119, 45, 255]
+    raw: Text = Files.JoinPath(root, TextView(raw_bytes[:]))
+    loop: Text = Files.JoinPath(TextView(alpha), "loop")
+    dangling: Text = Files.JoinPath(root, "dangling")
+    if !Files.CreateDirectories(TextView(nested)) || !Files.CreateDirectory(TextView(hidden)) ||
+        !Files.CreateDirectory(TextView(raw)) || !Model.CreateSymbolicLink(root, TextView(loop)) ||
+        !Model.CreateSymbolicLink("missing-target", TextView(dangling)) { return false }
+    state: Tree.State
+    if !Tree.Init(*state, root) || state.nodes.count != 2 || !Tree.Reveal(*state, root) ||
+        state.selected != 2 || !Tree.Expand(*state, 2) || state.nodes.count != 5 { return false }
+    a := Tree.Find(*state, TextView(alpha), 2)
+    r := Tree.Find(*state, TextView(raw), 2)
+    if a == 0 || r == 0 || Tree.Find(*state, TextView(nested)) != 0 { return false }
+    for *node: state.nodes { if !Utf8.Valid(TextView(node.caption)) { return false } }
+    if TextView(state.nodes[Tree.Index(*state, r)].caption) != "raw-\\xFF" { return false }
+    visible: Vec(s32)
+    if !Tree.Visible(*state, *visible) || visible.count != 4 { return false }
+    state.show_hidden = true
+    if !Tree.Visible(*state, *visible) || visible.count != 5 { return false }
+    state.show_hidden = false
+    if !Tree.Reveal(*state, TextView(hidden)) || !Tree.Visible(*state, *visible) || visible.count != 5 ||
+        !Tree.Reveal(*state, TextView(nested)) { return false }
+    selected := state.selected
+    if !Tree.Expand(*state, 2) || Tree.Find(*state, TextView(alpha), 2) != a || state.selected != selected ||
+        !state.nodes[Tree.Index(*state, a)].expanded || !Tree.Toggle(*state, 2) ||
+        !Tree.Toggle(*state, 2) || state.selected != selected || Tree.Find(*state, TextView(nested), a) != selected ||
+        !state.nodes[Tree.Index(*state, a)].expanded { return false }
+    cycle := Tree.Find(*state, TextView(loop), a)
+    before := state.nodes.count
+    if cycle == 0 || Tree.Expand(*state, cycle) || state.error.bytes.count == 0 || state.nodes.count != before { return false }
+    if !Files.SetPathMode(TextView(alpha), 0) { return false }
+    refused := !Tree.Expand(*state, a)
+    unused Files.SetPathMode(TextView(alpha), 448)
+    if !refused || state.nodes.count != before || Tree.Find(*state, TextView(nested), a) == 0 { return false }
+    retired: Text = Files.JoinPath(root, "retired-alpha")
+    if !Model.RenamePath(TextView(alpha), TextView(retired)) || Tree.Expand(*state, a) || state.nodes.count != before ||
+        !Files.CreateDirectory(TextView(alpha)) || !Tree.Expand(*state, 2) ||
+        Tree.Find(*state, TextView(alpha), 2) == a || Tree.Find(*state, TextView(nested), a) != 0 ||
+        Tree.Index(*state, selected) >= 0 || state.error.bytes.count == 0 { return false }
+    if !Files.RemoveTree(TextView(alpha)) || !Files.RemoveTree(TextView(retired)) { return false }
+    if !Tree.Expand(*state, 2) || Tree.Find(*state, TextView(alpha)) != 0 ||
+        Tree.Find(*state, TextView(nested)) != 0 { return false }
+    replacement: Text = Files.JoinPath(root, "reveal-replaced")
+    old_child: Text = Files.JoinPath(TextView(replacement), "old-child")
+    held: Text = Files.JoinPath(root, "reveal-retired")
+    if !Files.CreateDirectories(TextView(old_child)) || !Tree.Reveal(*state, TextView(old_child)) { return false }
+    old_id := Tree.Find(*state, TextView(replacement), 2)
+    old_selected := state.selected
+    if !Model.RenamePath(TextView(replacement), TextView(held)) || !Files.CreateDirectory(TextView(replacement)) ||
+        !Tree.Reveal(*state, TextView(replacement)) || state.selected == old_id ||
+        Tree.Index(*state, old_selected) >= 0 || Tree.Find(*state, TextView(old_child)) != 0 ||
+        !Files.RemoveTree(TextView(replacement)) || !Files.RemoveTree(TextView(held)) || !Tree.Expand(*state, 2) { return false }
+    many: Text = Files.JoinPath(root, "many")
+    if !Files.CreateDirectory(TextView(many)) || !Tree.Expand(*state, 2) { return false }
+    id := Tree.Find(*state, TextView(many), 2)
+    before = state.nodes.count
+    for index: cast(s32)0..Tree.MAX_ROWS {
+        name: [32]u8
+        digits := Number.FormatInteger(cast(s64)index, name[:])
+        path: Text = Files.JoinPath(TextView(many), digits)
+        if !Files.CreateDirectory(TextView(path)) { return false }
+    }
+    if Tree.Expand(*state, id) || state.nodes.count != before || state.error.bytes.count == 0 { return false }
+    // A large reverse-created fanout must retain identities and be cheap to
+    // traverse repeatedly. Ordering work belongs to explicit updates, not Draw.
+    if !Files.RemoveTree(TextView(many)) || !Files.CreateDirectory(TextView(many)) { return false }
+    for index: cast(s32)0..2999 {
+        name: [32]u8
+        path: Text = Files.JoinPath(TextView(many), Number.FormatInteger(cast(s64)(2999 - index), name[:]))
+        if !Files.CreateDirectory(TextView(path)) { return false }
+    }
+    if !Tree.Expand(*state, id) || !Tree.Reveal(*state, TextView(many)) { return false }
+    stable := Tree.Find(*state, TextView(raw), 2)
+    start := DateTime.UnixMilliseconds()
+    for frame: cast(s32)0..239 { if !Tree.Visible(*state, *visible) || visible.count < 3000 { return false } }
+    elapsed := DateTime.UnixMilliseconds() - start
+    if elapsed > 3000 || !Tree.Expand(*state, 2) || Tree.Find(*state, TextView(raw), 2) != stable ||
+        Tree.Find(*state, TextView(many), 2) != id || !state.nodes[Tree.Index(*state, id)].expanded { return false }
+    print("3000-child tree: 240 retained traversals in % ms\n", elapsed)
+    before = state.nodes.count
+    too_long: Vec(u8)
+    if !VecResize(too_long, 4096) { return false }
+    for *byte: too_long { byte.* = #char "/" }
+    nul := u8.[47, 98, 97, 100, 0]
+    if Tree.Reveal(*state, TextView(too_long[:])) || Tree.Reveal(*state, TextView(nul[:])) ||
+        state.nodes.count != before { return false }
+    deep: Text = Files.JoinPath(root, "deep")
+    if !Files.CreateDirectory(TextView(deep)) { return false }
+    for depth: cast(s32)0..Tree.MAX_DEPTH {
+        next: Text = Files.JoinPath(TextView(deep), "d")
+        VecSwap(deep.bytes, next.bytes)
+        if !Files.CreateDirectory(TextView(deep)) { return false }
+    }
+    if !Tree.Expand(*state, 2) || Tree.Reveal(*state, TextView(deep)) || state.error.bytes.count == 0 { return false }
+    Tree.Release(*state)
+    if state.nodes.count != 0 || state.error.bytes.count != 0 || state.cwd.bytes.count != 0 { return false }
+    return true
+}
+main :: (argc: s32, argv: **u8) -> s32 {
+    if argc != 2 { return 64 }
+    root := Bytes.TextFromCString(argv[1])
+    if !Run(root) { print("Shelf tree lazy/reveal/raw/hidden/cycle/transaction/limit test failed\n"); return 1 }
+    print("Shelf tree lazy/reveal/raw/hidden/cycle/transaction/limit tests passed\n")
+    return 0
+}

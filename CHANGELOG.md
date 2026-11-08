@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- Add a lazy local Tree side pane with cwd reveal, stable directory identities,
+  hidden filtering, branch refresh and checked bounded reads that preserve good
+  branches on errors and reject symbolic-link ancestor cycles.
+
 - Add persistent editable local GTK bookmarks in Places, with add, label rename,
   removal, reordering, external refresh and preservation of unsupported records.
 - Display Linux filenames with invalid UTF-8 using reversible byte escapes,

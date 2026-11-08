@@ -1,0 +1,312 @@
+// Shelf's local directory policy. Transport and retained tree UI stay upstream.
+#scope_module
+Files :: #import "std/file_tree_linux";
+Display :: #import "file_display";
+Sort :: #import "std/sort";
+using Bytes :: #import "std/byte_text_linux";
+using Vectors :: #import "std/vec";
+
+#scope_export
+MAX_ROWS :: 4096;
+MAX_DEPTH :: 64;
+MAX_SCAN :: 65536;
+Node :: struct {
+    path: Text
+    caption: Text
+    id: s32
+    parent: s32
+    depth: s32
+    expanded: bool
+    loaded: bool
+    child_count: s32
+    hidden: bool
+    identity: Files.PathInfo
+}
+State :: struct {
+    nodes: Vec(Node)
+    order: Vec(s32)
+    error: Text
+    cwd: Text
+    next_id: s32
+    selected: s32
+    show_hidden: bool
+}
+
+Store :: (owner: *Text, value: string) {
+    next: Text = TextCopy(value)
+    VecSwap(owner.bytes, next.bytes)
+}
+Fail :: (state: *State, message: string) -> bool { Store(*state.error, message); return false }
+Release :: (state: *State) {
+    VecFree(state.nodes); VecFree(state.order); VecFree(state.error.bytes); VecFree(state.cwd.bytes)
+    state.next_id = 0; state.selected = 0; state.show_hidden = false
+}
+Index :: (state: *State, id: s32) -> s32 {
+    for i: cast(s32)0..cast(s32)state.nodes.count - 1 { if state.nodes[i].id == id { return i } }
+    return -1
+}
+Within :: (path: string, parent: string) -> bool {
+    return path == parent || (path.count > parent.count && path[0:parent.count] == parent &&
+        (parent == "/" || path[parent.count] == #char "/"))
+}
+Same :: (left: Files.PathInfo, right: Files.PathInfo) -> bool {
+    return left.identity_valid && right.identity_valid && left.inode == right.inode &&
+        left.device_major == right.device_major && left.device_minor == right.device_minor
+}
+Clone :: (node: *Node) -> Node {
+    result: Node
+    result.path = TextCopy(TextView(node.path)); result.caption = TextCopy(TextView(node.caption))
+    if result.path.bytes.count == node.path.bytes.count && result.caption.bytes.count == node.caption.bytes.count { result.id = node.id }
+    result.parent = node.parent; result.depth = node.depth
+    result.expanded = node.expanded; result.loaded = node.loaded; result.hidden = node.hidden
+    result.child_count = node.child_count
+    result.identity = node.identity
+    return result
+}
+AddRoot :: (state: *State, path: string, caption: string) -> bool {
+    query := Files.PathQuery(path)
+    if !query.valid || query.info.kind != .Directory { return Fail(state, "Tree root is missing or inaccessible.") }
+    node: Node
+    node.path = TextCopy(path); node.caption = TextCopy(caption)
+    if node.path.bytes.count != path.count || node.caption.bytes.count != caption.count {
+        return Fail(state, "Tree root allocation failed.")
+    }
+    node.id = state.next_id; node.identity = query.info
+    if !VecPush(state.nodes, node) { return Fail(state, "Tree memory allocation failed.") }
+    state.next_id += 1
+    return true
+}
+Init :: (state: *State, home: string) -> bool {
+    Release(state); state.next_id = 1
+    if !AddRoot(state, "/", "File System") { return false }
+    if home != "/" && home.count > 0 && home[0] == #char "/" {
+        if !AddRoot(state, home, "Home") { return false }
+    }
+    return Order(state.nodes[:], 0, *state.order, 0)
+}
+Descendant :: (state: *State, index: s32, parent: s32) -> bool {
+    current := state.nodes[index].parent
+    for depth: cast(s32)0..MAX_DEPTH {
+        if current == parent { return true }
+        at := Index(state, current)
+        if at < 0 { return false }
+        current = state.nodes[at].parent
+    }
+    return false
+}
+
+// A refresh replaces only this branch, after every read/query/close succeeds.
+// No recursive enumeration: only an explicitly expanded directory is opened.
+Expand :: (state: *State, id: s32) -> bool {
+    at := Index(state, id)
+    if at < 0 { return Fail(state, "Tree folder is no longer present.") }
+    owned_path: Text = TextCopy(TextView(state.nodes[at].path))
+    if owned_path.bytes.count == 0 { return Fail(state, "Tree path allocation failed; previous branch retained.") }
+    path := TextView(owned_path)
+    before := Files.PathQuery(path)
+    if !before.valid {
+        return Fail(state, ifx before.missing then "Tree folder disappeared; previous branch retained." else
+            "Tree folder metadata is inaccessible; previous branch retained.")
+    }
+    if before.info.kind != .Directory || !before.info.identity_valid {
+        return Fail(state, "Tree folder changed type or has no reliable identity; previous branch retained.")
+    }
+    ancestor := state.nodes[at].parent
+    while ancestor != 0 {
+        index := Index(state, ancestor)
+        if index < 0 { return Fail(state, "Tree ancestor is no longer present.") }
+        check := Files.PathQuery(TextView(state.nodes[index].path))
+        if !check.valid { return Fail(state, "Tree ancestor is inaccessible; previous branch retained.") }
+        if Same(before.info, check.info) { return Fail(state, "Tree symbolic-link ancestor cycle refused.") }
+        ancestor = state.nodes[index].parent
+    }
+    if state.nodes[at].depth >= MAX_DEPTH { return Fail(state, "Tree depth limit (64) reached; previous branch retained.") }
+    pending: Vec(Node)
+    kept: Vec(s32)
+    for i: cast(s32)0..cast(s32)state.nodes.count - 1 {
+        if !Descendant(state, i, id) {
+            copy: Node = Clone(*state.nodes[i])
+            if copy.id == 0 { return Fail(state, "Tree memory allocation failed; previous branch retained.") }
+            if !VecPush(pending, copy) {
+                return Fail(state, "Tree memory allocation failed; previous branch retained.")
+            }
+        }
+    }
+    cursor := Files.OpenDirectory(path)
+    if !cursor.valid { return Fail(state, "Tree folder cannot be opened; previous branch retained.") }
+    open := true
+    defer { if open { unused Files.CloseDirectory(*cursor) } }
+    next := state.next_id
+    scanned: s32 = 0
+    children_count: s32 = 0
+    while true {
+        entry := Files.NextDirectoryEntry(*cursor)
+        if !entry.valid { break }
+        scanned += 1
+        if scanned > MAX_SCAN { return Fail(state, "Tree scan limit (65536 entries) reached; previous branch retained.") }
+        name := TextView(entry.name[:entry.name_count])
+        if name == "." || name == ".." { continue }
+        full: Text = Files.JoinPath(path, name)
+        if full.bytes.count == 0 { return Fail(state, "Tree path allocation failed; previous branch retained.") }
+        if full.bytes.count >= 4096 { return Fail(state, "Tree path exceeds 4095 bytes; previous branch retained.") }
+        query := Files.PathQuery(TextView(full))
+        if !query.valid {
+            // Dangling links are not directories; all other failed metadata
+            // queries make the enumeration incomplete and cannot commit.
+            link := Files.PathQuery(TextView(full), false)
+            if query.missing && link.valid && link.info.kind == .Link { continue }
+            return Fail(state, ifx query.missing then "Tree entry disappeared; previous branch retained." else
+                "Tree entry metadata is inaccessible; previous branch retained.")
+        }
+        if query.info.kind != .Directory { continue }
+        if !query.info.identity_valid { return Fail(state, "Tree entry has no reliable filesystem identity; previous branch retained.") }
+        children_count += 1
+        if pending.count >= MAX_ROWS || next >= 2147483647 {
+            return Fail(state, "Tree row limit (4096) reached; previous branch retained.")
+        }
+        old := Find(state, TextView(full), id)
+        old_index := Index(state, old)
+        node: Node
+        if old_index >= 0 && Same(state.nodes[old_index].identity, query.info) {
+            copy: Node = Clone(*state.nodes[old_index])
+            copy_id := copy.id
+            if copy_id == 0 || !VecPush(kept, copy_id) { return Fail(state, "Tree memory allocation failed; previous branch retained.") }
+            if !VecPush(pending, copy) {
+                return Fail(state, "Tree memory allocation failed; previous branch retained.")
+            }
+            pending[pending.count - 1].identity = query.info
+            continue
+        }
+        node.caption = Display.Caption(name)
+        if node.caption.bytes.count == 0 { return Fail(state, "Tree caption allocation failed; previous branch retained.") }
+        node.path = full; node.id = next; node.parent = id
+        node.depth = state.nodes[at].depth + 1; node.hidden = name[0] == #char "."
+        node.identity = query.info
+        if !VecPush(pending, node) { return Fail(state, "Tree memory allocation failed; previous branch retained.") }
+        next += 1
+    }
+    failed := cursor.failed
+    closed := Files.CloseDirectory(*cursor); open = false
+    after := Files.PathQuery(path)
+    if failed || !closed || !after.valid || !Same(before.info, after.info) ||
+        before.info.modified != after.info.modified || before.info.modified_nanoseconds != after.info.modified_nanoseconds ||
+        before.info.changed != after.info.changed || before.info.changed_nanoseconds != after.info.changed_nanoseconds {
+        return Fail(state, "Tree folder changed or could not be read completely; previous branch retained.")
+    }
+    // Matching direct children keep their IDs and cached subtrees. Refresh
+    // never opens those descendants. Removed/replaced identities lose caches.
+    for i: cast(s32)0..cast(s32)state.nodes.count - 1 {
+        retain := false
+        for child: kept { if Descendant(state, i, child) { retain = true; break } }
+        if retain {
+            copy: Node = Clone(*state.nodes[i])
+            if pending.count >= MAX_ROWS { return Fail(state, "Tree row limit (4096) reached; previous branch retained.") }
+            if copy.id == 0 { return Fail(state, "Tree cache allocation failed; previous branch retained.") }
+            if !VecPush(pending, copy) { return Fail(state, "Tree cache allocation failed; previous branch retained.") }
+        }
+    }
+    for *node: pending {
+        if node.id == id { node.expanded = true; node.loaded = true; node.child_count = children_count; node.identity = after.info }
+    }
+    order: Vec(s32)
+    if !Order(pending[:], 0, *order, 0) { return Fail(state, "Tree ordering allocation failed; previous branch retained.") }
+    VecSwap(state.nodes, pending); VecSwap(state.order, order); state.next_id = next
+    lost := state.selected != 0 && Index(state, state.selected) < 0
+    if lost { state.selected = id }
+    Store(*state.error, ifx lost then "Tree selected folder disappeared or was replaced; selection moved to its refreshed parent." else "")
+    return true
+}
+Toggle :: (state: *State, id: s32) -> bool {
+    at := Index(state, id)
+    if at < 0 { return Fail(state, "Tree folder is no longer present.") }
+    if state.nodes[at].expanded { state.nodes[at].expanded = false; Store(*state.error, ""); return true }
+    return Expand(state, id)
+}
+Find :: (state: *State, path: string, parent: s32 = -1) -> s32 {
+    for *node: state.nodes {
+        if TextView(node.path) == path && (parent < 0 || node.parent == parent) { return node.id }
+    }
+    return 0
+}
+
+// Reveal is bounded by path depth and loads ancestors only, never siblings'
+// children. Prefer Home's shorter presentation for paths inside Home.
+Reveal :: (state: *State, path: string) -> bool {
+    if path.count == 0 || path.count >= 4096 || path[0] != #char "/" {
+        return Fail(state, "Tree supports local absolute paths up to 4095 bytes.")
+    }
+    for byte: path { if byte == cast(u8)0 { return Fail(state, "Tree paths cannot contain NUL.") } }
+    current: s32 = 1
+    for *node: state.nodes { if node.parent == 0 && Within(path, TextView(node.path)) { current = node.id } }
+    for depth: cast(s32)0..MAX_DEPTH {
+        at := Index(state, current)
+        if at < 0 { return Fail(state, "Tree reveal lost its ancestor.") }
+        owned_root: Text = TextCopy(TextView(state.nodes[at].path))
+        if owned_root.bytes.count == 0 { return Fail(state, "Tree reveal allocation failed.") }
+        root := TextView(owned_root)
+        query := Files.PathQuery(root)
+        if !query.valid || query.info.kind != .Directory || !query.info.identity_valid {
+            return Fail(state, ifx query.missing then "Tree reveal folder disappeared; previous branch retained." else
+                "Tree reveal folder is inaccessible or changed type; previous branch retained.")
+        }
+        if !Same(state.nodes[at].identity, query.info) {
+            parent := state.nodes[at].parent
+            if parent == 0 {
+                if !Expand(state, current) { return false }
+            } else {
+                if !Expand(state, parent) { return false }
+                current = Find(state, root, parent)
+                if current == 0 { return Fail(state, "Tree reveal folder disappeared during refresh.") }
+                at = Index(state, current)
+            }
+        }
+        if root == path { state.selected = current; Store(*state.cwd, path); Store(*state.error, ""); return true }
+        start := root.count
+        if root != "/" { start += 1 }
+        if !state.nodes[at].expanded && !Expand(state, current) { return false }
+        end := start
+        while end < path.count && path[end] != #char "/" { end += 1 }
+        child := Find(state, path[0:end], current)
+        // Navigation can reach a newly created directory after its parent was
+        // cached. Refresh that one parent before declaring the child absent.
+        if child == 0 {
+            if !Expand(state, current) { return false }
+            child = Find(state, path[0:end], current)
+        }
+        if child == 0 { return Fail(state, "Tree folder disappeared; refresh its parent to retry.") }
+        current = child
+    }
+    return Fail(state, "Tree reveal depth limit (64) reached.")
+}
+// Ordering is computed only on a committed branch update, using canonical
+// O(n log n) text sorting. Draw traverses the retained preorder once.
+Order :: (nodes: []Node, parent: s32, result: *Vec(s32), depth: s32) -> bool {
+    paths: Vec(string)
+    for *node: nodes { if node.parent == parent && !VecPush(paths, TextView(node.path)) { return false } }
+    if paths.count == 0 { return true }
+    if depth > MAX_DEPTH { return false }
+    Sort.SortText(paths[:])
+    for path: paths {
+        for index: cast(s32)0..cast(s32)nodes.count - 1 {
+            if nodes[index].parent == parent && TextView(nodes[index].path) == path {
+                if !VecPush(result.*, index) { return false }
+                if nodes[index].child_count > 0 && !Order(nodes, nodes[index].id, result, depth + 1) { return false }
+                break
+            }
+        }
+    }
+    return true
+}
+Visible :: (state: *State, result: *Vec(s32)) -> bool {
+    unused VecResize(result.*, 0)
+    blocked: s32 = MAX_DEPTH + 1
+    for index: state.order {
+        node := *state.nodes[index]
+        if node.depth > blocked { continue }
+        blocked = MAX_DEPTH + 1
+        if node.hidden && !state.show_hidden && !Within(TextView(state.cwd), TextView(node.path)) { blocked = node.depth; continue }
+        if !VecPush(result.*, index) { return Fail(state, "Tree visible row allocation failed.") }
+        if !node.expanded { blocked = node.depth }
+    }
+    return true
+}

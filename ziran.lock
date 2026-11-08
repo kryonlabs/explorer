@@ -73,15 +73,6 @@
       "url": "https://aomedia.googlesource.com/aom"
     },
     {
-      "commit": "696d62ea8cc8b2a458a4cf0a407edf912f471313",
-      "dependencies": {"kryon": "p0570034a53198914"},
-      "dependency_refs": {"kryon": "master"},
-      "id": "p7c4be6e4f2889a50",
-      "name": "DataViews",
-      "ref": "696d62ea8cc8b2a458a4cf0a407edf912f471313",
-      "url": "https://github.com/kryonlabs/data-views.git"
-    },
-    {
       "commit": "f84c162594e518cb306bfd0ce41783ad55b6c730",
       "dependencies": {"av1": "p5d7d12505a42f7b3", "dav1d": "pb24767b9eb34d961", "image_codec": "p69c0e968ae5735d9", "libaom": "p74ab3cb6eb3b86fa", "libavif": "p57c0272208aae8db"},
       "dependency_refs": {"av1": "bd278217e2bac754d868b3d6502eac4257658d4b", "dav1d": "54706fc6bc0cdecab7e9593974a4039cc038fca7", "image_codec": "360553150917f352e49e1beb78917370792ccaef", "libaom": "b141d9c45db236335351c8a4b2a14b3ade27c937", "libavif": "1aadfad932c98c069a1204261b1856f81f3bc199"},
@@ -107,6 +98,15 @@
       "ref": "54706fc6bc0cdecab7e9593974a4039cc038fca7",
       "source": true,
       "url": "https://github.com/videolan/dav1d.git"
+    },
+    {
+      "commit": "942fea7809063407e2b4fa9611a2247ab6b3b894",
+      "dependencies": {"kryon": "p0570034a53198914"},
+      "dependency_refs": {"kryon": "master"},
+      "id": "pc4c837bf2ac33dfb",
+      "name": "DataViews",
+      "ref": "942fea7809063407e2b4fa9611a2247ab6b3b894",
+      "url": "https://github.com/kryonlabs/data-views.git"
     },
     {
       "commit": "fafa2cea97d0cb379d832086ba45a989fa6f9c8e",
@@ -137,8 +137,8 @@
     }
   ],
   "root": {
-    "dependencies": {"data_views": "p7c4be6e4f2889a50", "kryon": "p0570034a53198914"},
-    "dependency_refs": {"data_views": "696d62ea8cc8b2a458a4cf0a407edf912f471313", "kryon": "master"},
+    "dependencies": {"data_views": "pc4c837bf2ac33dfb", "kryon": "p0570034a53198914"},
+    "dependency_refs": {"data_views": "942fea7809063407e2b4fa9611a2247ab6b3b894", "kryon": "master"},
     "name": "shelf"
   },
   "toolchain": {

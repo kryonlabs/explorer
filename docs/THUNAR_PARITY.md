@@ -10,7 +10,7 @@ specific so each missing row can become an independent implementation task.
 | List view | Partial | Sortable Name/Size/Type/Modified details with resizable headers and shared multi-selection exist; add inline rename and configurable columns. |
 | Compact view | Partial | Column-major layout, small leading icons, shared selection and horizontal scroll exist; add zoom and persistent layout preferences. |
 | Shortcuts side pane | Partial | Fixed Home, File System and Trash plus persistent local GTK bookmarks with add, label rename, removal, reordering and external refresh exist; add devices and remote shortcuts. |
-| Tree side pane | Missing | Add lazy directory tree, expansion state and current-location sync. |
+| Tree side pane | Partial | Lazy local Home/File System tree, expansion state, cwd ancestor reveal, hidden filtering, explicit branch refresh, safe raw-name captions and horizontal scrolling/reveal exist. Add remote/device trees and automatic filesystem watching. |
 | Location bar and path bar | Partial | Read-only path plus Ctrl+L location prompt; add breadcrumb navigation and completion. |
 | Tabs | Partial | Model and visible new/previous/next/close/numbered controls exist; add labels, drag reorder and overflow. |
 | Split view | Missing | Add synchronized dual-pane state and per-pane tabs/selection. |
@@ -47,6 +47,8 @@ specific so each missing row can become an independent implementation task.
   editors; desktop file clipboard URI validation remains strict.
 - `src/bookmarks.zi` owns GTK local bookmark records and transactional persistence;
   unsupported remote/malformed records remain unchanged during local edits.
+- `src/tree_sidebar.zi` owns bounded lazy local directory state, identity checks
+  and staged branch refresh; canonical DataViews TreeView owns retained tree UI.
 - `src/app.zi` is the standalone Kryon `Frame` entry.
 - `src/app_host.zi` owns widget composition and exports `Host`, `Prepare`,
   `Draw` and `Close` for direct Ziran embedding.

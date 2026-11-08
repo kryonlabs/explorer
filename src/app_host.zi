@@ -16,6 +16,8 @@ Palettes :: #import "kryon/widget_palette";
 FileClipboard :: #import "desktop_file_clipboard";
 FileDisplay :: #import "file_display";
 using Bookmarks :: #import "bookmarks";
+using LocalTree :: #import "tree_sidebar";
+Trees :: #import "data_views/TreeView";
 
 #scope_export
 HostSession :: struct {
@@ -71,6 +73,18 @@ Host :: struct {
     bookmark_selected: s32
     bookmark_scroll: s32
     bookmarks_ms: s64
+    directory_tree: LocalTree.State
+    tree_items: Vec(Trees.TreeItem)
+    tree_rows: Vec(s32)
+    tree_attempt: Text
+    tree_mode: bool
+    tree_initialized: bool
+    tree_focused: bool
+    tree_reveal: bool
+    tree_scroll: s32
+    tree_horizontal: s32
+    tree_horizontal_max: s32
+    tree_press: s32
 }
 
 CopyInto :: (target: []u8, value: string) -> s32 {
@@ -90,6 +104,13 @@ Prepare :: (host: *Host, start_path: string = "") -> bool {
     host.field.scroll_x = 0
     host.field.focused = false
     host.escaped_editor = false
+    host.tree_mode = false
+    host.tree_initialized = false
+    host.tree_focused = false
+    host.tree_scroll = 0
+    host.tree_horizontal = 0
+    host.tree_horizontal_max = 0
+    host.tree_press = 0
     host.column_widths = s32.[300, 110, 140, 190]
     host.last_click_ms = 0
     host.palette_loaded = false
@@ -106,6 +127,11 @@ Close :: (host: *Host) {
     if host == null { return }
     FileClipboard.Close(*host.file_clipboard)
     Bookmarks.Release(*host.bookmarks)
+    LocalTree.Release(*host.directory_tree)
+    VecFree(host.tree_items); VecFree(host.tree_rows); VecFree(host.tree_attempt.bytes)
+    host.tree_mode = false; host.tree_initialized = false; host.tree_focused = false
+    host.tree_reveal = false; host.tree_scroll = 0; host.tree_press = 0
+    host.tree_horizontal = 0; host.tree_horizontal_max = 0
     VecFree(host.bookmark_items)
     VecFree(host.bookmark_flags)
     if host.started { Model.Dispose(*host.manager) }
@@ -237,6 +263,121 @@ Button :: (session: UI.Session, key: s32, label: string, bounds: UI.Rectangle, e
 BookmarkResult :: (host: *Host, ok: bool) {
     if !ok { Model.SetError(*host.manager, TextView(host.bookmarks.error)) }
     else { Model.SetError(*host.manager, "") }
+}
+
+TreeMode :: (host: *Host, enabled: bool) {
+    host.tree_mode = enabled
+    host.tree_focused = enabled
+    // Re-entering Tree explicitly reveals cwd; collapsing an ancestor while
+    // staying in Tree is otherwise respected until the location changes.
+    if enabled { LocalTree.Store(*host.tree_attempt, "") }
+}
+
+TreeResult :: (host: *Host, ok: bool) {
+    if !ok || host.directory_tree.error.bytes.count > 0 {
+        Model.SetError(*host.manager, TextView(host.directory_tree.error))
+    } else { Model.SetError(*host.manager, "") }
+}
+
+SyncTree :: (host: *Host) -> bool {
+    if !host.tree_initialized {
+        if !LocalTree.Init(*host.directory_tree, Model.HomePath()) {
+            TreeResult(host, false); return false
+        }
+        host.tree_initialized = true
+    }
+    host.directory_tree.show_hidden = host.manager.show_hidden
+    if TextView(host.tree_attempt) != host.manager.cwd {
+        LocalTree.Store(*host.tree_attempt, host.manager.cwd)
+        if !LocalTree.Reveal(*host.directory_tree, host.manager.cwd) { TreeResult(host, false) }
+        host.tree_reveal = true
+    }
+    return true
+}
+
+TreeNavigation :: (key: s32) -> Trees.TreeViewNavigation {
+    if key == KeyHome { return .TreeViewNavigationHome }
+    if key == KeyEnd { return .TreeViewNavigationEnd }
+    if key == KeyUp { return .TreeViewNavigationUp }
+    if key == KeyDown { return .TreeViewNavigationDown }
+    if key == KeyLeft { return .TreeViewNavigationLeft }
+    if key == KeyRight { return .TreeViewNavigationRight }
+    return .TreeViewNavigationNone
+}
+
+DirectoryTreeWidget :: (host: *Host, session: UI.Session, sidebar: Rectangle,
+    enabled: bool, key: s32) -> Trees.TreeViewResult {
+    if !LocalTree.Visible(*host.directory_tree, *host.tree_rows) ||
+        !VecResize(host.tree_items, host.tree_rows.count) {
+        Model.SetError(*host.manager, "Tree visible row allocation failed."); return Trees.TreeViewResult.{.node = -1}
+    }
+    for index: cast(s32)0..cast(s32)host.tree_rows.count - 1 {
+        node := *host.directory_tree.nodes[host.tree_rows[index]]
+        host.tree_items[index] = Trees.TreeItem.{.id = node.id, .label = TextView(node.caption),
+            .depth = node.depth, .expanded = node.expanded, .selectable = true,
+            .leaf = node.loaded && node.child_count == 0}
+    }
+    bounds := Rectangle.{sidebar.x, sidebar.y + 68.0, sidebar.width, sidebar.height - 68.0}
+    if host.tree_horizontal_max > 0 { bounds.height -= 32.0 }
+    if bounds.height < 1.0 { return Trees.TreeViewResult.{.node = -1} }
+    props := Trees.TreeViewProps.{.key = cast(u64)212, .bounds = bounds, .row_height = 32,
+        .selected_id = host.directory_tree.selected, .scroll_offset = host.tree_scroll,
+        .horizontal_offset = host.tree_horizontal, .reveal_selected = host.tree_reveal,
+        .focused = enabled && host.tree_focused, .disabled = !enabled}
+    if enabled {
+        delta := cast(s32)(-Input.PointerWheelTake(session, bounds) * 64.0)
+        if (Input.KeyboardModifiers(session) & KeyModifierShift) != 0 { props.horizontal_delta = delta }
+        else { props.scroll_delta = delta }
+    }
+    if props.focused { props.navigation = TreeNavigation(key) }
+    had_horizontal := host.tree_horizontal_max > 0
+    // Disabled embedded draws cannot consume an explicit reveal request.
+    if enabled { host.tree_reveal = false }
+    result := Trees.TreeView(session, props, host.tree_items[:])
+    host.tree_scroll = result.scroll_offset
+    host.tree_horizontal = result.horizontal_offset
+    host.tree_horizontal_max = result.horizontal_max_scroll
+    if had_horizontal != (host.tree_horizontal_max > 0) { host.tree_reveal = true }
+    host.directory_tree.selected = result.selected_id
+    // TreeItem labels borrow cached captions. End that borrow before a toggle
+    // can replace a branch. The retained widget copies its semantic labels.
+    unused VecResize(host.tree_items, 0)
+    return result
+}
+
+DrawDirectoryTree :: (host: *Host, session: UI.Session, sidebar: Rectangle,
+    focused: bool, key: s32) -> bool {
+    if !SyncTree(host) { return false }
+    enabled := focused && host.manager.prompt == .PromptNone
+    if Button(session, 211, "Refresh branch", .{sidebar.x, sidebar.y + 30.0, sidebar.width, 32.0}, enabled) {
+        TreeResult(host, LocalTree.Expand(*host.directory_tree, host.directory_tree.selected))
+        host.tree_reveal = true
+    }
+    if host.tree_horizontal_max > 0 {
+        y := sidebar.y + sidebar.height - 30.0
+        if Button(session, 213, "Left", .{sidebar.x, y, 74.0, 30.0}, enabled && host.tree_horizontal > 0) {
+            host.tree_horizontal -= 64
+            if host.tree_horizontal < 0 { host.tree_horizontal = 0 }
+            host.tree_focused = false
+        }
+        if Button(session, 214, "Right", .{sidebar.x + 78.0, y, 72.0, 30.0}, enabled && host.tree_horizontal < host.tree_horizontal_max) {
+            if host.tree_horizontal < host.tree_horizontal_max - 64 { host.tree_horizontal += 64 }
+            else { host.tree_horizontal = host.tree_horizontal_max }
+            host.tree_focused = false
+        }
+    }
+    tree_focused := enabled && host.tree_focused
+    result := DirectoryTreeWidget(host, session, sidebar, enabled, key)
+    if result.toggled_id > 0 { TreeResult(host, LocalTree.Toggle(*host.directory_tree, result.toggled_id)) }
+    activate := result.activated_id
+    if tree_focused && (key == KeyEnter || key == 32) && activate == 0 && result.toggled_id == 0 {
+        activate = host.directory_tree.selected
+    }
+    if activate > 0 {
+        at := LocalTree.Index(*host.directory_tree, activate)
+        if at >= 0 { unused Model.OpenPathTracked(*host.manager, TextView(host.directory_tree.nodes[at].path)) }
+    }
+    return tree_focused && (TreeNavigation(key) != .TreeViewNavigationNone || key == KeyEnter || key == 32)
 }
 
 DrawBookmarks :: (host: *Host, session: UI.Session, sidebar: Rectangle, focused: bool) {
@@ -765,7 +906,9 @@ Draw :: (host: *Host, host_session: HostSession, host_viewport: HostViewport,
     field_input := Keys.TextFieldInputFor(key, modifiers, typed_text)
 
     if manager.prompt == .PromptNone && (modifiers & KeyModifierControl) != 0 {
-        if key == 76 { OpenPrompt(host, .PromptLocation); key = 0 }
+        if key == 69 { TreeMode(host, !host.tree_mode); key = 0 }
+        else if key == 66 { TreeMode(host, false); key = 0 }
+        else if key == 76 { host.tree_focused = false; OpenPrompt(host, .PromptLocation); key = 0 }
         else if key == 70 { OpenPrompt(host, .PromptSearch); key = 0 }
         else if key == 84 { unused Model.NewTab(manager); key = 0 }
         else if key == KeyTab { Model.NextTab(manager); key = 0 }
@@ -773,9 +916,9 @@ Draw :: (host: *Host, host_session: HostSession, host_viewport: HostViewport,
         else if key == 67 { unused FileClipboard.Copy(*host.file_clipboard, manager, false); key = 0 }
         else if key == 88 { unused FileClipboard.Copy(*host.file_clipboard, manager, true); key = 0 }
         else if key == 86 { unused FileClipboard.Paste(*host.file_clipboard, manager); key = 0 }
-        else if key == 49 { Model.SetView(manager, .ViewIcon); key = 0 }
-        else if key == 50 { Model.SetView(manager, .ViewList); key = 0 }
-        else if key == 51 { Model.SetView(manager, .ViewCompact); key = 0 }
+        else if key == 49 { host.tree_focused = false; Model.SetView(manager, .ViewIcon); key = 0 }
+        else if key == 50 { host.tree_focused = false; Model.SetView(manager, .ViewList); key = 0 }
+        else if key == 51 { host.tree_focused = false; Model.SetView(manager, .ViewCompact); key = 0 }
     }
 
     toolbar := Rectangle.{viewport.x + 8.0, viewport.y + 8.0, viewport.width - 16.0, 40.0}
@@ -850,18 +993,32 @@ Draw :: (host: *Host, host_session: HostSession, host_viewport: HostViewport,
     }
 
     sidebar := Rectangle.{viewport.x + 8.0, viewport.y + 96.0, 150.0, viewport.height - 106.0}
-    Text(session, TextProps.{.key = cast(u64)30, .bounds = .{sidebar.x, sidebar.y, sidebar.width, 24.0},
-        .text = "Places", .font = 16})
-    if Button(session, 31, "Home", Rectangle.{sidebar.x, sidebar.y + 30.0, sidebar.width, 32.0}) {
-        unused Model.OpenPathTracked(manager, Model.HomePath())
+    if focused {
+        press := Input.TreeLastPress(session)
+        if press.serial != host.tree_press {
+            host.tree_press = press.serial
+            host.tree_focused = host.tree_mode && press.x >= sidebar.x && press.x < sidebar.x + sidebar.width &&
+                press.y >= sidebar.y + 68.0 && press.y < sidebar.y + sidebar.height
+        }
     }
-    if Button(session, 32, "File System", Rectangle.{sidebar.x, sidebar.y + 68.0, sidebar.width, 32.0}) {
-        unused Model.OpenPathTracked(manager, "/")
+    side_enabled := focused && manager.prompt == .PromptNone
+    if Button(session, 30, "Places", .{sidebar.x, sidebar.y, 74.0, 26.0}, side_enabled) { TreeMode(host, false) }
+    if Button(session, 210, "Tree", .{sidebar.x + 78.0, sidebar.y, 72.0, 26.0}, side_enabled) { TreeMode(host, !host.tree_mode) }
+    if host.tree_mode {
+        tree_key := ifx modifiers == 0 then key else 0
+        if DrawDirectoryTree(host, session, sidebar, focused, tree_key) { key = 0 }
+    } else {
+        if Button(session, 31, "Home", Rectangle.{sidebar.x, sidebar.y + 30.0, sidebar.width, 32.0}) {
+            unused Model.OpenPathTracked(manager, Model.HomePath())
+        }
+        if Button(session, 32, "File System", Rectangle.{sidebar.x, sidebar.y + 68.0, sidebar.width, 32.0}) {
+            unused Model.OpenPathTracked(manager, "/")
+        }
+        if Button(session, 33, "Trash", Rectangle.{sidebar.x, sidebar.y + 106.0, sidebar.width, 32.0}) {
+            unused Model.OpenPathTracked(manager, Model.TrashDirectory(false))
+        }
+        DrawBookmarks(host, session, sidebar, focused)
     }
-    if Button(session, 33, "Trash", Rectangle.{sidebar.x, sidebar.y + 106.0, sidebar.width, 32.0}) {
-        unused Model.OpenPathTracked(manager, Model.TrashDirectory(false))
-    }
-    DrawBookmarks(host, session, sidebar, focused)
 
     view_x := viewport.x + 166.0
     view_y := viewport.y + 96.0

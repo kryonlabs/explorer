@@ -41,4 +41,4 @@ categories = "Utility;FileManager;Core;"
 
 [dependencies.data_views]
 git = "https://github.com/kryonlabs/data-views.git"
-ref = "696d62ea8cc8b2a458a4cf0a407edf912f471313"
+ref = "942fea7809063407e2b4fa9611a2247ab6b3b894"

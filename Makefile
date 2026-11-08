@@ -6,7 +6,7 @@ SOURCES := $(wildcard src/*.zi) $(wildcard tests/*.zi) ziran.toml ziran.lock scr
 NATIVE_FLAGS := -std=c99 -O2 -ffunction-sections -fdata-sections -Wl,--gc-sections
 HOST_TEST_ENV := python3 tests/private_desktop.py --headless env -u GTK_THEME HOME=$(CURDIR)/build/host-test-fixture XDG_CONFIG_HOME=$(CURDIR)/build/host-test-fixture/config XDG_DATA_HOME=$(CURDIR)/build/host-test-fixture/data-home
 
-.PHONY: build check test test-ui test-installed test-file-clipboard test-filenames test-bookmarks test-bookmarks-native run install clean test-saved
+.PHONY: build check test test-ui test-installed test-file-clipboard test-filenames test-bookmarks test-bookmarks-native test-tree test-tree-native run install clean test-saved
 
 build:
 	build-queue -- $(ZIRAN) build
@@ -79,3 +79,16 @@ test-bookmarks-native: build/bookmarks-test
 
 test-bookmarks: build test-bookmarks-native
 	python3 tests/private_desktop.py python3 tests/bookmarks_test.py
+
+build/tree-sidebar-test: $(SOURCES)
+	build-queue -- $(ZIRAN) build --project --target=c --exe --entry tree_sidebar_test:main -o build/tree-sidebar-test-c tests/tree_sidebar_test.zi
+	cp build/tree-sidebar-test-c/tree_sidebar_test build/tree-sidebar-test
+
+test-tree-native: build/tree-sidebar-test
+	python3 tests/private_desktop.py --headless build/tree-sidebar-test $(CURDIR)/build/tree-test-fixture
+	build-queue -- $(ZIRAN) ir --project --entry tree_sidebar_test:main -o build/tree-sidebar-test-ir tests/tree_sidebar_test.zi
+	build-queue -- $(ZIRAN) build --project --target=c --exe --entry tree_sidebar_test:main -o build/tree-sidebar-test-saved-c build/tree-sidebar-test-ir/tree_sidebar_test.zir
+	python3 tests/private_desktop.py --headless build/tree-sidebar-test-saved-c/tree_sidebar_test $(CURDIR)/build/tree-test-fixture
+
+test-tree: build test-tree-native
+	python3 tests/private_desktop.py python3 tests/tree_sidebar_test.py
