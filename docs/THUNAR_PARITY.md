@@ -9,7 +9,7 @@ specific so each missing row can become an independent implementation task.
 | Icon view | Partial | Row-major icon grid, shared multi-selection, keyboard navigation and vertical scroll exist; add zoom, alignment preferences and rubber-band selection. |
 | List view | Partial | Sortable Name/Size/Type/Modified details with resizable headers and shared multi-selection exist; add inline rename and configurable columns. |
 | Compact view | Partial | Column-major layout, small leading icons, shared selection and horizontal scroll exist; add zoom and persistent layout preferences. |
-| Shortcuts side pane | Partial | Fixed Home, File System and Trash buttons exist; add editable bookmarks and ordering. |
+| Shortcuts side pane | Partial | Fixed Home, File System and Trash plus persistent local GTK bookmarks with add, label rename, removal, reordering and external refresh exist; add devices and remote shortcuts. |
 | Tree side pane | Missing | Add lazy directory tree, expansion state and current-location sync. |
 | Location bar and path bar | Partial | Read-only path plus Ctrl+L location prompt; add breadcrumb navigation and completion. |
 | Tabs | Partial | Model and visible new/previous/next/close/numbered controls exist; add labels, drag reorder and overflow. |
@@ -25,7 +25,7 @@ specific so each missing row can become an independent implementation task.
 | Hidden files | Done | Toggle and filtered directory/search scans work. |
 | Sorting | Partial | Visible Name/size/modified/filesystem-type controls, reversal and deterministic name/path ties preserve selected identities and focus; add per-folder memory and configurable secondary keys. |
 | Zoom | Missing | Add view zoom levels, icon/text scaling and Ctrl+wheel shortcuts. |
-| Bookmarks and places | Partial | Fixed places only; add persistent editable bookmarks and device-aware places. |
+| Bookmarks and places | Partial | Persistent editable local GTK bookmarks preserve unsupported records and use atomic saves; add remote navigation and device-aware places. |
 | Mounting and removable volumes | Missing | Add mount discovery, mount/unmount/eject, open-on-insert and thunar-volman-equivalent behavior. |
 | Remote locations | Missing | Add a GVFS-like location abstraction, credentials, mounts, connectivity and remote operation errors. |
 | Thumbnails and preview | Partial | Common-image grid thumbnails, large image preview with fit/zoom/pan/browse, bounded UTF-8 text preview and file metadata exist; add persistent Tumbler-equivalent cache, document/media providers and animated playback. |
@@ -45,6 +45,8 @@ specific so each missing row can become an independent implementation task.
 - Linux paths and selection keys retain raw filename bytes. `src/file_display.zi`
   supplies valid UTF-8 captions and reversible byte escapes for rename/location
   editors; desktop file clipboard URI validation remains strict.
+- `src/bookmarks.zi` owns GTK local bookmark records and transactional persistence;
+  unsupported remote/malformed records remain unchanged during local edits.
 - `src/app.zi` is the standalone Kryon `Frame` entry.
 - `src/app_host.zi` owns widget composition and exports `Host`, `Prepare`,
   `Draw` and `Close` for direct Ziran embedding.

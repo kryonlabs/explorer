@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Add persistent editable local GTK bookmarks in Places, with add, label rename,
+  removal, reordering, external refresh and preservation of unsupported records.
 - Display Linux filenames with invalid UTF-8 using reversible byte escapes,
   preserving raw paths, selection identity and file operations across views,
   current paths, errors, previews and rename/location editors.

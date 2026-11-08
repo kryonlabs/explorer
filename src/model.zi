@@ -51,6 +51,7 @@ PromptKind :: enum {
     PromptFile :: 3
     PromptLocation :: 4
     PromptSearch :: 5
+    PromptBookmarkRename :: 6
 }
 
 #scope_export

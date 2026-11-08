@@ -8,7 +8,7 @@ links = ["xcb"]
 
 [toolchain]
 git = "https://github.com/ziranlang/ziran.git"
-ref = "c37371586264af9ee3db233d5eaf5d6176d4bdf7"
+ref = "e1e10237f44baa05ea05efd1f2ac281fb13db0fb"
 
 [dependencies.kryon]
 git = "https://github.com/kryonlabs/kryon.git"

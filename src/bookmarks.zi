@@ -1,0 +1,308 @@
+// GTK local shortcut policy. Unknown records remain byte-for-byte intact.
+#scope_module
+Files :: #import "std/file_tree_linux";
+Env :: #import "std/environment_linux";
+Utf8 :: #import "std/utf8";
+Display :: #import "file_display";
+using Bytes :: #import "std/byte_text_linux";
+using Vectors :: #import "std/vec";
+
+#scope_export
+MAX_BYTES :: 1048576;
+MAX_ROWS :: 4096;
+MAX_CAPTION_BYTES :: 1024;
+Span :: struct { start: s64; end: s64; }
+Row :: struct { line: s32; path: string; label: string; caption: string; }
+Document :: struct { text: Text; storage: Vec(Text); spans: Vec(Span); rows: Vec(Row); }
+State :: struct {
+    path: Text
+    legacy: Text
+    source: Text
+    document: Document
+    error: Text
+    loaded: bool
+    missing: bool
+}
+
+Store :: (owner: *Text, value: string) {
+    next: Text = TextCopy(value)
+    VecSwap(owner.bytes, next.bytes)
+}
+Fail :: (state: *State, message: string) -> bool { Store(*state.error, message); return false }
+
+Prefix :: (value: string, prefix: string) -> bool {
+    if value.count < prefix.count { return false }
+    for index: cast(s64)0..prefix.count - 1 {
+        byte := value[index]
+        if byte >= #char "A" && byte <= #char "Z" { byte += cast(u8)32 }
+        if byte != prefix[index] { return false }
+    }
+    return true
+}
+
+// GTK URI filenames are on-disk Unix bytes, unlike desktop clipboard UTF-8 policy.
+Decode :: (uri: string) -> Text {
+    path := ""
+    if Prefix(uri, "file:///") { path = uri[7:] }
+    else if Prefix(uri, "file://localhost/") { path = uri[16:] }
+    else if Prefix(uri, "file:/") && (uri.count < 7 || uri[6] != #char "/") { path = uri[5:] }
+    if path == "" { return .{} }
+    bytes: Vec(u8)
+    at: s64 = 0
+    while at < path.count {
+        byte := path[at]
+        if byte == #char "%" {
+            if at + 2 >= path.count { return .{} }
+            high := Display.Hex(path[at + 1]); low := Display.Hex(path[at + 2])
+            if high < 0 || low < 0 { return .{} }
+            byte = cast(u8)(high * 16 + low); at += 2
+        } else if byte <= cast(u8)32 || byte == #char "?" || byte == #char "#" { return .{} }
+        if byte == cast(u8)0 || !VecPush(bytes, byte) { return .{} }
+        at += 1
+    }
+    if bytes.count == 0 || bytes.count >= 4096 || bytes[0] != #char "/" { return .{} }
+    result: Text
+    result.bytes = bytes
+    return result
+}
+
+Append :: (bytes: *Vec(u8), value: string) -> bool {
+    for byte: value { if !VecPush(bytes.*, byte) { return false } }
+    return true
+}
+Encode :: (path: string) -> Text {
+    if path.count == 0 || path.count >= 4096 || path[0] != #char "/" { return .{} }
+    bytes: Vec(u8)
+    if !Append(*bytes, "file://") { return .{} }
+    digits := "0123456789ABCDEF"
+    for byte: path {
+        if byte == cast(u8)0 { return .{} }
+        safe := (byte >= #char "a" && byte <= #char "z") ||
+            (byte >= #char "A" && byte <= #char "Z") || (byte >= #char "0" && byte <= #char "9") ||
+            byte == #char "/" || byte == #char "-" || byte == #char "_" || byte == #char "." || byte == #char "~"
+        if safe { if !VecPush(bytes, byte) { return .{} } }
+        else if !VecPush(bytes, #char "%") || !VecPush(bytes, digits[cast(s32)byte / 16]) ||
+            !VecPush(bytes, digits[cast(s32)byte % 16]) { return .{} }
+    }
+    result: Text
+    result.bytes = bytes
+    return result
+}
+
+LabelFor :: (path: string, line: string, split: s64) -> Text {
+    if split < line.count { return TextCopy(line[split + 1:]) }
+    name := Files.PathName(path)
+    return TextCopy(ifx name == "" then "/" else name)
+}
+
+Parse :: (document: *Document, contents: string) -> bool {
+    if contents.count > MAX_BYTES { return false }
+    // GTK's text parser ends at NUL. Refuse that structurally malformed file
+    // rather than append a shortcut GTK would never see or discard its tail.
+    for byte: contents { if byte == cast(u8)0 { return false } }
+    pending: Document
+    pending.text = TextCopy(contents)
+    if pending.text.bytes.count != contents.count { return false }
+    at: s64 = 0
+    while at < contents.count {
+        end := at
+        while end < contents.count && contents[end] != #char "\n" { end += 1 }
+        after := end
+        if after < contents.count { after += 1 }
+        if !VecPush(pending.spans, Span.{at, after}) { return false }
+        line := contents[at:end]
+        split: s64 = 0
+        while split < line.count && line[split] != #char " " { split += 1 }
+        if line != "" && Utf8.Valid(line) {
+            path: Text = Decode(line[0:split])
+            if path.bytes.count > 0 {
+                owned_label: Text = LabelFor(TextView(path), line, split)
+                caption: Text = Display.Caption(TextView(owned_label))
+                if (split != line.count - 1 && owned_label.bytes.count == 0) ||
+                    (owned_label.bytes.count > 0 && caption.bytes.count == 0) || caption.bytes.count > MAX_CAPTION_BYTES ||
+                    pending.rows.count >= MAX_ROWS { return false }
+                if !VecPush(pending.storage, path) || !VecPush(pending.storage, owned_label) ||
+                    !VecPush(pending.storage, caption) { return false }
+                count := pending.storage.count
+                row := Row.{cast(s32)pending.spans.count - 1, TextView(pending.storage[count - 3]),
+                    TextView(pending.storage[count - 2]), TextView(pending.storage[count - 1])}
+                if !VecPush(pending.rows, row) { return false }
+            }
+        }
+        at = after
+    }
+    Swap(document, *pending)
+    return true
+}
+Swap :: (left: *Document, right: *Document) {
+    VecSwap(left.text.bytes, right.text.bytes)
+    VecSwap(left.storage, right.storage)
+    VecSwap(left.spans, right.spans)
+    VecSwap(left.rows, right.rows)
+}
+Release :: (state: *State) {
+    VecFree(state.path.bytes); VecFree(state.legacy.bytes); VecFree(state.source.bytes); VecFree(state.error.bytes)
+    VecFree(state.document.text.bytes); VecFree(state.document.storage)
+    VecFree(state.document.spans); VecFree(state.document.rows)
+    state.loaded = false; state.missing = false
+}
+
+// Bounded, checked I/O. Missing is distinct from a read error on an existing file.
+Read :: (path: string, bytes: *Vec(u8), missing: *bool) -> bool {
+    missing.* = false
+    query := Files.PathQuery(path, false)
+    if !query.valid {
+        if query.missing { missing.* = true; return true }
+        return false
+    }
+    if query.info.kind == .Link {
+        followed := Files.PathQuery(path)
+        if !followed.valid || followed.info.kind != .File { return false }
+    } else if query.info.kind != .File { return false }
+    file := Files.OpenRead(path)
+    if !file.valid { return false }
+    defer { unused Files.CloseFile(file) }
+    chunk: [8192]u8
+    offset: s64 = 0
+    while true {
+        count := Files.ReadAt(file, chunk[:], offset)
+        if count < 0 { return false }
+        if count == 0 { return true }
+        if offset + count > MAX_BYTES { return false }
+        for index: cast(s64)0..count - 1 { if !VecPush(bytes.*, chunk[index]) { return false } }
+        offset += count
+    }
+}
+
+Init :: (state: *State) -> bool {
+    Release(state)
+    home := Env.EnvironmentText("HOME")
+    config := Env.EnvironmentText("XDG_CONFIG_HOME")
+    if home == "" || home[0] != #char "/" { return Fail(state, "Cannot locate bookmarks: HOME is not absolute") }
+    if config != "" && config[0] == #char "/" {
+        path: Text = Files.JoinPath(config, "gtk-3.0/bookmarks")
+        VecSwap(state.path.bytes, path.bytes)
+    } else {
+        path: Text = Files.JoinPath(home, ".config/gtk-3.0/bookmarks")
+        VecSwap(state.path.bytes, path.bytes)
+    }
+    legacy: Text = Files.JoinPath(home, ".gtk-bookmarks")
+    VecSwap(state.legacy.bytes, legacy.bytes)
+    return Refresh(state) >= 0
+}
+
+// -1 error, 0 unchanged, 1 a complete new document. Existing state survives errors.
+Refresh :: (state: *State) -> s32 {
+    bytes: Vec(u8)
+    missing: bool
+    source := TextView(state.path)
+    if !Read(source, *bytes, *missing) { unused Fail(state, "Cannot read bookmarks (file error or size limit)"); return -1 }
+    if missing {
+        source = TextView(state.legacy)
+        if !Read(source, *bytes, *missing) { unused Fail(state, "Cannot read legacy bookmarks"); return -1 }
+    }
+    if state.loaded && missing == state.missing && source == TextView(state.source) &&
+        TextView(bytes[:]) == TextView(state.document.text) { return 0 }
+    pending: Document
+    if !Parse(*pending, TextView(bytes[:])) { unused Fail(state, "Cannot load complete bookmarks (NUL, allocation, label or row limit)"); return -1 }
+    Swap(*state.document, *pending)
+    Store(*state.source, source)
+    state.missing = missing; state.loaded = true
+    VecClear(state.error.bytes)
+    return 1
+}
+
+// Commit the complete candidate before replacing in-memory rows. Recheck the
+// source and destination so a stale edit cannot overwrite an already-seen change.
+Save :: (state: *State, contents: string) -> bool {
+    if !state.loaded { return Fail(state, "Bookmarks are unavailable; reload before editing") }
+    pending: Document
+    if !Parse(*pending, contents) { return Fail(state, "Cannot save complete bookmarks (NUL, size, allocation, label or row limit)") }
+    target := TextView(state.path)
+    destination := Files.PathQuery(target, false)
+    if !destination.valid && !destination.missing { return Fail(state, "Cannot inspect bookmarks destination") }
+    if destination.valid && destination.info.kind == .Link { return Fail(state, "Bookmarks file is a symbolic link; changes were not saved") }
+    if destination.valid && destination.info.kind != .File { return Fail(state, "Bookmarks destination is not a regular file") }
+    if !Files.CreateDirectories(Files.PathParent(target), 448) { return Fail(state, "Cannot create bookmarks folder") }
+    lock_name: Text = Files.JoinPath(Files.PathParent(target), ".shelf-bookmarks.lock")
+    lock := Files.LockPath(TextView(lock_name), true, false)
+    if lock < 0 { return Fail(state, "Bookmarks are busy or cannot be locked") }
+    defer { Files.UnlockPath(lock) }
+    current: Vec(u8)
+    missing: bool
+    if !Read(TextView(state.source), *current, *missing) { return Fail(state, "Cannot re-read bookmarks before saving") }
+    latest := Files.PathQuery(target, false)
+    if !latest.valid && !latest.missing { return Fail(state, "Cannot inspect bookmarks destination before saving") }
+    if latest.valid && latest.info.kind != .File { return Fail(state, "Bookmarks destination changed; reload and retry") }
+    if missing != state.missing || TextView(current[:]) != TextView(state.document.text) ||
+        (TextView(state.source) != target && !latest.missing) {
+        return Fail(state, "Bookmarks changed elsewhere; reload and retry")
+    }
+    if !Files.ReplaceFile(target, contents) { return Fail(state, "Cannot save bookmarks; previous file and shortcuts preserved") }
+    Swap(*state.document, *pending)
+    Store(*state.source, target)
+    state.missing = false
+    VecClear(state.error.bytes)
+    return true
+}
+
+Find :: (state: *State, path: string) -> s32 {
+    for index: cast(s32)0..cast(s32)state.document.rows.count - 1 {
+        if state.document.rows[index].path == path { return index }
+    }
+    return -1
+}
+Add :: (state: *State, path: string) -> bool {
+    if !state.loaded { return Fail(state, "Bookmarks are unavailable; reload before editing") }
+    if Find(state, path) >= 0 { VecClear(state.error.bytes); return true }
+    folder := Files.PathQuery(path)
+    if !folder.valid { return Fail(state, "Cannot inspect folder to bookmark") }
+    if folder.info.kind != .Directory { return Fail(state, "Only local folders can be bookmarked") }
+    uri: Text = Encode(path)
+    if uri.bytes.count == 0 { return Fail(state, "Folder cannot be represented as a bookmark URI") }
+    bytes: Vec(u8)
+    if !Append(*bytes, TextView(state.document.text)) { return Fail(state, "Cannot allocate bookmark") }
+    if bytes.count > 0 && bytes[bytes.count - 1] != #char "\n" && !VecPush(bytes, #char "\n") { return Fail(state, "Cannot allocate bookmark") }
+    if !Append(*bytes, TextView(uri)) || !VecPush(bytes, #char "\n") { return Fail(state, "Cannot allocate bookmark") }
+    return Save(state, TextView(bytes[:]))
+}
+
+// action: 0 rename, 1 remove, 2 move earlier, 3 move later. Only local records
+// move, by exchanging their slots; all unrecognized records keep their bytes/slot.
+Edit :: (state: *State, index: s32, action: s32, label: string = "") -> bool {
+    if !state.loaded || index < 0 || index >= state.document.rows.count { return Fail(state, "Select a local bookmark first") }
+    if action < 0 || action > 3 { return Fail(state, "Unknown bookmark action") }
+    if action == 0 {
+        if !Utf8.Valid(label) { return Fail(state, "Bookmark labels must be valid UTF-8") }
+        for byte: label { if byte == cast(u8)0 || byte == #char "\n" || byte == #char "\r" { return Fail(state, "Bookmark labels cannot contain NUL or line breaks") } }
+    }
+    other := index
+    if action == 2 { other -= 1 }
+    if action == 3 { other += 1 }
+    if other < 0 || other >= state.document.rows.count { VecClear(state.error.bytes); return true }
+    line := state.document.rows[index].line
+    other_line := state.document.rows[other].line
+    bytes: Vec(u8)
+    owned_original: Text = TextCopy(TextView(state.document.text))
+    if owned_original.bytes.count != state.document.text.bytes.count { return Fail(state, "Cannot allocate bookmark edit") }
+    original := TextView(owned_original)
+    for current: cast(s32)0..cast(s32)state.document.spans.count - 1 {
+        span := state.document.spans[current]
+        value := original[span.start:span.end]
+        if current == line && action == 1 { continue }
+        if current == line && action == 0 {
+            end: s64 = 0
+            while end < value.count && value[end] != #char " " && value[end] != #char "\n" { end += 1 }
+            if !Append(*bytes, value[0:end]) { return Fail(state, "Cannot allocate bookmark edit") }
+            if label != "" && (!VecPush(bytes, #char " ") || !Append(*bytes, label)) { return Fail(state, "Cannot allocate bookmark label") }
+            if span.end > span.start && original[span.end - 1] == #char "\n" && !VecPush(bytes, #char "\n") { return Fail(state, "Cannot allocate bookmark edit") }
+        } else {
+            if action >= 2 && current == line { other_span := state.document.spans[other_line]; value = original[other_span.start:other_span.end] }
+            else if action >= 2 && current == other_line { other_span := state.document.spans[line]; value = original[other_span.start:other_span.end] }
+            if !Append(*bytes, value) { return Fail(state, "Cannot allocate bookmark edit") }
+            // Moving an unterminated final record into an earlier slot needs a delimiter.
+            if current < cast(s32)state.document.spans.count - 1 && value.count > 0 && value[value.count - 1] != #char "\n" && !VecPush(bytes, #char "\n") { return Fail(state, "Cannot allocate bookmark edit") }
+        }
+    }
+    return Save(state, TextView(bytes[:]))
+}

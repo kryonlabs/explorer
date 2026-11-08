@@ -39,6 +39,27 @@ in that mode are rejected without changing the filesystem; an escaped path
 that exceeds the editor's capacity reports an error instead of being truncated.
 Desktop clipboard publication still rejects paths that cannot be UTF-8 URIs.
 
+The Places sidebar loads local shortcuts from `$XDG_CONFIG_HOME/gtk-3.0/bookmarks`
+(or `$HOME/.config/gtk-3.0/bookmarks`). If that file is absent, it reads
+`$HOME/.gtk-bookmarks`; the first edit writes the GTK3 location and leaves the
+legacy file intact. Add current, Rename, Remove, Up and Down edit the selected
+local bookmark and preserve its folder identity. The scrolling list opens a
+bookmark on each click. Existing duplicate records are preserved; adding an
+already-bookmarked folder selects its first record.
+
+Storage follows the [GTK bookmark format](https://raw.githubusercontent.com/GNOME/gtk/gtk-3-24/gtk/gtkbookmarksmanager.c)
+also used by [Thunar](https://raw.githubusercontent.com/xfce-mirror/thunar/master/thunar/thunar-shortcuts-model.c).
+Unsupported remote, malformed and unknown records retain their original bytes
+when local records are edited. Local URI paths can contain raw Unix filename
+bytes; labels use safe display captions. Changes replace the whole file atomically,
+and read/save errors keep the previous shortcuts. Shelf refreshes external edits
+about once a second; a label editor keeps its snapshot and rejects stale saves.
+Independent applications can still race between the final recheck and replacement.
+Symbolic-link bookmark files are readable but are not replaced. Files above 1 MiB,
+more than 4096 local rows, or captions above 1024 bytes report a load/save error
+instead of being truncated. Embedded NUL also rejects the whole file because
+GTK would stop reading there. Remote navigation and device shortcuts remain pending.
+
 Copy, Cut and Paste (also Ctrl+C/X/V outside prompts) exchange local file
 selections with desktop file managers on X11/XWayland. Shelf publishes both
 `text/uri-list` and `x-special/gnome-copied-files`; URI-only lists copy, while
@@ -78,6 +99,7 @@ make test       # filesystem model and embedded host, from source and saved IR
 make test-ui    # desktop interaction on a private Xvfb display
 make test-file-clipboard # native Shelf/Thunar interchange on a private desktop
 make test-filenames # raw-byte names, directories and operations on a private desktop
+make test-bookmarks # source/saved persistence and private GTK/sidebar GUI tests
 make install
 make test-installed
 ```

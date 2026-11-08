@@ -19,6 +19,7 @@ DateTime :: #import "std/date_time_linux";
 using FormatText :: #import "std/format";
 Utf8 :: #import "std/utf8";
 FileDisplay :: #import "file_display";
+using Bookmarks :: #import "bookmarks";
 
 frame_seconds: float64;
 frame_wheel: float32;
@@ -28,6 +29,48 @@ LabelsValid :: (session: Sessions.Session) -> bool {
     for index: cast(s32)0..Tree.TreeCount(session) - 1 {
         if !Utf8.Valid(Tree.TreeNodeAt(session, index).semantic_label) { return false }
     }
+    return true
+}
+
+BookmarkHostTest :: (host: *App.Host, session: Sessions.Session, root: string) -> bool {
+    host.manager.prompt = .PromptNone
+    host.field.focused = false
+    first: Text = Files.JoinPath(root, "bookmark-first")
+    second: Text = Files.JoinPath(root, "bookmark-second")
+    if !Files.CreateDirectories(first) || !Files.CreateDirectories(second) ||
+        !Files.CreateDirectories(Files.PathParent(TextView(host.bookmarks.path)), 448) { return false }
+    uri: Text = Bookmarks.Encode(TextView(first))
+    bytes: Vec(u8)
+    if !Bookmarks.Append(*bytes, TextView(uri)) || !Bookmarks.Append(*bytes, " Bookmark α\n") ||
+        !Files.ReplaceFile(TextView(host.bookmarks.path), TextView(bytes[:])) ||
+        Bookmarks.Refresh(*host.bookmarks) != 1 || !Model.OpenPath(*host.manager, root) { return false }
+    host.bookmark_selected = -1
+    if !Render(host, session, true) || !LabelsValid(session) { return false }
+    bounds := EntryBounds(session, "Bookmark α")
+    if bounds.width <= 0.0 || bounds.x < 240.0 ||
+        !Click(host, session, bounds.x + 10.0, bounds.y + 10.0) || host.manager.cwd != TextView(first) { return false }
+    // Clicking an already-selected shortcut still navigates after moving away.
+    if !Model.OpenPath(*host.manager, root) || !Render(host, session, true) ||
+        !Click(host, session, bounds.x + 10.0, bounds.y + 10.0) || host.manager.cwd != TextView(first) { return false }
+    App.OpenPrompt(host, .PromptBookmarkRename)
+    if App.PromptTitle(host) != "Bookmark label" || host.escaped_editor { return false }
+    external_uri: Text = Bookmarks.Encode(TextView(second))
+    external: Vec(u8)
+    if !Bookmarks.Append(*external, TextView(external_uri)) || !Bookmarks.Append(*external, " Changed elsewhere\n") ||
+        !Files.ReplaceFile(TextView(host.bookmarks.path), TextView(external[:])) { return false }
+    host.field.length = App.CopyInto(host.field.bytes, "Stale label")
+    App.FinishPrompt(host)
+    if host.manager.prompt != .PromptBookmarkRename || host.bookmarks.document.rows[0].path != TextView(first) ||
+        !Render(host, session, true) || !LabelsValid(session) { return false }
+    disk: Vec(u8)
+    missing: bool
+    if !Bookmarks.Read(TextView(host.bookmarks.path), *disk, *missing) || missing ||
+        TextView(disk[:]) != TextView(external[:]) { return false }
+    host.manager.prompt = .PromptNone
+    host.field.focused = false
+    host.bookmarks_ms = 0
+    if !Render(host, session, true) || host.bookmarks.document.rows[0].path != TextView(second) ||
+        !Render(host, session, false) || !LabelsValid(session) { return false }
     return true
 }
 
@@ -666,12 +709,15 @@ main :: (argc: s32, argv: **u8) -> s32 {
     if !PreviewHostTest(*host, session, root) { print("preview image/text/input/viewport behavior failed\n"); return 30 }
     if !ClipboardHostTest(*host, session, root) { print("headless file clipboard shortcuts failed\n"); return 32 }
     if !RawFilenameHostTest(*host, session, root) { print("raw filename host labels/prompts/identity failed\n"); return 33 }
+    if !BookmarkHostTest(*host, session, root) { print("bookmark host activation/snapshot/refresh failed\n"); return 34 }
     App.Close(*host)
     if host.manager.entry_text.count != 0 || host.manager.cwd_text.bytes.count != 0 ||
         host.manager.clipboard.text.count != 0 || host.details_cells.count != 0 ||
         host.details_rows.count != 0 || host.grid_items.count != 0 ||
         host.last_click_path.bytes.count != 0 || host.preview.opened ||
         host.preview.path.bytes.count != 0 || host.preview.body.bytes.count != 0 ||
+        host.bookmarks.document.storage.count != 0 || host.bookmarks.document.rows.count != 0 ||
+        host.bookmarks.document.text.bytes.count != 0 || host.bookmark_items.count != 0 || host.bookmark_flags.count != 0 ||
         host.palette_loaded { return 12 }
     if host.started || !App.Prepare(*host, root) || host.manager.tabs.count != 1 ||
         host.manager.prompt != .PromptNone || host.field.length != 0 { return 8 }

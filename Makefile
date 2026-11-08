@@ -6,7 +6,7 @@ SOURCES := $(wildcard src/*.zi) $(wildcard tests/*.zi) ziran.toml ziran.lock scr
 NATIVE_FLAGS := -std=c99 -O2 -ffunction-sections -fdata-sections -Wl,--gc-sections
 HOST_TEST_ENV := python3 tests/private_desktop.py --headless env -u GTK_THEME HOME=$(CURDIR)/build/host-test-fixture XDG_CONFIG_HOME=$(CURDIR)/build/host-test-fixture/config XDG_DATA_HOME=$(CURDIR)/build/host-test-fixture/data-home
 
-.PHONY: build check test test-ui test-installed test-file-clipboard test-filenames run install clean test-saved
+.PHONY: build check test test-ui test-installed test-file-clipboard test-filenames test-bookmarks test-bookmarks-native run install clean test-saved
 
 build:
 	build-queue -- $(ZIRAN) build
@@ -66,3 +66,16 @@ install:
 
 clean:
 	rm -rf build
+
+build/bookmarks-test: $(SOURCES)
+	build-queue -- $(ZIRAN) build --project --target=c --exe --entry bookmarks_test:main -o build/bookmarks-test-c tests/bookmarks_test.zi
+	cp build/bookmarks-test-c/bookmarks_test build/bookmarks-test
+
+test-bookmarks-native: build/bookmarks-test
+	python3 tests/private_desktop.py --headless env HOME=$(CURDIR)/build/bookmarks-test-fixture/home XDG_CONFIG_HOME=$(CURDIR)/build/bookmarks-test-fixture/config build/bookmarks-test $(CURDIR)/build/bookmarks-test-fixture
+	build-queue -- $(ZIRAN) ir --project --entry bookmarks_test:main -o build/bookmarks-test-ir tests/bookmarks_test.zi
+	build-queue -- $(ZIRAN) build --project --target=c --exe --entry bookmarks_test:main -o build/bookmarks-test-saved-c build/bookmarks-test-ir/bookmarks_test.zir
+	python3 tests/private_desktop.py --headless env HOME=$(CURDIR)/build/bookmarks-test-fixture/home XDG_CONFIG_HOME=$(CURDIR)/build/bookmarks-test-fixture/config build/bookmarks-test-saved-c/bookmarks_test $(CURDIR)/build/bookmarks-test-fixture
+
+test-bookmarks: build test-bookmarks-native
+	python3 tests/private_desktop.py python3 tests/bookmarks_test.py

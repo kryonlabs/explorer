@@ -1,0 +1,134 @@
+using Bookmarks :: #import "bookmarks";
+using Bytes :: #import "std/byte_text_linux";
+using Vectors :: #import "std/vec";
+Files :: #import "std/file_tree_linux";
+Env :: #import "std/environment_linux";
+Utf8 :: #import "std/utf8";
+
+ReadText :: (path: string) -> Text {
+    bytes: Vec(u8)
+    missing: bool
+    if !Bookmarks.Read(path, *bytes, *missing) || missing { return .{} }
+    result: Text
+    result.bytes = bytes
+    return result
+}
+
+Run :: (root: string) -> bool {
+    unused Files.RemoveTree(root)
+    if !Files.CreateDirectories(root, 448) || !Files.CreateDirectories(Env.EnvironmentText("HOME"), 448) ||
+        !Files.CreateDirectories(Env.EnvironmentText("XDG_CONFIG_HOME"), 448) { return false }
+    alpha: Text = Files.JoinPath(root, "alpha space\né")
+    raw_bytes := u8.[114, 97, 119, 45, 255]
+    raw: Text = Files.JoinPath(root, TextView(raw_bytes[:]))
+    third: Text = Files.JoinPath(root, "third")
+    if !Files.CreateDirectories(alpha) || !Files.CreateDirectories(raw) || !Files.CreateDirectories(third) { return false }
+    a_uri: Text = Bookmarks.Encode(TextView(alpha))
+    b_uri: Text = Bookmarks.Encode(TextView(raw))
+    decoded: Text = Bookmarks.Decode(TextView(b_uri))
+    if TextView(decoded) != TextView(raw) { return false }
+    a_decoded: Text = Bookmarks.Decode(TextView(a_uri))
+    if TextView(a_decoded) != TextView(alpha) { return false }
+    local_case: Text = Bookmarks.Decode("FiLe://LOCALHOST/a%20b")
+    if TextView(local_case) != "/a b" { return false }
+    bad := string.["sftp://host/remote", "file://remote/path", "file:///bad%00", "file:///bad%GG", "file:relative", "file:///bad#fragment"]
+    for uri: bad { value: Text = Bookmarks.Decode(uri); if value.bytes.count != 0 { return false } }
+    bytes: Vec(u8)
+    unknown := "sftp://host/remote Keep remote\n# unknown record\nfile:///broken%GG malformed\n"
+    if !Bookmarks.Append(*bytes, unknown) || !Bookmarks.Append(*bytes, TextView(a_uri)) ||
+        !Bookmarks.Append(*bytes, " Label α\n") || !Bookmarks.Append(*bytes, TextView(b_uri)) ||
+        !Bookmarks.Append(*bytes, "\n") || !Bookmarks.Append(*bytes, TextView(a_uri)) ||
+        !Bookmarks.Append(*bytes, " Duplicate\n") || !VecPush(bytes, cast(u8)255) ||
+        !Bookmarks.Append(*bytes, " unknown invalid text") { return false }
+    legacy: Text = Files.JoinPath(Env.EnvironmentText("HOME"), ".gtk-bookmarks")
+    if !Files.ReplaceFile(legacy, TextView(bytes[:])) { return false }
+    state: Bookmarks.State
+    if !Bookmarks.Init(*state) || state.document.rows.count != 3 ||
+        TextView(state.source) != TextView(legacy) || TextView(state.document.text) != TextView(bytes[:]) { return false }
+    for row: state.document.rows { if !Utf8.Valid(row.caption) { return false } }
+    destination_parent: Text = TextCopy(Files.PathParent(TextView(state.path)))
+    if !Files.CreateDirectories(TextView(destination_parent), 448) ||
+        !Files.SetPathMode(TextView(destination_parent), 0) { return false }
+    inaccessible_destination := !Bookmarks.Add(*state, TextView(third))
+    unused Files.SetPathMode(TextView(destination_parent), 448)
+    if !inaccessible_destination || state.document.rows.count != 3 ||
+        TextView(state.document.text) != TextView(bytes[:]) || Files.PathExists(TextView(state.path)) { return false }
+    // A new GTK3 file wins over an open legacy snapshot; it is never replaced.
+    if !Files.ReplaceFile(TextView(state.path), "file:///external External\n") ||
+        Bookmarks.Add(*state, TextView(third)) || state.document.rows.count != 3 { return false }
+    external_target: Text = ReadText(TextView(state.path))
+    if TextView(external_target) != "file:///external External\n" || !Files.RemoveFile(TextView(state.path)) { return false }
+    if !Bookmarks.Add(*state, TextView(third)) || state.document.rows.count != 4 { return false }
+    old_legacy: Text = ReadText(TextView(legacy))
+    if TextView(old_legacy) != TextView(bytes[:]) || TextView(state.source) != TextView(state.path) { return false }
+    before: Text = ReadText(TextView(state.path))
+    if !Bookmarks.Add(*state, TextView(alpha)) || state.document.rows.count != 4 { return false }
+    after: Text = ReadText(TextView(state.path))
+    if TextView(before) != TextView(after) { return false }
+    if !Bookmarks.Edit(*state, 1, 0, "Raw folder β") || state.document.rows[1].label != "Raw folder β" ||
+        !Bookmarks.Edit(*state, 1, 2) || state.document.rows[0].path != TextView(raw) ||
+        !Bookmarks.Edit(*state, 0, 3) || state.document.rows[1].path != TextView(raw) { return false }
+    saved: Text = TextCopy(TextView(state.document.text))
+    if TextView(saved)[0:unknown.count] != unknown || Bookmarks.Edit(*state, 0, 0, "line\nbreak") ||
+        TextView(state.document.text) != TextView(saved) { return false }
+    if !Bookmarks.Edit(*state, 2, 1) || state.document.rows.count != 3 ||
+        Bookmarks.Find(*state, TextView(alpha)) != 0 { return false }
+    // An externally changed document is never overwritten by an already-open edit.
+    current: Text = TextCopy(TextView(state.document.text))
+    external: Vec(u8)
+    if !Bookmarks.Append(*external, TextView(current)) || !Bookmarks.Append(*external, "\nhttps://example.com Unknown\n") ||
+        !Files.ReplaceFile(TextView(state.path), TextView(external[:])) || Bookmarks.Edit(*state, 0, 0, "stale") ||
+        TextView(state.document.text) != TextView(current) { return false }
+    on_disk: Text = ReadText(TextView(state.path))
+    if TextView(on_disk) != TextView(external[:]) || Bookmarks.Refresh(*state) != 1 { return false }
+    stable: Text = TextCopy(TextView(state.document.text))
+    parent: Text = TextCopy(Files.PathParent(TextView(state.path)))
+    if !Files.SetPathMode(TextView(parent), 320) { return false }
+    failed := !Bookmarks.Edit(*state, 0, 0, "cannot save")
+    unused Files.SetPathMode(TextView(parent), 448)
+    if !failed || state.error.bytes.count == 0 || TextView(state.document.text) != TextView(stable) { return false }
+    disk_stable: Text = ReadText(TextView(state.path))
+    if TextView(disk_stable) != TextView(stable) { return false }
+    // EACCES is an error, never permission to replace the model with a legacy
+    // or empty document. The generic path query must distinguish absence.
+    if !Files.SetPathMode(TextView(parent), 0) { return false }
+    inaccessible := Bookmarks.Refresh(*state)
+    unused Files.SetPathMode(TextView(parent), 448)
+    if inaccessible >= 0 || TextView(state.document.text) != TextView(stable) {
+        print("inaccessible bookmarks were incorrectly treated as missing\n")
+        return false
+    }
+    // Oversized input is an explicit load error, with all prior rows retained.
+    oversized: Vec(u8)
+    if !VecResize(oversized, Bookmarks.MAX_BYTES + 1) { return false }
+    for *byte: oversized { byte.* = #char "x" }
+    if !Files.ReplaceFile(TextView(state.path), TextView(oversized[:])) || Bookmarks.Refresh(*state) >= 0 ||
+        TextView(state.document.text) != TextView(stable) ||
+        !Files.ReplaceFile(TextView(state.path), TextView(stable)) { return false }
+    many: Vec(u8)
+    for index: cast(s32)0..Bookmarks.MAX_ROWS { if !Bookmarks.Append(*many, "file:///a\n") { return false } }
+    if Bookmarks.Parse(*state.document, TextView(many[:])) || TextView(state.document.text) != TextView(stable) { return false }
+    long_label: Vec(u8)
+    if !Bookmarks.Append(*long_label, "file:///a ") { return false }
+    for index: cast(s32)0..Bookmarks.MAX_CAPTION_BYTES { if !VecPush(long_label, #char "x") { return false } }
+    if Bookmarks.Parse(*state.document, TextView(long_label[:])) || TextView(state.document.text) != TextView(stable) { return false }
+    nul_text := u8.[102, 105, 108, 101, 58, 47, 47, 47, 97, 32, 0, 10]
+    if Bookmarks.Parse(*state.document, TextView(nul_text[:])) || TextView(state.document.text) != TextView(stable) { return false }
+    // Empty files override the legacy source; a restart uses the persisted order.
+    restarted: Bookmarks.State
+    if !Bookmarks.Init(*restarted) || restarted.document.rows.count != state.document.rows.count ||
+        TextView(restarted.document.text) != TextView(stable) || !Files.ReplaceFile(TextView(state.path), "") ||
+        Bookmarks.Refresh(*restarted) != 1 || restarted.document.rows.count != 0 { return false }
+    Bookmarks.Release(*restarted)
+    Bookmarks.Release(*state)
+    if state.document.storage.count != 0 || state.document.rows.count != 0 || state.path.bytes.count != 0 { return false }
+    return true
+}
+
+main :: (argc: s32, argv: **u8) -> s32 {
+    if argc != 2 { return 64 }
+    root := Bytes.TextFromCString(argv[1])
+    if !Run(root) { print("bookmark roundtrip/order/preservation/transaction/error test failed\n"); return 1 }
+    print("Shelf local bookmark URI, legacy, duplicate, order, unknown-record, restart and save-error tests passed\n")
+    return 0
+}

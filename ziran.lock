@@ -142,8 +142,8 @@
     "name": "shelf"
   },
   "toolchain": {
-    "commit": "c37371586264af9ee3db233d5eaf5d6176d4bdf7",
-    "ref": "c37371586264af9ee3db233d5eaf5d6176d4bdf7",
+    "commit": "e1e10237f44baa05ea05efd1f2ac281fb13db0fb",
+    "ref": "e1e10237f44baa05ea05efd1f2ac281fb13db0fb",
     "url": "https://github.com/ziranlang/ziran.git"
   }
 }

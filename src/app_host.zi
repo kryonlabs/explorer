@@ -15,6 +15,7 @@ SystemTheme :: #import "kryon/SystemThemeLinux";
 Palettes :: #import "kryon/widget_palette";
 FileClipboard :: #import "desktop_file_clipboard";
 FileDisplay :: #import "file_display";
+using Bookmarks :: #import "bookmarks";
 
 #scope_export
 HostSession :: struct {
@@ -64,6 +65,12 @@ Host :: struct {
     palette_loaded: bool
     file_clipboard: FileClipboard.State
     escaped_editor: bool
+    bookmarks: Bookmarks.State
+    bookmark_items: Vec(ListBoxItem)
+    bookmark_flags: Vec(bool)
+    bookmark_selected: s32
+    bookmark_scroll: s32
+    bookmarks_ms: s64
 }
 
 CopyInto :: (target: []u8, value: string) -> s32 {
@@ -87,6 +94,10 @@ Prepare :: (host: *Host, start_path: string = "") -> bool {
     host.last_click_ms = 0
     host.palette_loaded = false
     Model.Init(*host.manager, start_path)
+    host.bookmark_selected = -1
+    host.bookmark_scroll = 0
+    host.bookmarks_ms = DateTime.UnixMilliseconds()
+    if !Bookmarks.Init(*host.bookmarks) { Model.SetError(*host.manager, TextView(host.bookmarks.error)) }
     host.started = true
     return true
 }
@@ -94,6 +105,9 @@ Prepare :: (host: *Host, start_path: string = "") -> bool {
 Close :: (host: *Host) {
     if host == null { return }
     FileClipboard.Close(*host.file_clipboard)
+    Bookmarks.Release(*host.bookmarks)
+    VecFree(host.bookmark_items)
+    VecFree(host.bookmark_flags)
     if host.started { Model.Dispose(*host.manager) }
     VecFree(host.last_click_path.bytes)
     VecFree(host.details_cells)
@@ -112,6 +126,9 @@ Close :: (host: *Host) {
 }
 
 PromptTitle :: (host: *Host) -> string {
+    if host.manager.prompt == .PromptBookmarkRename {
+        return ifx host.escaped_editor then "Bookmark label (\\xNN bytes; \\\\ backslash)" else "Bookmark label"
+    }
     if host.manager.prompt == .PromptRename {
         return ifx host.escaped_editor then "New name (\\xNN bytes; \\\\ backslash)" else "New name"
     }
@@ -135,6 +152,10 @@ OpenPrompt :: (host: *Host, prompt: Model.PromptKind) {
     if prompt == .PromptLocation { initial = host.manager.cwd }
     if prompt == .PromptRename && host.manager.cursor >= 0 {
         initial = Model.EntryName(*host.manager, host.manager.cursor)
+    }
+    if prompt == .PromptBookmarkRename && host.bookmark_selected >= 0 &&
+        host.bookmark_selected < host.bookmarks.document.rows.count {
+        initial = host.bookmarks.document.rows[host.bookmark_selected].label
     }
     host.escaped_editor = FileDisplay.NeedsEscapes(initial)
     caption: Text = FileDisplay.EditorText(initial, host.escaped_editor)
@@ -161,6 +182,10 @@ FinishPrompt :: (host: *Host) {
         return
     }
     if host.escaped_editor { value = TextView(decoded.value) }
+    if prompt == .PromptBookmarkRename && !Bookmarks.Edit(*host.bookmarks, host.bookmark_selected, 0, value) {
+        Model.SetError(*host.manager, TextView(host.bookmarks.error))
+        return
+    }
     host.manager.prompt = .PromptNone
     if prompt == .PromptRename { unused Model.RenameSelection(*host.manager, value) }
     else if prompt == .PromptFolder { unused Model.CreateFolder(*host.manager, value) }
@@ -198,14 +223,81 @@ ApplyFieldEdit :: (state: *FieldState, edit: UI.TextFieldEdit) -> bool {
     return true
 }
 
-Button :: (session: UI.Session, key: s32, label: string, bounds: UI.Rectangle) -> bool {
+Button :: (session: UI.Session, key: s32, label: string, bounds: UI.Rectangle, enabled: bool = true) -> bool {
     props: ButtonProps
     props.key = cast(u64)key
     props.id = key
     props.bounds = bounds
     props.label = label
     props.fit_content = true
+    props.disabled = !enabled
     return UI.Button(session, props) == 1
+}
+
+BookmarkResult :: (host: *Host, ok: bool) {
+    if !ok { Model.SetError(*host.manager, TextView(host.bookmarks.error)) }
+    else { Model.SetError(*host.manager, "") }
+}
+
+DrawBookmarks :: (host: *Host, session: UI.Session, sidebar: Rectangle, focused: bool) {
+    now := DateTime.UnixMilliseconds()
+    // Keep an open label editor tied to its original snapshot. Save rejects
+    // external changes; refreshing the rows mid-edit could rename another row.
+    if host.manager.prompt != .PromptBookmarkRename &&
+        (now < host.bookmarks_ms || now - host.bookmarks_ms >= 1000) {
+        refreshed := Bookmarks.Refresh(*host.bookmarks)
+        if refreshed > 0 { host.bookmark_selected = -1; host.bookmark_scroll = 0 }
+        if refreshed < 0 { BookmarkResult(host, false) }
+        host.bookmarks_ms = now
+    }
+    y := sidebar.y + 148.0
+    enabled := focused && host.manager.prompt == .PromptNone
+    Text(session, TextProps.{.key = cast(u64)200, .bounds = .{sidebar.x, y, sidebar.width, 24.0},
+        .text = "Bookmarks", .font = 16})
+    if Button(session, 201, "Add current", .{sidebar.x, y + 28.0, sidebar.width, 30.0}, enabled) {
+        ok := Bookmarks.Add(*host.bookmarks, host.manager.cwd)
+        BookmarkResult(host, ok)
+        if ok { host.bookmark_selected = Bookmarks.Find(*host.bookmarks, host.manager.cwd) }
+    }
+    if Button(session, 202, "Rename", .{sidebar.x, y + 62.0, 74.0, 30.0}, enabled) {
+        if host.bookmark_selected >= 0 && host.bookmark_selected < host.bookmarks.document.rows.count {
+            OpenPrompt(host, .PromptBookmarkRename)
+        } else { Model.SetError(*host.manager, "Select a local bookmark first") }
+    }
+    if Button(session, 203, "Remove", .{sidebar.x + 78.0, y + 62.0, 72.0, 30.0}, enabled) {
+        ok := Bookmarks.Edit(*host.bookmarks, host.bookmark_selected, 1)
+        BookmarkResult(host, ok)
+        if ok { host.bookmark_selected = -1 }
+    }
+    for direction: cast(s32)0..1 {
+        if Button(session, 204 + direction, ifx direction == 0 then "Up" else "Down",
+            .{sidebar.x + cast(float32)(direction * 78), y + 96.0, 72.0, 30.0}, enabled) {
+            previous := host.bookmark_selected
+            target := previous + ifx direction == 0 then -1 else 1
+            ok := Bookmarks.Edit(*host.bookmarks, previous, 2 + direction)
+            BookmarkResult(host, ok)
+            if ok && target >= 0 && target < host.bookmarks.document.rows.count { host.bookmark_selected = target }
+        }
+    }
+    if !VecResize(host.bookmark_items, host.bookmarks.document.rows.count) ||
+        !VecResize(host.bookmark_flags, host.bookmarks.document.rows.count) { return }
+    for index: cast(s32)0..cast(s32)host.bookmark_items.count - 1 {
+        row := host.bookmarks.document.rows[index]
+        host.bookmark_items[index] = ListBoxItem.{cast(u64)row.line + cast(u64)1, row.caption}
+        host.bookmark_flags[index] = index == host.bookmark_selected
+    }
+    list_bounds := Rectangle.{sidebar.x, y + 132.0, sidebar.width, sidebar.height - 280.0}
+    if list_bounds.height < 32.0 { return }
+    props := ListBoxMultiProps.{.key = cast(u64)206, .bounds = list_bounds, .row_height = 32,
+        .anchor = host.bookmark_selected, .scroll_offset = host.bookmark_scroll,
+        .focused = enabled, .disabled = !enabled}
+    if props.focused { props.scroll_delta = cast(s32)(-Input.PointerWheelTake(session, list_bounds) * 64.0) }
+    result := ListBoxMulti(session, props, host.bookmark_items[:], host.bookmark_flags[:])
+    host.bookmark_scroll = result.scroll_offset
+    if result.clicked_index >= 0 && result.clicked_index < host.bookmarks.document.rows.count {
+        host.bookmark_selected = result.clicked_index
+        unused Model.OpenPathTracked(*host.manager, host.bookmarks.document.rows[result.clicked_index].path)
+    }
 }
 
 ActivateEntry :: (host: *Host, row: s32) {
@@ -769,6 +861,7 @@ Draw :: (host: *Host, host_session: HostSession, host_viewport: HostViewport,
     if Button(session, 33, "Trash", Rectangle.{sidebar.x, sidebar.y + 106.0, sidebar.width, 32.0}) {
         unused Model.OpenPathTracked(manager, Model.TrashDirectory(false))
     }
+    DrawBookmarks(host, session, sidebar, focused)
 
     view_x := viewport.x + 166.0
     view_y := viewport.y + 96.0
