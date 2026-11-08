@@ -6,7 +6,7 @@ SOURCES := $(wildcard src/*.zi) $(wildcard tests/*.zi) ziran.toml ziran.lock scr
 NATIVE_FLAGS := -std=c99 -O2 -ffunction-sections -fdata-sections -Wl,--gc-sections
 HOST_TEST_ENV := python3 tests/private_desktop.py --headless env -u GTK_THEME HOME=$(CURDIR)/build/host-test-fixture XDG_CONFIG_HOME=$(CURDIR)/build/host-test-fixture/config XDG_DATA_HOME=$(CURDIR)/build/host-test-fixture/data-home
 
-.PHONY: build check test test-ui test-installed test-file-clipboard test-filenames test-bookmarks test-bookmarks-native test-tree test-tree-native test-location test-location-native run install clean test-saved
+.PHONY: test-tabs test-tabs-native build check test test-ui test-installed test-file-clipboard test-filenames test-bookmarks test-bookmarks-native test-tree test-tree-native test-location test-location-native run install clean test-saved
 
 build:
 	build-queue -- $(ZIRAN) build
@@ -107,3 +107,17 @@ test-location-native: build/location-test
 test-location: build test-location-native
 	python3 tests/private_desktop.py python3 tests/location_thunar_probe.py
 	python3 tests/private_desktop.py python3 tests/location_test.py
+
+build/tabs-test: $(SOURCES)
+	build-queue -- $(ZIRAN) build --project --target=c --exe --entry tabs_test:main -o build/tabs-test-c tests/tabs_test.zi
+	cp build/tabs-test-c/tabs_test build/tabs-test
+
+test-tabs-native: build/tabs-test
+	python3 tests/private_desktop.py --headless build/tabs-test $(CURDIR)/build/tabs-test-fixture
+	build-queue -- $(ZIRAN) ir --project --entry tabs_test:main -o build/tabs-test-ir tests/tabs_test.zi
+	build-queue -- $(ZIRAN) build --project --target=c --exe --entry tabs_test:main -o build/tabs-test-saved-c build/tabs-test-ir/tabs_test.zir
+	python3 tests/private_desktop.py --headless build/tabs-test-saved-c/tabs_test $(CURDIR)/build/tabs-test-fixture
+	python3 tests/private_desktop.py --headless python3 tests/tabs_failure_test.py $(CURDIR)/build/tabs-test $(CURDIR)/build/tabs-test-saved-c/tabs_test
+
+test-tabs: build test-tabs-native
+	python3 tests/private_desktop.py python3 tests/tabs_test.py

@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+- Replace numbered tab controls with a native labeled strip, close buttons,
+  scrolling overflow and drag/keyboard reorder. Dynamic tabs retain independent
+  history, selection, focus, scrolling and view state; failed navigation keeps
+  the previous usable tab and the last tab remains open.
+
 - Add local breadcrumb navigation and an inline location editor with common-prefix
   completion, keyboard suggestions, literal relative/Home paths and lossless raw
   name editing. Failed or stale navigation retains the input, route and history;

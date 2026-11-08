@@ -19,6 +19,7 @@ using Bookmarks :: #import "bookmarks";
 using LocalTree :: #import "tree_sidebar";
 Trees :: #import "data_views/TreeView";
 using Location :: #import "location";
+TabPaths :: #import "std/file_tree_linux";
 
 #scope_export
 HostSession :: struct {
@@ -94,6 +95,80 @@ Host :: struct {
     breadcrumb_items: Vec(BreadcrumbItem)
     breadcrumb_open: bool
     actions_open: bool
+    tab_labels: Vec(Text)
+    tab_paths: Vec(Text)
+    tab_keys: Vec(u64)
+    tab_items: Vec(Tab)
+    tab_scroll: s32
+    tab_dragging: bool
+    tab_drag_from: s32
+    tab_active_key: u64
+}
+
+// Shelf owns tab routes and identity. Kryon owns the strip, clipping, focus,
+// wheel overflow, close hit targets and pointer reorder interaction.
+DrawTabs :: (host: *Host, session: Session, bounds: Rectangle, focused: bool,
+    key: s32, modifiers: s32) -> bool {
+    manager := *host.manager
+    count := manager.tabs.count
+    if !VecReserve(host.tab_labels, count) || !VecReserve(host.tab_paths, count) ||
+        !VecReserve(host.tab_keys, count) || !VecReserve(host.tab_items, count) {
+        Model.SetError(manager, "Cannot allocate tab strip; routes retained"); return false
+    }
+    for index: count..host.tab_labels.count - 1 {
+        VecFree(host.tab_labels[index].bytes); VecFree(host.tab_paths[index].bytes)
+    }
+    unused VecResize(host.tab_labels, count); unused VecResize(host.tab_paths, count)
+    unused VecResize(host.tab_keys, count); unused VecResize(host.tab_items, count)
+    reordered := false
+    for index: cast(s32)0..cast(s32)manager.tabs.count - 1 {
+        identity := Model.TabKey(manager, index)
+        if host.tab_keys[index] != identity { reordered = true }
+        if TextView(host.tab_paths[index]) != manager.tabs[index] || host.tab_keys[index] != identity {
+            name := ifx manager.tabs[index] == "/" then "/" else TabPaths.PathName(manager.tabs[index])
+            label: Text = FileDisplay.Caption(name)
+            path: Text = TextCopy(manager.tabs[index])
+            if label.bytes.count == 0 || path.bytes.count != manager.tabs[index].count {
+                Model.SetError(manager, "Cannot allocate tab label; routes retained"); return false
+            }
+            VecSwap(host.tab_labels[index].bytes, label.bytes)
+            VecSwap(host.tab_paths[index].bytes, path.bytes)
+        }
+        host.tab_keys[index] = identity
+        host.tab_items[index] = .{.key = identity, .label = TextView(host.tab_labels[index]),
+            .closeable = manager.tabs.count > 1}
+    }
+    active := Model.TabKey(manager, manager.active_tab)
+    reveal := host.tab_active_key != active || reordered
+    if reveal { host.tab_dragging = false; host.tab_drag_from = -1 }
+    enabled := focused && manager.prompt == .PromptNone
+    bar_focused := false
+    if enabled {
+        for index: cast(s32)0..TreeCount(session) - 1 {
+            if Input.TreeFocusedAt(session, index) && TreeNodeAt(session, index).focus_id == 238 {
+                bar_focused = true; break
+            }
+        }
+    }
+    props := TabBarProps.{.key = cast(u64)238, .id = 238, .bounds = bounds,
+        .selected_index = manager.active_tab, .min_tab_width = 100, .max_tab_width = 210,
+        .content_sized = true, .scroll_offset = host.tab_scroll, .focus_selected = reveal,
+        .dragging = host.tab_dragging, .drag_from = host.tab_drag_from,
+        .reorder_enabled = true, .disabled = !enabled}
+    props.input.focused = bar_focused && modifiers == 0
+    props.input.left = key == KeyLeft; props.input.right = key == KeyRight
+    props.input.home = key == KeyHome; props.input.end = key == KeyEnd
+    props.input.close = key == KeyDelete || key == KeyBackspace
+    result := TabBar(session, props, host.tab_items[:])
+    host.tab_scroll = result.scroll_offset; host.tab_dragging = result.dragging
+    host.tab_drag_from = result.drag_from; host.tab_active_key = active
+    if enabled {
+        if result.reordered_from >= 0 { unused Model.ReorderTab(manager, result.reordered_from, result.reordered_to) }
+        else if result.closed_index >= 0 { unused Model.CloseTab(manager, result.closed_index) }
+        else if result.activated_index >= 0 { unused Model.SwitchTab(manager, result.activated_index) }
+    }
+    return props.input.focused && (key == KeyLeft || key == KeyRight ||
+        key == KeyHome || key == KeyEnd || key == KeyDelete || key == KeyBackspace)
 }
 
 CopyInto :: (target: []u8, value: string) -> s32 {
@@ -113,6 +188,8 @@ Prepare :: (host: *Host, start_path: string = "") -> bool {
     host.field.scroll_x = 0
     host.field.focused = false
     host.escaped_editor = false
+    host.tab_scroll = 0; host.tab_dragging = false; host.tab_drag_from = -1
+    host.tab_active_key = cast(u64)0
     host.tree_mode = false
     host.tree_initialized = false
     host.tree_focused = false
@@ -124,6 +201,7 @@ Prepare :: (host: *Host, start_path: string = "") -> bool {
     host.last_click_ms = 0
     host.palette_loaded = false
     Model.Init(*host.manager, start_path)
+    if host.manager.tabs.count == 0 { Model.Dispose(*host.manager); return false }
     host.bookmark_selected = -1
     host.bookmark_scroll = 0
     host.bookmarks_ms = DateTime.UnixMilliseconds()
@@ -134,6 +212,11 @@ Prepare :: (host: *Host, start_path: string = "") -> bool {
 
 Close :: (host: *Host) {
     if host == null { return }
+    for index: cast(s32)0..cast(s32)host.tab_labels.count - 1 {
+        VecFree(host.tab_labels[index].bytes); VecFree(host.tab_paths[index].bytes)
+        host.tab_keys[index] = cast(u64)0
+    }
+    VecFree(host.tab_labels); VecFree(host.tab_paths); VecFree(host.tab_keys); VecFree(host.tab_items)
     Location.Release(*host.location)
     Location.ReleaseAncestors(*host.ancestors)
     VecFree(host.completion_items); VecFree(host.completion_flags); VecFree(host.breadcrumb_items)
@@ -1123,8 +1206,20 @@ Draw :: (host: *Host, host_session: HostSession, host_viewport: HostViewport,
         else if key == 66 { TreeMode(host, false); key = 0 }
         else if key == 76 { host.tree_focused = false; OpenPrompt(host, .PromptLocation); key = 0 }
         else if key == 70 { OpenPrompt(host, .PromptSearch); key = 0 }
-        else if key == 84 { unused Model.NewTab(manager); key = 0 }
-        else if key == KeyTab { Model.NextTab(manager); key = 0 }
+        else if key == 84 && !Input.TreeTextFocused(session) { unused Model.NewTab(manager); key = 0 }
+        else if key == 87 && !Input.TreeTextFocused(session) { unused Model.CloseTab(manager, manager.active_tab); key = 0 }
+        else if key == KeyTab && !Input.TreeTextFocused(session) {
+            if (modifiers & KeyModifierShift) != 0 {
+                unused Model.SwitchTab(manager, cast(s32)((manager.active_tab + manager.tabs.count - 1) % manager.tabs.count))
+            } else { Model.NextTab(manager) }
+            key = 0
+        }
+        else if (key == KeyPageUp || key == KeyPageDown) && !Input.TreeTextFocused(session) {
+            next := manager.active_tab + ifx key == KeyPageUp then -1 else 1
+            if (modifiers & KeyModifierShift) != 0 { unused Model.ReorderTab(manager, manager.active_tab, next) }
+            else { unused Model.SwitchTab(manager, next) }
+            key = 0
+        }
         else if key == 65 { Model.SelectAll(manager); key = 0 }
         else if key == 67 { unused FileClipboard.Copy(*host.file_clipboard, manager, false); key = 0 }
         else if key == 88 { unused FileClipboard.Copy(*host.file_clipboard, manager, true); key = 0 }
@@ -1184,37 +1279,13 @@ Draw :: (host: *Host, host_session: HostSession, host_viewport: HostViewport,
         Button(session, 67, "Preview", .{second.x + 340.0, second.y, 84.0, 32.0}) && manager.cursor >= 0 {
         OpenPreview(host, Model.EntryPath(manager, manager.cursor))
     }
-    if manager.error != "" && manager.prompt != .PromptLocation {
-        error_caption: Text = FileDisplay.Caption(manager.error)
-        Text(session, TextProps.{.key = cast(u64)21,
-            .bounds = .{second.x + 420.0, second.y + 5.0, viewport.width - 716.0, 22.0},
-            .text = TextView(error_caption), .font = 13, .disabled = true})
-    }
     }
     if narrow && DrawNarrowActions(host, session, .{viewport.x + viewport.width - 168.0, toolbar.y, 160.0, 36.0}, focused, key) { key = 0 }
-    tabs_x := viewport.x + viewport.width - 300.0
-    if Button(session, 15, "+", Rectangle.{tabs_x, second.y, 32.0, 32.0}) {
-        unused Model.NewTab(manager)
-    }
-    if Button(session, 16, "<", Rectangle.{tabs_x + 38.0, second.y, 32.0, 32.0}) {
-        unused Model.SwitchTab(manager, manager.active_tab - 1)
-    }
-    if Button(session, 17, ">", Rectangle.{tabs_x + 76.0, second.y, 32.0, 32.0}) {
-        unused Model.SwitchTab(manager, manager.active_tab + 1)
-    }
-    if Button(session, 18, "Close", Rectangle.{tabs_x + 114.0, second.y, 58.0, 32.0}) {
-        unused Model.CloseTab(manager, manager.active_tab)
-    }
-    tab_index: s32 = 0
-    while tab_index < cast(s32)manager.tabs.count && tab_index < 4 {
-        label_buffer: [8]u8
-        label := Number.FormatInteger(tab_index + 1, label_buffer[:])
-        if Button(session, 100 + tab_index, label,
-            Rectangle.{tabs_x + 178.0 + cast(float32)(tab_index * 30), second.y, 26.0, 32.0}) {
-            unused Model.SwitchTab(manager, tab_index)
-        }
-        tab_index += 1
-    }
+    tab_bounds := Rectangle.{viewport.x + 450.0, second.y, viewport.width - 500.0, 32.0}
+    if narrow { tab_bounds = .{second.x, second.y, viewport.width - 58.0, 32.0} }
+    if Button(session, 15, "+", .{viewport.x + viewport.width - 40.0, second.y, 32.0, 32.0},
+        focused && manager.prompt == .PromptNone) { unused Model.NewTab(manager) }
+    if DrawTabs(host, session, tab_bounds, focused, key, modifiers) { key = 0 }
 
     sidebar := Rectangle.{viewport.x + 8.0, viewport.y + 96.0 + body_offset, 150.0, viewport.height - 106.0 - body_offset}
     if focused {
@@ -1268,7 +1339,12 @@ Draw :: (host: *Host, host_session: HostSession, host_viewport: HostViewport,
         Model.SetSort(manager, manager.sort_mode, !manager.sort_reverse)
         host.last_click_ms = 0
     }
-    if manager.prompt != .PromptLocation {
+    if manager.prompt != .PromptLocation && manager.error != "" {
+        caption: Text = FileDisplay.Caption(manager.error)
+        Text(session, TextProps.{.key = cast(u64)21,
+            .bounds = .{view_x, viewport.y + viewport.height - 26.0, viewport.width - 174.0, 22.0},
+            .text = TextView(caption), .font = 13})
+    } else if manager.prompt != .PromptLocation {
     selected_buffer: [16]u8
     selected_count := Number.FormatInteger(Model.SelectedCount(manager), selected_buffer[:])
     Text(session, TextProps.{.key = cast(u64)65,

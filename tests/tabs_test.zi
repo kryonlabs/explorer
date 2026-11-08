@@ -1,0 +1,138 @@
+using Model :: #import "model";
+using Bytes :: #import "std/byte_text_linux";
+Files :: #import "std/file_tree_linux";
+WholeFiles :: #import "std/file";
+Number :: #import "std/number_text";
+
+Fail :: (stage: s32) -> bool { print("tab test stage % failed\n", stage); return false }
+Select :: (manager: *Manager, name: string) -> bool {
+    for i: cast(s32)0..cast(s32)manager.entries.count - 1 {
+        if manager.entries[i].name == name { Model.SelectOne(manager, i); return true }
+    }
+    return false
+}
+Run :: (root: string) -> bool {
+    unused Files.RemoveTree(root)
+    a: Text = Files.JoinPath(root, "a/same é")
+    b: Text = Files.JoinPath(root, "b/same é")
+    missing: Text = Files.JoinPath(root, "missing")
+    if !Files.CreateDirectories(a) || !Files.CreateDirectories(b) ||
+        !Files.ReplaceFile(Files.JoinPath(a, "one"), "one") ||
+        !Files.ReplaceFile(Files.JoinPath(a, "two"), "two") ||
+        !Files.ReplaceFile(Files.JoinPath(b, "other"), "other") { return Fail(1) }
+    manager: Manager
+    Model.Init(*manager, root)
+    if !Model.OpenPathTracked(*manager, a) || !Select(*manager, "two") { return Fail(2) }
+    manager.selected[0] = true
+    manager.scroll = 19; manager.reveal_focus = false; manager.view_mode = .ViewCompact
+    first := Model.TabKey(*manager, 0)
+    if !Model.NewTab(*manager, b) { return Fail(3) }
+    second := Model.TabKey(*manager, 1)
+    if second == first || manager.back.count != 0 || manager.forward.count != 0 ||
+        !Select(*manager, "other") { return Fail(4) }
+    manager.scroll = 7; manager.reveal_focus = false; manager.view_mode = .ViewList
+    if !Files.ReplaceFile(Files.JoinPath(a, "00-new"), "insert") { return Fail(50) }
+    if !Model.SwitchTab(*manager, 0) || manager.cwd != TextView(a) ||
+        Model.EntryName(*manager, manager.cursor) != "two" || Model.SelectedCount(*manager) != 2 ||
+        manager.scroll != 19 || manager.reveal_focus || manager.view_mode != .ViewCompact || manager.back.count != 1 { return Fail(5) }
+    if !Model.NavigateBack(*manager) || manager.cwd != root || !Model.NavigateForward(*manager) || manager.cwd != TextView(a) { return Fail(6) }
+    if !Model.SwitchTab(*manager, 1) || manager.scroll != 7 || manager.view_mode != .ViewList ||
+        manager.back.count != 0 || Model.EntryName(*manager, manager.cursor) != "other" { return Fail(7) }
+    if !Model.ReorderTab(*manager, 1, 0) || Model.TabKey(*manager, 0) != second ||
+        manager.active_tab != 0 || Model.TabKey(*manager, 1) != first { return Fail(8) }
+    if !Files.RemoveTree(a) { return Fail(9) }
+    if Model.SwitchTab(*manager, 1) || manager.active_tab != 0 || manager.cwd != TextView(b) ||
+        manager.scroll != 7 || manager.error != "Cannot read tab folder; current tab retained" ||
+        Model.CloseTab(*manager, 0) || manager.tabs.count != 2 ||
+        Model.TabKey(*manager, 0) != second || Model.NewTab(*manager, missing) || manager.tabs.count != 2 { return Fail(10) }
+    if !Files.CreateDirectories(a) || !Files.ReplaceFile(Files.JoinPath(a, "replacement"), "new") ||
+        !Model.SwitchTab(*manager, 1) || Model.SelectedCount(*manager) != 0 ||
+        Model.EntryName(*manager, manager.cursor) != "replacement" { return Fail(11) }
+    if !Model.CloseTab(*manager, 1) || manager.tabs.count != 1 || Model.TabKey(*manager, 0) != second { return Fail(12) }
+    if !Model.Search(*manager, "oth") || !Model.NewTab(*manager, root) ||
+        !Model.SwitchTab(*manager, 0) || !manager.search_active || manager.search_query != "oth" ||
+        manager.search_root != TextView(b) || manager.entries.count != 1 ||
+        !Model.CloseTab(*manager, 1) || !Model.OpenPath(*manager, b) { return Fail(51) }
+    keys: [64]u64
+    keys[0] = second
+    for i: cast(s32)1..63 {
+        if !Model.NewTab(*manager, b) { return Fail(13) }
+        keys[i] = Model.TabKey(*manager, i)
+        if keys[i] <= keys[i - 1] { return Fail(14) }
+    }
+    if manager.tabs.count != 64 || !Model.ReorderTab(*manager, 63, 0) ||
+        manager.active_tab != 0 || Model.TabKey(*manager, 0) != keys[63] { return Fail(15) }
+    for i: cast(s32)0..62 { if Model.TabIndex(*manager, keys[i]) != i + 1 { return Fail(16) } }
+    if !Model.SwitchTab(*manager, 32) || !Model.CloseTab(*manager, 0) ||
+        Model.TabKey(*manager, manager.active_tab) != keys[31] { return Fail(17) }
+    while manager.tabs.count > 1 { if !Model.CloseTab(*manager, manager.active_tab) { return Fail(18) } }
+    if Model.CloseTab(*manager, 0) || manager.tabs.count != 1 { return Fail(19) }
+    raw_bytes := u8.[114, 97, 119, 45, 255, 10]
+    raw: Text = Files.JoinPath(root, TextView(raw_bytes[:]))
+    if !Files.CreateDirectory(raw) || !Model.NewTab(*manager, raw) || manager.cwd != TextView(raw) ||
+        manager.tabs[manager.active_tab] != TextView(raw) || !Model.SwitchTab(*manager, 0) ||
+        !Model.SwitchTab(*manager, 1) || manager.cwd != TextView(raw) { return Fail(20) }
+    Model.Dispose(*manager)
+    if manager.tabs.count != 0 || manager.tab_states.count != 0 || manager.tab_text.count != 0 ||
+        manager.tab_slots.count != 0 { return Fail(21) }
+    return true
+}
+Allocation :: (root: string) -> bool {
+    manager: Manager
+    Model.Init(*manager, root)
+    if manager.tabs.count != 1 || manager.entries.count == 0 { return Fail(30) }
+    reached: bool
+    for attempt: cast(s32)0..255 {
+        count := manager.tabs.count; active := manager.active_tab
+        key := Model.TabKey(*manager, active); selected := manager.cursor
+        if !Model.NewTab(*manager) {
+            if count < 9 || manager.tabs.count != count || manager.active_tab != active ||
+                Model.TabKey(*manager, active) != key || manager.cursor != selected || manager.cwd != root ||
+                manager.error == "" { return Fail(31) }
+            reached = true; break
+        }
+    }
+    if !reached { return Fail(32) }
+    print("Actual tab allocation failure retained active identity, route, selection and count after % tabs\n", manager.tabs.count)
+    Model.Dispose(*manager); return true
+}
+RejectedSwitch :: (initial: string, target: string, mode: string) -> bool {
+    manager: Manager
+    Model.Init(*manager, initial)
+    if manager.tabs.count != 1 || !Model.NewTab(*manager, target) || !Model.SwitchTab(*manager, 0) { return Fail(60) }
+    Model.SelectOne(*manager, 0); manager.scroll = 31; manager.reveal_focus = false
+    key := Model.TabKey(*manager, 0); cursor := manager.cursor
+    count := manager.entries.count; before := manager.back.count
+    if !Files.ReplaceFile(Files.JoinPath(initial, "ready"), "READY") { return Fail(61) }
+    gate: [1]u8
+    input := WholeFiles.FileHandle.{.fd = 0, .valid = true}
+    if WholeFiles.Read(input, gate[:]) != 1 { return Fail(62) }
+    opened: bool
+    if mode == "--close-oom" { opened = Model.CloseTab(*manager, 0) }
+    else { opened = Model.SwitchTab(*manager, 1) }
+    if opened || manager.active_tab != 0 || Model.TabKey(*manager, 0) != key ||
+        manager.tabs.count != 2 || manager.cwd != initial || manager.tabs[0] != initial ||
+        manager.cursor != cursor || Model.SelectedCount(*manager) != 1 || manager.scroll != 31 ||
+        manager.entries.count != count || manager.back.count != before || manager.reveal_focus ||
+        manager.error == "" {
+        print("tab reject diagnostic: mode % opened % active % tabs % entries %/% scroll % cursor %/% error %\n",
+            mode, opened, manager.active_tab, manager.tabs.count, manager.entries.count, count,
+            manager.scroll, manager.cursor, cursor, manager.error)
+        return Fail(63)
+    }
+    print("Rejected tab % preserved active identity/route/selection/history/scroll: %\n", mode, manager.error)
+    Model.Dispose(*manager); return true
+}
+main :: (argc: s32, argv: **u8) -> s32 {
+    if argc == 4 {
+        return ifx RejectedSwitch(Bytes.TextFromCString(argv[2]), Bytes.TextFromCString(argv[3]),
+            Bytes.TextFromCString(argv[1])) then 0 else 1
+    }
+    if argc == 3 && Bytes.TextFromCString(argv[1]) == "--oom" {
+        return ifx Allocation(Bytes.TextFromCString(argv[2])) then 0 else 1
+    }
+    if argc != 2 { return 64 }
+    if !Run(Bytes.TextFromCString(argv[1])) { return 1 }
+    print("Dynamic64 tab identities/history/selection/scroll/reorder/close/raw and failure rollback passed\n")
+    return 0
+}

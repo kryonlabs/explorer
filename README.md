@@ -66,6 +66,25 @@ failed Back/Forward navigation retains history. Independent filesystem changes
 can still race after the final identity recheck. Paths are limited to 4095 raw
 bytes, editor text to 4096 bytes and breadcrumbs to 2048 ancestors.
 
+Tabs show lossless folder-name labels with a distinct active state and stable
+identities, including duplicate names. Ctrl+L reveals the full active path.
+Use + or Ctrl+T to duplicate the current folder into a new tab; close buttons
+or Ctrl+W close a tab while keeping the final tab open. Ctrl+Tab and
+Ctrl+Shift+Tab cycle; Ctrl+PageUp/PageDown switch adjacent tabs and
+Ctrl+Shift+PageUp/PageDown move the active tab. When the strip has keyboard
+focus, Left/Right and Home/End select tabs and Delete closes one.
+Drag a visible tab to reorder it, or scroll the strip to reach hidden tabs;
+keyboard selection reveals the active tab. Tab storage grows until allocation
+limits, with no fixed tab-count ceiling.
+
+Each tab retains its raw folder, navigation history, selection, focused entry,
+scroll, view/sort/hidden settings and cached search. Switching checks the target
+folder completely before changing the active route; surviving entries restore
+selection by raw path and filesystem identity. A missing, unreadable, changing
+or allocation-failed target leaves the previous usable tab active, including
+when closing the active tab. Search results remain cached until refresh.
+Split panes, detached windows and persistent sessions are not implemented.
+
 The Places sidebar loads local shortcuts from `$XDG_CONFIG_HOME/gtk-3.0/bookmarks`
 (or `$HOME/.config/gtk-3.0/bookmarks`). If that file is absent, it reads
 `$HOME/.gtk-bookmarks`; the first edit writes the GTK3 location and leaves the
@@ -153,6 +172,7 @@ make test-filenames # raw-byte names, directories and operations on a private de
 make test-bookmarks # source/saved persistence and private GTK/sidebar GUI tests
 make test-tree      # source/saved lazy tree, host integration and private GUI
 make test-location  # source/saved paths, failure rollback, private Shelf/Thunar keys
+make test-tabs      # dynamic state/real allocation failure and private native tabs
 make install
 make test-installed
 ```

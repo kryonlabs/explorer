@@ -869,6 +869,68 @@ PreviewHostTest :: (host: *App.Host, session: Sessions.Session, root: string) ->
 }
 
 #program_export
+TabHostFailure :: (stage: s32) -> bool { print("tab host stage % failed\n", stage); return false }
+TabNode :: (session: Sessions.Session, key: u64) -> s32 {
+    for index: cast(s32)0..Tree.TreeCount(session) - 1 {
+        node := Tree.TreeNodeAt(session, index)
+        if node.key == key && node.semantic_kind == .SemanticTab { return index }
+    }
+    return -1
+}
+TabsHostTest :: (root: string) -> bool {
+    folder: Text = Files.JoinPath(root, "tab-host")
+    if !Files.CreateDirectories(folder) || !Files.ReplaceFile(Files.JoinPath(folder, "proof"), "owned") { return TabHostFailure(1) }
+    host: App.Host
+    if !App.Prepare(*host, folder) { return TabHostFailure(2) }
+    defer { App.Close(*host) }
+    session := Sessions.SessionOpen()
+    if !Sessions.SessionValid(session) { return TabHostFailure(3) }
+    defer { unused Frames.CloseSession(session) }
+    for index: cast(s32)0..15 { if !Model.NewTab(*host.manager) { return TabHostFailure(4) } }
+    if !Render(*host, session, true) || host.tab_scroll <= 0 { return TabHostFailure(5) }
+    last := Model.TabKey(*host.manager, host.manager.active_tab)
+    node := TabNode(session, last)
+    if node < 0 { return TabHostFailure(601) }
+    if !Input.TreeFocusAt(session, node) { return TabHostFailure(602) }
+    if !Press(*host, session, Keys.KeyHome) || host.manager.active_tab != 0 { return TabHostFailure(603) }
+    if !Press(*host, session, Keys.KeyEnd) ||
+        Model.TabKey(*host.manager, host.manager.active_tab) != last { return TabHostFailure(604) }
+    before := host.manager.active_tab
+    if !Press(*host, session, Keys.KeyPageUp, Keys.KeyModifierControl | Keys.KeyModifierShift) ||
+        host.manager.active_tab != before - 1 || Model.TabKey(*host.manager, host.manager.active_tab) != last { return TabHostFailure(7) }
+    if !Press(*host, session, Keys.KeyTab, Keys.KeyModifierControl) ||
+        !Press(*host, session, Keys.KeyTab, Keys.KeyModifierControl | Keys.KeyModifierShift) ||
+        Model.TabKey(*host.manager, host.manager.active_tab) != last { return TabHostFailure(8) }
+    if !Model.SwitchTab(*host.manager, 0) || !Render(*host, session, true) || !Render(*host, session, true) { return TabHostFailure(9) }
+    first := Model.TabKey(*host.manager, 0)
+    node = TabNode(session, first)
+    if node < 0 { return TabHostFailure(10) }
+    bounds := Tree.TreeNodeAt(session, node).bounds
+    x := bounds.x + 20.0; y := bounds.y + 16.0
+    unused Input.KeyboardModifiersSend(session, 0)
+    unused Input.TreePointerUpdate(session, Input.PointerFrame.{x, y, true, true, false})
+    if !Render(*host, session, true) { return TabHostFailure(11) }
+    unused Input.TreePointerUpdate(session, Input.PointerFrame.{x + 220.0, y, true, false, false})
+    if !Render(*host, session, true) { return TabHostFailure(12) }
+    unused Input.TreePointerUpdate(session, Input.PointerFrame.{x + 220.0, y, false, false, true})
+    if !Render(*host, session, true) || Model.TabIndex(*host.manager, first) <= 0 ||
+        Model.TabKey(*host.manager, host.manager.active_tab) != first { return TabHostFailure(13) }
+    before = host.manager.active_tab
+    if !Press(*host, session, 76, Keys.KeyModifierControl) ||
+        !Press(*host, session, Keys.KeyTab, Keys.KeyModifierControl) ||
+        host.manager.active_tab != before || host.manager.prompt != .PromptLocation ||
+        !Press(*host, session, Keys.KeyEscape) { return TabHostFailure(14) }
+    unused Input.KeyboardModifiersSend(session, Keys.KeyModifierControl)
+    unused Input.KeyboardSend(session, Keys.KeyTab)
+    if !Render(*host, session, false) || host.manager.active_tab != before ||
+        Input.KeyboardTake(session) != Keys.KeyTab { return TabHostFailure(15) }
+    unused Input.KeyboardModifiersSend(session, 0)
+    if !RenderAt(*host, session, true, .{40.0, 60.0, 560.0, 440.0}) || !LabelsValid(session) { return TabHostFailure(16) }
+    count := host.manager.tabs.count
+    if !Press(*host, session, 87, Keys.KeyModifierControl) || host.manager.tabs.count != count - 1 { return TabHostFailure(17) }
+    return true
+}
+
 main :: (argc: s32, argv: **u8) -> s32 {
     if argc != 2 { return 64 }
     root := Bytes.TextFromCString(argv[1])
@@ -896,6 +958,7 @@ main :: (argc: s32, argv: **u8) -> s32 {
     if !found { print("host viewport origin failed\n"); return 4 }
     if !ThemeScopeTest(*host, session, root) { print("system palette viewport/scope isolation failed\n"); return 31 }
 
+    if !TabsHostTest(root) { print("native TabBar focus/overflow/drag/close/modal/embedded regression failed\n"); return 42 }
     if !DetailsTest(*host, session, Files.JoinPath(root, "views")) {
         print("details selection/navigation/metadata sort/activation failed\n"); return 20
     }
