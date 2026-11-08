@@ -1,0 +1,365 @@
+using Model :: #import "model";
+Files :: #import "std/file_tree_linux";
+WholeFiles :: #import "std/file";
+Strings :: #import "std/c_string";
+using Bytes :: #import "std/byte_text_linux";
+Preview :: #import "preview";
+Utf8 :: #import "std/utf8";
+
+PreviewTest :: (root: string) -> bool {
+    state: Preview.State
+    defer { Preview.Close(*state) }
+    if !Preview.ImagePath("/pictures/HELLO.JpEg") || !Preview.ImagePath("a.webp") ||
+        Preview.ImagePath("/folder.png/no-extension") || Preview.ImagePath("image.png.txt") { return false }
+    folder := Files.JoinPath(root, "preview")
+    if !Files.CreateDirectories(folder) { return false }
+    path := Files.JoinPath(folder, "unicode.txt")
+    if !Files.ReplaceFile(path, "Hello é 世界\nsecond line\n") { return false }
+    Preview.Open(*state, path)
+    if state.kind != .Text || !state.opened || state.truncated || state.lines != 3 ||
+        TextView(state.body) != "Hello é 世界\nsecond line\n" { return false }
+    saved_path: Text = TextCopy(TextView(state.path))
+    Preview.Open(*state, TextView(saved_path))
+    if state.kind != .Text || TextView(state.path) != path { return false }
+    if !Files.ReplaceFile(path, "") { return false }
+    Preview.Open(*state, path)
+    if state.kind != .Text || state.body.bytes.count != 0 || state.lines != 1 { return false }
+    binary: [3]u8 = .[65, 0, 66]
+    if !Files.ReplaceFile(path, TextView(binary[:])) { return false }
+    Preview.Open(*state, path)
+    if state.kind != .Other || state.body.bytes.count != 0 { return false }
+    long: Vec(u8)
+    if !VecResize(long, Preview.TEXT_LIMIT + 8) { return false }
+    for * byte: long { byte.* = cast(u8)97 }
+    long[Preview.TEXT_LIMIT - 1] = cast(u8)0xe2
+    long[Preview.TEXT_LIMIT] = cast(u8)0x82
+    long[Preview.TEXT_LIMIT + 1] = cast(u8)0xac
+    if !Files.ReplaceFile(path, TextView(long[:])) { return false }
+    Preview.Open(*state, path)
+    if state.kind != .Text || !state.truncated || state.body.bytes.count != Preview.TEXT_LIMIT - 1 ||
+        !Utf8.Valid(TextView(state.body)) { return false }
+    invalid: [2]u8 = .[0xc0, 0xaf]
+    if !Files.ReplaceFile(path, TextView(invalid[:])) { return false }
+    Preview.Open(*state, path)
+    if state.kind != .Other { return false }
+    Preview.Open(*state, folder)
+    if state.kind != .Other || state.info.kind != .Directory { return false }
+    Preview.Open(*state, Files.JoinPath(folder, "missing"))
+    if state.kind != .Error || TextView(state.body) == "" { return false }
+    image := Files.JoinPath(folder, "broken.png")
+    if !Files.ReplaceFile(image, "not an image") { return false }
+    Preview.Open(*state, image)
+    if state.kind != .Image { return false }
+    state.fit_zoom = 40
+    Preview.Zoom(*state, 1)
+    if state.zoom != 50 { return false }
+    for index: cast(s32)0..30 { Preview.Zoom(*state, 1) }
+    if state.zoom != 800 { return false }
+    for index: cast(s32)0..30 { Preview.Zoom(*state, -1) }
+    if state.zoom != 25 { return false }
+    Preview.Close(*state)
+    return !state.opened && state.path.bytes.count == 0 && state.body.bytes.count == 0
+}
+
+FindModelIndex :: (manager: *Model.Manager, name: string) -> s32 {
+    for index: cast(s32)0..cast(s32)manager.entries.count - 1 {
+        if Model.EntryName(manager, index) == name { return index }
+    }
+    return -1
+}
+
+SelectName :: (manager: *Model.Manager, name: string) -> bool {
+    index := FindModelIndex(manager, name)
+    if index < 0 { return false }
+    Model.SelectOne(manager, index)
+    return true
+}
+
+Fail :: (manager: *Model.Manager, label: string, detail: string, code: s32) -> s32 {
+    print("model test failed: %: %\n", label, detail)
+    Model.Dispose(manager)
+    return code
+}
+
+ViewSortTest :: () -> bool {
+    manager: Model.Manager
+    defer { Model.Dispose(*manager) }
+    // Duplicate basenames model recursive search; case and metadata ties
+    // must still have a strict, repeatable order in both directions.
+    info: Files.PathInfo = .{.kind = .File, .size = 12, .modified = 100}
+    if !Model.AppendEntry(*manager, "same", "/b/same", info) ||
+        !Model.AppendEntry(*manager, "same", "/a/same", info) ||
+        !Model.AppendEntry(*manager, "SAME", "/a/SAME", info) { return false }
+    info.size = 4
+    info.modified_nanoseconds = 25
+    if !Model.AppendEntry(*manager, "small", "/small", info) { return false }
+    info.kind = .Directory
+    if !Model.AppendEntry(*manager, "folder", "/folder", info) { return false }
+    Model.SelectOne(*manager, 0)
+    manager.selected[3] = true
+    manager.cursor = 3
+    manager.anchor = 0
+    for mode: cast(s32)0..3 {
+        for reversed: cast(s32)0..1 {
+            Model.SetSort(*manager, cast(Model.SortMode)mode, reversed == 1)
+            expected: [5]string = .["/folder", "/a/SAME", "/a/same", "/b/same", "/small"]
+            if mode == 1 { expected = string.["/folder", "/small", "/a/SAME", "/a/same", "/b/same"] }
+            for row: cast(s32)0..4 {
+                source_row := ifx reversed == 1 && row > 0 then 5 - row else row
+                if manager.entries[row].path != expected[source_row] { return false }
+            }
+            if manager.entries[0].path != "/folder" || Model.SelectedCount(*manager) != 2 ||
+                Model.EntryPath(*manager, manager.cursor) != "/small" ||
+                Model.EntryPath(*manager, manager.anchor) != "/b/same" { return false }
+            for index: cast(s32)0..4 {
+                entry: *Model.Entry = *manager.entries[index]
+                if Model.EntryBefore(*manager, entry, entry) { return false }
+                selected_expected := entry.path == "/small" || entry.path == "/b/same"
+                if manager.selected[index] != selected_expected { return false }
+                for next: index + 1..4 {
+                    other: *Model.Entry = *manager.entries[next]
+                    if !Model.EntryBefore(*manager, entry, other) ||
+                        Model.EntryBefore(*manager, other, entry) { return false }
+                }
+            }
+            before: [5]string
+            for index: cast(s32)0..4 { before[index] = manager.entries[index].path }
+            Model.SortEntries(*manager)
+            for index: cast(s32)0..4 {
+                if manager.entries[index].path != before[index] { return false }
+            }
+        }
+    }
+    for mode: cast(s32)0..2 {
+        manager.scroll = 500
+        Model.SetView(*manager, cast(Model.ViewMode)mode)
+        if manager.view_mode != cast(Model.ViewMode)mode || !manager.reveal_focus ||
+            Model.SelectedCount(*manager) != 2 ||
+            Model.EntryPath(*manager, manager.cursor) != "/small" ||
+            Model.EntryPath(*manager, manager.anchor) != "/b/same" { return false }
+    }
+    // Equal full identities compare false even in descending mode.
+    identical: Model.Entry = manager.entries[1]
+    if Model.EntryBefore(*manager, *identical, *identical) { return false }
+    earlier: Model.Entry = .{.name = "z", .path = "/z",
+        .info = .{.kind = .File, .size = 1, .modified = 100, .modified_nanoseconds = 100}}
+    later: Model.Entry = .{.name = "a", .path = "/a",
+        .info = .{.kind = .File, .size = 99, .modified = 100, .modified_nanoseconds = 200}}
+    if Model.EntryCompare(.SortSize, *earlier, *later) >= 0 ||
+        Model.EntryCompare(.SortModified, *earlier, *later) >= 0 { return false }
+    empty: Model.Manager
+    Model.SetSort(*empty, .SortModified, true)
+    Model.SetView(*empty, .ViewCompact)
+    Model.Dispose(*empty)
+    return true
+}
+
+#program_export
+main :: (argc: s32, argv: **u8) -> s32 {
+    if !ViewSortTest() { print("view/sort identity test failed\n"); return 70 }
+    if argc != 2 {
+        print("usage: model_test FIXTURE_ROOT\n")
+        return 64
+    }
+    root := Bytes.TextFromCString(argv[1])
+    unused Files.RemoveTree(root)
+    if !Files.CreateDirectories(root) { return 66 }
+    if !PreviewTest(root) { print("bounded preview ownership/format test failed\n"); return 71 }
+
+    data_home := Files.JoinPath(root, "data-home")
+    source := Files.JoinPath(root, "source")
+    folder := Files.JoinPath(source, "folder")
+    if !Files.CreateDirectories(folder) { return 67 }
+    if !Files.ReplaceFile(Files.JoinPath(source, "alpha.txt"), "alpha\n") ||
+        !Files.ReplaceFile(Files.JoinPath(source, "beta.txt"), "beta\n") ||
+        !Files.ReplaceFile(Files.JoinPath(folder, "nested.txt"), "nested\n") ||
+        !Files.ReplaceFile(Files.JoinPath(source, ".hidden"), "hidden\n") { return 68 }
+
+    manager: Model.Manager
+    Model.Init(*manager, source)
+    if manager.cwd != source { return Fail(*manager, "initial navigation", manager.cwd, 10) }
+    if Model.EntryCount(*manager) != 3 { return Fail(*manager, "hidden files", Model.EntryName(*manager, 0), 11) }
+    manager.show_hidden = true
+    if !Model.Refresh(*manager) || Model.EntryCount(*manager) != 4 ||
+        FindModelIndex(*manager, ".hidden") < 0 {
+        return Fail(*manager, "show hidden", Model.EntryName(*manager, 0), 12)
+    }
+    manager.show_hidden = false
+    if !Model.Refresh(*manager) { return Fail(*manager, "hide hidden", manager.error, 13) }
+
+    if !Model.OpenPathTracked(*manager, folder) || manager.cwd != folder {
+        return Fail(*manager, "open folder", folder, 14)
+    }
+    if !Model.NavigateBack(*manager) || manager.cwd != source {
+        return Fail(*manager, "navigate back", manager.cwd, 15)
+    }
+    if !Model.NavigateForward(*manager) || manager.cwd != folder {
+        return Fail(*manager, "navigate forward", manager.cwd, 16)
+    }
+    if !Model.OpenPathTracked(*manager, source) { return Fail(*manager, "return source", manager.error, 17) }
+
+    if !Model.Search(*manager, "nested") || Model.EntryCount(*manager) != 1 ||
+        FindModelIndex(*manager, "nested.txt") < 0 {
+        return Fail(*manager, "recursive search", manager.search_query, 18)
+    }
+    if !Model.OpenPathTracked(*manager, source) { return Fail(*manager, "leave search", manager.error, 19) }
+
+    if !Model.CreateFolder(*manager, "Created") || FindModelIndex(*manager, "Created") < 0 {
+        return Fail(*manager, "create folder", manager.error, 20)
+    }
+    if !Model.CreateFile(*manager, "hello.txt") || !SelectName(*manager, "hello.txt") {
+        return Fail(*manager, "create file", manager.error, 21)
+    }
+    if !Model.RenameSelection(*manager, "renamed.txt") ||
+        FindModelIndex(*manager, "hello.txt") >= 0 || !SelectName(*manager, "renamed.txt") {
+        return Fail(*manager, "rename", manager.error, 22)
+    }
+    if !Model.DuplicateSelection(*manager) || FindModelIndex(*manager, "renamed (2).txt") < 0 {
+        return Fail(*manager, "duplicate", manager.error, 23)
+    }
+    if !SelectName(*manager, "renamed.txt") || !Model.MakeLinkSelection(*manager) ||
+        FindModelIndex(*manager, "renamed.txt link") < 0 {
+        return Fail(*manager, "symbolic link", manager.error, 24)
+    }
+    link := FindModelIndex(*manager, "renamed.txt link")
+    if Files.PathStatus(Model.EntryPath(*manager, link), false).kind != Files.PathKind.Link {
+        return Fail(*manager, "link kind", Model.EntryPath(*manager, link), 25)
+    }
+
+    if !SelectName(*manager, "beta.txt") || !Model.CopySelection(*manager, false) ||
+        !Model.OpenPathTracked(*manager, folder) || !Model.Paste(*manager) ||
+        FindModelIndex(*manager, "beta.txt") < 0 {
+        return Fail(*manager, "copy paste", manager.error, 26)
+    }
+    if !Model.OpenPathTracked(*manager, source) || !SelectName(*manager, "renamed (2).txt") ||
+        !Model.CopySelection(*manager, true) || !Model.OpenPathTracked(*manager, folder) ||
+        !Model.Paste(*manager) || FindModelIndex(*manager, "renamed (2).txt") < 0 {
+        return Fail(*manager, "cut paste", manager.error, 27)
+    }
+    if !Model.OpenPathTracked(*manager, source) ||
+        FindModelIndex(*manager, "renamed (2).txt") >= 0 {
+        return Fail(*manager, "cut source removal", manager.cwd, 28)
+    }
+
+    if !Model.NewTab(*manager, folder) || manager.tabs.count != 2 ||
+        manager.active_tab != 1 || manager.cwd != folder {
+        return Fail(*manager, "new tab", manager.cwd, 29)
+    }
+    if !Model.SwitchTab(*manager, 0) || manager.cwd != source ||
+        !Model.SwitchTab(*manager, 1) || manager.cwd != folder {
+        return Fail(*manager, "switch tab", manager.cwd, 30)
+    }
+    if !Model.CloseTab(*manager, 1) || manager.tabs.count != 1 || manager.cwd != source {
+        return Fail(*manager, "close tab", manager.cwd, 31)
+    }
+
+    if !SelectName(*manager, "renamed.txt") || !Model.DeleteSelection(*manager, true) ||
+        FindModelIndex(*manager, "renamed.txt") >= 0 {
+        return Fail(*manager, "trash", manager.error, 32)
+    }
+    trash_files := Model.TrashDirectory(false)
+    if !Model.OpenPathTracked(*manager, trash_files) ||
+        !SelectName(*manager, "renamed.txt") {
+        return Fail(*manager, "trash listing", manager.error, 33)
+    }
+    trashed_path := Model.EntryPath(*manager, FindModelIndex(*manager, "renamed.txt"))
+    original := Model.TrashOriginalPath(Model.TrashInfoPath(trashed_path))
+    if original != Files.JoinPath(source, "renamed.txt") {
+        return Fail(*manager, "trash metadata", original, 34)
+    }
+    if !Model.RestoreSelection(*manager) || Model.EntryCount(*manager) != 0 {
+        return Fail(*manager, "restore from trash", manager.error, 35)
+    }
+    if !Model.OpenPathTracked(*manager, source) ||
+        FindModelIndex(*manager, "renamed.txt") < 0 ||
+        Files.PathExists(Model.JoinText(Model.EntryPath(*manager,
+            FindModelIndex(*manager, "renamed.txt")), "-missing")) {
+        return Fail(*manager, "restore source", manager.error, 36)
+    }
+
+    // Failed operations preserve existing data and the current directory.
+    if Model.OpenPathTracked(*manager, Files.JoinPath(source, "alpha.txt")) ||
+        manager.cwd != source || manager.error == "" {
+        return Fail(*manager, "file is not a directory", manager.cwd, 40)
+    }
+    if Model.CreateFile(*manager, "alpha.txt") ||
+        Model.CreateFolder(*manager, "folder") || Model.CreateFile(*manager, "../escape.txt") {
+        return Fail(*manager, "create collision or invalid name", manager.error, 41)
+    }
+    alpha, alpha_ok := WholeFiles.ReadEntireFile(Files.JoinPath(source, "alpha.txt"))
+    if !alpha_ok || alpha != "alpha\n" || !SelectName(*manager, "beta.txt") ||
+        Model.RenameSelection(*manager, "alpha.txt") {
+        return Fail(*manager, "rename collision", manager.error, 42)
+    }
+    alpha_after, alpha_after_ok := WholeFiles.ReadEntireFile(Files.JoinPath(source, "alpha.txt"))
+    if !alpha_after_ok || alpha_after != "alpha\n" {
+        return Fail(*manager, "existing contents", alpha_after, 43)
+    }
+    special := "space and\nline%#?é.txt"
+    if Model.UnescapeTrashPath(Model.EscapeTrashPath(special)) != special ||
+        Model.EscapeTrashPath("\n") != "%0A" {
+        return Fail(*manager, "trash path escaping", Model.EscapeTrashPath(special), 44)
+    }
+
+    // An orphan .trashinfo reserves its name even when its data file is gone.
+    orphan := Files.JoinPath(source, "orphan.txt")
+    if !Files.ReplaceFile(orphan, "orphan") ||
+        !Files.ReplaceFile(Files.JoinPath(Model.TrashDirectory(true), "orphan.txt.trashinfo"), "reserved") ||
+        !Model.TrashOne(orphan) ||
+        !Files.PathExists(Files.JoinPath(trash_files, "orphan (2).txt")) {
+        return Fail(*manager, "orphan trash collision", manager.error, 45)
+    }
+    dangling := Files.JoinPath(source, "dangling.txt")
+    if !Model.CreateSymbolicLink(Files.JoinPath(source, "missing-target"), dangling) ||
+        Model.UniquePath(source, "dangling.txt") == dangling ||
+        Model.CreateFile(*manager, "dangling.txt") {
+        return Fail(*manager, "dangling link collision", dangling, 46)
+    }
+
+    directory_link := Files.JoinPath(source, "directory-link")
+    directory_link_copy := Files.JoinPath(source, "directory-link-copy")
+    dangling_copy := Files.JoinPath(source, "dangling-copy")
+    if !Model.CreateSymbolicLink(folder, directory_link) ||
+        !Model.CopyPath(directory_link, directory_link_copy) ||
+        Files.PathStatus(directory_link_copy, false).kind != .Link ||
+        !Model.CopyPath(dangling, dangling_copy) ||
+        Files.PathStatus(dangling_copy, false).kind != .Link {
+        return Fail(*manager, "copy preserves directory and dangling links", directory_link_copy, 49)
+    }
+    descendant := Files.JoinPath(folder, "recursive-copy")
+    if Model.CopyPath(folder, descendant) || Files.PathExists(descendant) ||
+        Model.CopyPath(source, descendant) ||
+        Model.CopyPath(Files.JoinPath(source, "alpha.txt"), Files.JoinPath(source, "alpha.txt")) {
+        return Fail(*manager, "copy rejects existing and recursive targets", descendant, 50)
+    }
+    copied_tree := Files.JoinPath(source, "folder-copy")
+    if !Model.CopyPath(folder, copied_tree) ||
+        !Files.PathExists(Files.JoinPath(copied_tree, "nested.txt")) ||
+        Model.CopyPath(folder, copied_tree) {
+        return Fail(*manager, "copy tree without merging", copied_tree, 51)
+    }
+
+    if !SelectName(*manager, "beta.txt") || !Model.CopySelection(*manager, true) ||
+        !Files.RemoveTree(Files.JoinPath(source, "beta.txt")) ||
+        !Model.OpenPathTracked(*manager, folder) || Model.Paste(*manager) ||
+        manager.error == "" || manager.clipboard.paths.count != 1 ||
+        manager.clipboard.mode != .ClipboardCut {
+        return Fail(*manager, "failed cut preserves pending clipboard and error", manager.error, 47)
+    }
+
+    Model.Dispose(*manager)
+    if manager.cwd_text.bytes.count != 0 || manager.entry_text.count != 0 ||
+        manager.clipboard.text.count != 0 || manager.operation_text.count != 0 {
+        return Fail(*manager, "dispose releases owned text", "", 52)
+    }
+    Model.Init(*manager, source)
+    if manager.tabs.count != 1 || manager.clipboard.paths.count != 0 ||
+        manager.back.count != 0 || manager.forward.count != 0 ||
+        manager.prompt != .PromptNone || manager.cwd != source {
+        return Fail(*manager, "reopen clean state", manager.cwd, 48)
+    }
+    Model.Dispose(*manager)
+    if !Files.RemoveTree(root) { return 70 }
+    print("Shelf model navigation, operations, tabs, history, hidden files, search, trash and links passed\n")
+    return 0
+}

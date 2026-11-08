@@ -1,154 +1,55 @@
+ZIRAN ?= ./scripts/ziran.sh
 CC ?= cc
-ENGINE_DIR ?= ../kryon
-BUILD_ROOT ?= build
-KRYON_BACKEND ?= raylib
-PLAN9PORT_DIR ?= /mnt/storage/Projects/plan9port
-PREFIX ?= $(HOME)/.local
-BINDIR ?= $(PREFIX)/bin
-RILL_APP_HOSTDIR ?= $(PREFIX)/lib/rill/apps
-APPDIR ?= $(PREFIX)/share/applications
-INSTALL ?= install
 
-UNAME_S := $(shell uname -s 2>/dev/null)
-UNAME_M := $(shell uname -m 2>/dev/null)
-ifeq ($(UNAME_M),amd64)
-  ARCH := x86_64
-else
-  ARCH := $(UNAME_M)
-endif
-ifeq ($(UNAME_S),Linux)
-  PLATFORM := linux
-else ifeq ($(UNAME_S),FreeBSD)
-  PLATFORM := freebsd
-else ifeq ($(UNAME_S),Darwin)
-  PLATFORM := macos
-else
-  PLATFORM := $(UNAME_S)
-endif
+SOURCES := $(wildcard src/*.zi) $(wildcard tests/*.zi) ziran.toml ziran.lock scripts/ziran.sh
+NATIVE_FLAGS := -std=c99 -O2 -ffunction-sections -fdata-sections -Wl,--gc-sections
+HOST_TEST_ENV := env -u DISPLAY -u WAYLAND_DISPLAY -u WAYLAND_SOCKET -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS -u SESSION_MANAGER -u ICEAUTHORITY -u GTK_THEME YUE_DESKTOP_RECOVERY=0 HOME=$(CURDIR)/build/host-test-fixture XDG_CONFIG_HOME=$(CURDIR)/build/host-test-fixture/config XDG_DATA_HOME=$(CURDIR)/build/host-test-fixture/data-home
 
-BUILD_DIR ?= $(BUILD_ROOT)/$(PLATFORM)-$(ARCH)
-ENGINE_BUILD_ROOT ?= $(ENGINE_DIR)/build
-ENGINE_BUILD_DIR ?= $(ENGINE_BUILD_ROOT)/$(PLATFORM)-$(ARCH)
-ENGINE_LIB = $(ENGINE_BUILD_DIR)/libkryon.a
-RAYLIB_A = $(ENGINE_BUILD_DIR)/raylib/libraylib.a
-LIBOQS_A = $(ENGINE_BUILD_DIR)/vendor/liboqs/lib/liboqs.a
-CURL_A = $(ENGINE_BUILD_DIR)/vendor/curl/lib/libcurl.a
-CMARK_A = $(ENGINE_BUILD_DIR)/vendor/cmark-gfm/src/libcmark-gfm.a
-CMARK_EXT_A = $(ENGINE_BUILD_DIR)/vendor/cmark-gfm/extensions/libcmark-gfm-extensions.a
-BOX2D_A = $(ENGINE_BUILD_DIR)/vendor/box2d/src/libbox2d.a
+.PHONY: build check test test-ui test-installed run install clean test-saved
 
-APP = $(BUILD_DIR)/bin/shelf
-HOST_LIB = $(BUILD_DIR)/lib/libshelf_host.a
-HOST_SO = $(BUILD_DIR)/lib/shelf-host.so
-TEST = $(BUILD_DIR)/tests/shelf_model_test
-APP_OBJS = $(BUILD_DIR)/src/main.o $(BUILD_DIR)/src/shelf.o
-HOST_OBJS = $(BUILD_DIR)/src/shelf.o $(BUILD_DIR)/src/shelf_host.o
-TEST_OBJS = $(BUILD_DIR)/tests/shelf_model_test.o $(BUILD_DIR)/src/shelf.o
+build:
+	build-queue -- $(ZIRAN) build
 
-RAY_SDL_CFLAGS ?= $(shell pkg-config --cflags sdl2 2>/dev/null)
-RAY_SDL_LDLIBS ?= $(shell pkg-config --libs sdl2 2>/dev/null)
-RAY_GL_CFLAGS ?= $(shell pkg-config --cflags libdrm gbm egl glesv2 2>/dev/null)
-RAY_GL_LDLIBS ?= $(shell pkg-config --libs libdrm gbm egl glesv2 2>/dev/null)
-RAY_LDLIBS ?= $(strip $(RAY_SDL_LDLIBS) $(RAY_GL_LDLIBS))
-ifeq ($(KRYON_BACKEND),raylib)
-  BACKEND_CFLAGS = $(RAY_SDL_CFLAGS) $(RAY_GL_CFLAGS)
-  BACKEND_LIBS = $(RAYLIB_A)
-  BACKEND_LDLIBS = $(RAY_LDLIBS)
-else ifeq ($(KRYON_BACKEND),libdraw)
-  BACKEND_CFLAGS = -DKRYON_BACKEND_LIBDRAW -I$(PLAN9PORT_DIR)/include
-  BACKEND_LIBS =
-  BACKEND_LDLIBS = -L$(PLAN9PORT_DIR)/lib -ldraw -lmemdraw -lmux -lthread -l9
-else
-  $(error Unknown KRYON_BACKEND '$(KRYON_BACKEND)' (expected raylib or libdraw))
-endif
-SYSTEM_THEME_PKG := $(shell if pkg-config --exists gtk+-3.0 2>/dev/null; then printf '%s' gtk+-3.0; fi)
-SYSTEM_THEME_CFLAGS := $(shell if [ -n "$(SYSTEM_THEME_PKG)" ]; then pkg-config --cflags $(SYSTEM_THEME_PKG); fi)
-SYSTEM_THEME_LDLIBS := $(shell if [ -n "$(SYSTEM_THEME_PKG)" ]; then pkg-config --libs $(SYSTEM_THEME_PKG); fi)
-ifneq ($(SYSTEM_THEME_PKG),)
-  CPPFLAGS += -DFILE_MANAGER_HAS_GDK_PIXBUF=1
-endif
-CURL_CODEC_LDLIBS ?= $(strip \
-  $(shell pkg-config --libs libbrotlidec 2>/dev/null) \
-  $(shell pkg-config --libs libbrotlicommon 2>/dev/null) \
-  $(shell pkg-config --libs libzstd 2>/dev/null))
-ifeq ($(PLATFORM),linux)
-  PLATFORM_LDLIBS ?= -ldl -lrt
-else
-  PLATFORM_LDLIBS ?=
-endif
+check:
+	build-queue -- $(ZIRAN) check
+	build-queue -- $(ZIRAN) check --project src/model.zi
+	build-queue -- $(ZIRAN) check --project tests/model_test.zi
 
-CFLAGS ?= -Wall -Wextra -O2
-ifeq ($(PLATFORM),linux)
-  CFLAGS += -fPIC
-endif
-CPPFLAGS += -Isrc -I$(ENGINE_DIR)/include \
-	$(BACKEND_CFLAGS) $(SYSTEM_THEME_CFLAGS) \
-	-DHAS_LIBOQS=1 -I$(ENGINE_BUILD_DIR)/vendor/liboqs/include \
-	-DHAS_LIBCURL=1 -DCURL_STATICLIB -I$(ENGINE_BUILD_DIR)/vendor/curl/include \
-	-DKRYON_HAS_CMARK_GFM=1 \
-	-I$(ENGINE_DIR)/vendor/cmark-gfm/src -I$(ENGINE_DIR)/vendor/cmark-gfm/extensions \
-	-I$(ENGINE_BUILD_DIR)/vendor/cmark-gfm/src -I$(ENGINE_BUILD_DIR)/vendor/cmark-gfm/extensions
-LDLIBS += $(BACKEND_LIBS) $(BOX2D_A) $(BACKEND_LDLIBS) $(LIBOQS_A) \
-	$(CURL_A) -lssl -lcrypto -lpthread $(CMARK_EXT_A) $(CMARK_A) \
-	$(SYSTEM_THEME_LDLIBS) $(CURL_CODEC_LDLIBS) -lz -lm $(PLATFORM_LDLIBS)
+run:
+	build-queue -- $(ZIRAN) run
 
-.PHONY: all run test clean install engine
+build/model-test: $(SOURCES)
+	build-queue -- /bin/sh -c \
+		'$(ZIRAN) build --project --target=c --entry model_test:main -o build/model-test-c tests/model_test.zi && \
+		$(CC) $(NATIVE_FLAGS) -I$$($(ZIRAN) pkg path ziran)/include -Ibuild/model-test-c build/model-test-c/*.c -lm -o build/model-test'
 
-all: $(APP) $(HOST_LIB) $(HOST_SO)
+build/host-test: $(SOURCES)
+	build-queue -- $(ZIRAN) build --project --target=c --exe --entry host_test:main -o build/host-test-c tests/host_test.zi
+	cp build/host-test-c/host_test build/host-test
 
-engine:
-	$(MAKE) -C $(ENGINE_DIR) KRYON_BACKEND=$(KRYON_BACKEND) \
-		BUILD_ROOT=$(ENGINE_BUILD_ROOT) $(ENGINE_LIB)
+test: build/model-test build/host-test
+	rm -rf build/model-test-fixture
+	mkdir -p build/model-test-fixture
+	XDG_DATA_HOME=$(CURDIR)/build/model-test-fixture/data-home build/model-test $(CURDIR)/build/model-test-fixture
+	$(HOST_TEST_ENV) build/host-test $(CURDIR)/build/host-test-fixture
+	$(MAKE) test-saved
 
-$(APP): engine $(APP_OBJS) $(ENGINE_LIB) $(BACKEND_LIBS) | $(BUILD_DIR)/bin
-	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $(APP_OBJS) \
-		-Wl,--whole-archive $(ENGINE_LIB) -Wl,--no-whole-archive \
-		$(LDLIBS)
+test-saved:
+	build-queue -- $(ZIRAN) ir --project --entry model_test:main -o build/model-test-ir tests/model_test.zi
+	build-queue -- $(ZIRAN) build --project --target=c --exe --entry model_test:main -o build/model-test-saved-c build/model-test-ir/model_test.zir
+	XDG_DATA_HOME=$(CURDIR)/build/model-test-fixture/data-home build/model-test-saved-c/model_test $(CURDIR)/build/model-test-fixture
+	build-queue -- $(ZIRAN) ir --project --entry host_test:main -o build/host-test-ir tests/host_test.zi
+	build-queue -- $(ZIRAN) build --project --target=c --exe --entry host_test:main -o build/host-test-saved-c build/host-test-ir/host_test.zir
+	$(HOST_TEST_ENV) build/host-test-saved-c/host_test $(CURDIR)/build/host-test-fixture
 
-$(HOST_LIB): engine $(HOST_OBJS) | $(BUILD_DIR)/lib
-	ar rcs $@ $(HOST_OBJS)
+test-ui: build
+	env -u DISPLAY -u WAYLAND_DISPLAY -u WAYLAND_SOCKET -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS -u SESSION_MANAGER -u ICEAUTHORITY YUE_DESKTOP_RECOVERY=0 dbus-run-session -- xvfb-run -a python3 tests/ui_test.py
 
-$(HOST_SO): engine $(HOST_OBJS) | $(BUILD_DIR)/lib
-	$(CC) $(CFLAGS) -shared -o $@ $(HOST_OBJS)
+test-installed:
+	env -u DISPLAY -u WAYLAND_DISPLAY -u WAYLAND_SOCKET -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS -u SESSION_MANAGER -u ICEAUTHORITY YUE_DESKTOP_RECOVERY=0 dbus-run-session -- xvfb-run -a python3 tests/ui_test.py --executable "$(HOME)/.local/bin/shelf" --capture-prefix installed-ui
 
-$(TEST): engine $(TEST_OBJS) $(ENGINE_LIB) $(BACKEND_LIBS) | $(BUILD_DIR)/tests
-	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $(TEST_OBJS) \
-		-Wl,--whole-archive $(ENGINE_LIB) -Wl,--no-whole-archive \
-		$(LDLIBS)
-
-$(BUILD_DIR)/src/%.o: src/%.c src/*.h | $(BUILD_DIR)/src
-	$(CC) $(CFLAGS) $(CPPFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/tests/%.o: tests/%.c src/*.h | $(BUILD_DIR)/tests
-	$(CC) $(CFLAGS) $(CPPFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/bin $(BUILD_DIR)/lib $(BUILD_DIR)/src $(BUILD_DIR)/tests:
-	mkdir -p $@
-
-run: $(APP)
-	$(APP)
-
-test: $(TEST)
-	$(TEST)
-
-install: $(APP) $(HOST_SO)
-	mkdir -p $(DESTDIR)$(BINDIR) $(DESTDIR)$(RILL_APP_HOSTDIR) $(DESTDIR)$(APPDIR)
-	$(INSTALL) -m 755 $(APP) $(DESTDIR)$(BINDIR)/shelf
-	$(INSTALL) -m 755 $(HOST_SO) $(DESTDIR)$(RILL_APP_HOSTDIR)/shelf-host.so
-	{ \
-		printf '%s\n' '[Desktop Entry]'; \
-		printf '%s\n' 'Type=Application'; \
-		printf '%s\n' 'Name=Shelf'; \
-		printf '%s\n' 'Comment=Browse files'; \
-		printf '%s\n' 'Exec=$(BINDIR)/shelf'; \
-		printf '%s\n' 'Icon=system-file-manager'; \
-		printf '%s\n' 'Terminal=false'; \
-		printf '%s\n' 'Categories=System;FileManager;FileTools;'; \
-		printf '%s\n' 'MimeType=inode/directory;'; \
-		printf '%s\n' 'Keywords=files;file manager;shelf;'; \
-		printf '%s\n' 'StartupNotify=true'; \
-	} > $(DESTDIR)$(APPDIR)/shelf.desktop
-	if command -v update-desktop-database >/dev/null 2>&1; then update-desktop-database $(DESTDIR)$(APPDIR); fi
+install:
+	build-queue -- $(ZIRAN) install
 
 clean:
-	rm -rf $(BUILD_ROOT)
+	rm -rf build

@@ -1,0 +1,43 @@
+[package]
+name = "shelf"
+entry = "src/app.zi"
+module_roots = ["src", "tests"]
+bridge_modules = ["app"]
+tool = "kryon"
+
+[toolchain]
+git = "https://github.com/ziranlang/ziran.git"
+ref = "master"
+
+[dependencies.kryon]
+git = "https://github.com/kryonlabs/kryon.git"
+ref = "master"
+
+[exports]
+model = "src/model.zi"
+app_host = "src/app_host.zi"
+
+[install]
+bin = "shelf"
+
+[tool.kryon]
+default_profile = "desktop"
+entry = "src/app.zi"
+
+[tool.kryon.profiles.desktop]
+backend = "desktop"
+assets = "assets"
+
+[tool.kryon.profiles.shot]
+backend = "pixmap"
+assets = "assets"
+
+[tool.kryon.install]
+profile = "desktop"
+name = "Shelf"
+comment = "Ziran file manager"
+categories = "Utility;FileManager;Core;"
+
+[dependencies.data_views]
+git = "https://github.com/kryonlabs/data-views.git"
+ref = "master"

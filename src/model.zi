@@ -1,0 +1,942 @@
+#scope_module
+Files :: #import "std/file_tree_linux";
+WholeFiles :: #import "std/file";
+DateTime :: #import "std/date_time_linux";
+Calendar :: #import "std/calendar";
+Env :: #import "std/environment_linux";
+using Format :: #import "std/format";
+Number :: #import "std/number_text";
+Strings :: #import "std/c_string";
+using Bytes :: #import "std/byte_text_linux";
+using TextBuffer :: #import "std/text_buffer";
+
+libc :: #system_library "c";
+SymbolicLinkRaw :: (target: *u8, path: *u8) -> s32 #foreign libc "symlink";
+
+#scope_export
+MAX_ENTRIES :: 4096;
+MAX_SELECTION :: 256;
+MAX_HISTORY :: 64;
+MAX_TABS :: 8;
+PATH_MAX :: 4096;
+History :: struct {
+    paths: [MAX_HISTORY][PATH_MAX]u8
+    count: s32
+}
+
+SortMode :: enum {
+    SortName :: 0
+    SortSize :: 1
+    SortModified :: 2
+    SortType :: 3
+}
+
+ViewMode :: enum {
+    ViewIcon :: 0
+    ViewList :: 1
+    ViewCompact :: 2
+}
+
+ClipboardMode :: enum {
+    ClipboardNone :: 0
+    ClipboardCopy :: 1
+    ClipboardCut :: 2
+}
+
+PromptKind :: enum {
+    PromptNone :: 0
+    PromptRename :: 1
+    PromptFolder :: 2
+    PromptFile :: 3
+    PromptLocation :: 4
+    PromptSearch :: 5
+}
+
+#scope_export
+Entry :: struct {
+    key: u64
+    name: string
+    path: string
+    info: Files.PathInfo
+}
+
+PathKey :: (path: string) -> u64 {
+    key: u64 = 14695981039346656037
+    for byte: path { key = (key ^ cast(u64)byte) * cast(u64)1099511628211 }
+    return ifx key == cast(u64)0 then cast(u64)1 else key
+}
+
+Clipboard :: struct {
+    paths: Vec(string)
+    text: Vec(Text)
+    mode: ClipboardMode
+}
+
+#scope_export
+Manager :: struct {
+    // Public strings borrow these owned bytes until the next model mutation.
+    cwd_text: Text
+    search_root_text: Text
+    search_query_text: Text
+    error_text: Text
+    entry_text: Vec(Text)
+    tab_text: [MAX_TABS]Text
+    operation_text: Vec(Text)
+    cwd: string
+    entries: Vec(Entry)
+    selected: Vec(bool)
+    cursor: s32
+    anchor: s32
+    scroll: s32
+    show_hidden: bool
+    search_active: bool
+    search_root: string
+    search_query: string
+    sort_mode: SortMode
+    sort_reverse: bool
+    view_mode: ViewMode
+    reveal_focus: bool
+    tabs: Vec(string)
+    active_tab: s32
+    back: History
+    forward: History
+    clipboard: Clipboard
+    prompt: PromptKind
+    error: string
+}
+
+Environment :: (name: string) -> string {
+    return Env.EnvironmentText(name)
+}
+
+HomePath :: () -> string {
+    return Environment("HOME")
+}
+
+PathParent :: (path: string) -> string {
+    return Files.PathParent(path)
+}
+
+DataHome :: () -> Text {
+    value := Environment("XDG_DATA_HOME")
+    if value != "" { return TextCopy(value) }
+    home := HomePath()
+    if home == "" { return .{} }
+    return Files.JoinPath(home, ".local/share")
+}
+
+TrashDirectory :: (info: bool) -> Text {
+    root: Text = DataHome()
+    if root.bytes.count == 0 { return .{} }
+    return Files.JoinPath(root, ifx info then "Trash/info" else "Trash/files")
+}
+
+SameText :: (left: string, right: string) -> bool {
+    return left == right
+}
+
+ContainsFold :: (value: string, needle: string) -> bool {
+    if needle.count == 0 { return true }
+    at: s64 = 0
+    while at + needle.count <= value.count {
+        same := true
+        index: s64 = 0
+        while index < needle.count && same {
+            same = LowerASCII(value[at + index]) == LowerASCII(needle[index])
+            index += 1
+        }
+        if same { return true }
+        at += 1
+    }
+    return false
+}
+
+TextBeforeFold :: (left: string, right: string) -> bool {
+    index: s64 = 0
+    while index < left.count && index < right.count {
+        first := LowerASCII(left[index])
+        second := LowerASCII(right[index])
+        if first != second { return first < second }
+        index += 1
+    }
+    return left.count < right.count
+}
+
+JoinText :: (first: string, second: string) -> Text {
+    bytes: Vec(u8)
+    Append(*bytes, first)
+    Append(*bytes, second)
+    return BuilderFinish(bytes)
+}
+
+LowerASCII :: (value: u8) -> u8 {
+    if value >= cast(u8)65 && value <= cast(u8)90 { return value + cast(u8)32 }
+    return value
+}
+
+PathReadable :: (path: string) -> bool {
+    info := Files.PathStatus(path, false)
+    return info.kind != .Missing
+}
+
+RenamePath :: (source: string, target: string) -> bool {
+    return WholeFiles.RenameNoReplace(source, target)
+}
+
+SetError :: (manager: *Manager, message: string) {
+    SetStoredText(*manager.error_text, message)
+    manager.error = TextView(manager.error_text)
+}
+
+SetStoredText :: (owner: *Text, value: string) {
+    copy: Text = TextCopy(value)
+    VecSwap(owner.bytes, copy.bytes)
+}
+
+FreeNames :: (names: *Vec(string)) {
+    Files.FreeDirectoryNames(names)
+}
+
+EntryBefore :: (manager: *Manager, left: *Entry, right: *Entry) -> bool {
+    // Folders stay together first in either direction. Reverse the strict
+    // comparison, never its boolean result (equal entries must compare false).
+    if left.info.kind == .Directory && right.info.kind != .Directory { return true }
+    if left.info.kind != .Directory && right.info.kind == .Directory { return false }
+    if manager.sort_reverse { return EntryCompare(manager.sort_mode, right, left) < 0 }
+    return EntryCompare(manager.sort_mode, left, right) < 0
+}
+
+TextCompare :: (left: string, right: string) -> s32 {
+    for index: cast(s64)0..left.count - 1 {
+        if index >= right.count { return 1 }
+        if left[index] < right[index] { return -1 }
+        if left[index] > right[index] { return 1 }
+    }
+    if left.count < right.count { return -1 }
+    return 0
+}
+
+EntryCompare :: (mode: SortMode, left: *Entry, right: *Entry) -> s32 {
+    if mode == .SortSize && left.info.size != right.info.size {
+        return ifx left.info.size < right.info.size then -1 else 1
+    }
+    if mode == .SortModified && left.info.modified != right.info.modified {
+        return ifx left.info.modified < right.info.modified then -1 else 1
+    }
+    if mode == .SortModified && left.info.modified_nanoseconds != right.info.modified_nanoseconds {
+        return ifx left.info.modified_nanoseconds < right.info.modified_nanoseconds then -1 else 1
+    }
+    if mode == .SortType {
+        order := TextCompare(EntryType(left), EntryType(right))
+        if order != 0 { return order }
+    }
+    if TextBeforeFold(left.name, right.name) { return -1 }
+    if TextBeforeFold(right.name, left.name) { return 1 }
+    order := TextCompare(left.name, right.name)
+    if order != 0 { return order }
+    return TextCompare(left.path, right.path)
+}
+
+EntryType :: (entry: *Entry) -> string {
+    if entry.info.kind == .Directory { return "Folder" }
+    if entry.info.kind == .File { return "File" }
+    if entry.info.kind == .Link { return "Symbolic link" }
+    return "Other"
+}
+
+SortEntries :: (manager: *Manager) {
+    if manager.entries.count < 2 { return }
+    cursor_path := EntryPath(manager, manager.cursor)
+    anchor_path := EntryPath(manager, manager.anchor)
+    for index: cast(s64)1..manager.entries.count - 1 {
+        current := manager.entries[index]
+        selected := manager.selected[index]
+        at := index - 1
+        while at >= 0 && EntryBefore(manager, *current, *manager.entries[at]) {
+            manager.entries[at + 1] = manager.entries[at]
+            manager.selected[at + 1] = manager.selected[at]
+            at -= 1
+        }
+        manager.entries[at + 1] = current
+        manager.selected[at + 1] = selected
+    }
+    manager.cursor = -1
+    manager.anchor = -1
+    for index: cast(s32)0..cast(s32)manager.entries.count - 1 {
+        if manager.entries[index].path == cursor_path { manager.cursor = index }
+        if manager.entries[index].path == anchor_path { manager.anchor = index }
+    }
+    manager.reveal_focus = true
+}
+
+SetSort :: (manager: *Manager, mode: SortMode, reverse: bool) {
+    manager.sort_mode = mode
+    manager.sort_reverse = reverse
+    SortEntries(manager)
+    manager.reveal_focus = true
+}
+
+SetView :: (manager: *Manager, mode: ViewMode) {
+    if manager.view_mode == mode { return }
+    manager.view_mode = mode
+    manager.scroll = 0
+    manager.reveal_focus = true
+}
+
+ClearEntries :: (manager: *Manager) {
+    VecFree(manager.entries)
+    VecFree(manager.entry_text)
+    VecFree(manager.selected)
+    manager.cursor = -1
+    manager.anchor = -1
+    manager.scroll = 0
+    manager.reveal_focus = true
+}
+
+AppendEntry :: (manager: *Manager, name: string, path: string,
+    info: Files.PathInfo) -> bool {
+    entry: Entry
+    owned_name: Text = TextCopy(name)
+    owned_path: Text = TextCopy(path)
+    if !VecPush(manager.entry_text, owned_name) || !VecPush(manager.entry_text, owned_path) { return false }
+    entry.name = TextView(manager.entry_text[manager.entry_text.count - 2])
+    entry.path = TextView(manager.entry_text[manager.entry_text.count - 1])
+    entry.key = PathKey(entry.path)
+    entry.info = info
+    if !VecPush(manager.entries, entry) { return false }
+    return VecPush(manager.selected, false)
+}
+
+SyncSelectionSize :: (manager: *Manager) -> bool {
+    if manager.selected.count != manager.entries.count {
+        if !VecResize(manager.selected, manager.entries.count) { return false }
+    }
+    return true
+}
+
+SelectFirst :: (manager: *Manager) {
+    if !SyncSelectionSize(manager) { return }
+    if manager.entries.count > 0 {
+        manager.selected[0] = true
+        manager.cursor = 0
+        manager.anchor = 0
+    }
+}
+
+RememberTab :: (manager: *Manager) {
+    if manager.active_tab >= 0 && manager.active_tab < manager.tabs.count {
+        SetStoredText(*manager.tab_text[manager.active_tab], manager.cwd)
+        manager.tabs[manager.active_tab] = TextView(manager.tab_text[manager.active_tab])
+    }
+}
+
+OpenPath :: (manager: *Manager, path: string) -> bool {
+    if path == "" { return false }
+    resolved: Text = Files.ResolvePath(path)
+    if resolved.bytes.count == 0 || Files.PathStatus(resolved).kind != .Directory {
+        SetError(manager, path)
+        return false
+    }
+    names: Vec(string)
+    if !Files.ListDirectory(resolved, *names) {
+        SetError(manager, resolved)
+        return false
+    }
+    SetStoredText(*manager.cwd_text, resolved)
+    manager.cwd = TextView(manager.cwd_text)
+    ClearEntries(manager)
+    for name: names {
+        if name == "" || (!manager.show_hidden && name[0] == #char ".") { continue }
+        full: Text = Files.JoinPath(resolved, name)
+        info := Files.PathStatus(full, true)
+        if info.kind == .Missing { info.kind = Files.PathKind.Other }
+        if !AppendEntry(manager, name, full, info) { break }
+    }
+    FreeNames(*names)
+    manager.search_active = false
+    SetStoredText(*manager.search_query_text, "")
+    manager.search_query = ""
+    SetStoredText(*manager.search_root_text, "")
+    manager.search_root = ""
+    SetError(manager, "")
+    SortEntries(manager)
+    SelectFirst(manager)
+    RememberTab(manager)
+    return true
+}
+
+PushHistory :: (history: *History, path: string) {
+    if history.count >= MAX_HISTORY {
+        index: s32 = 1
+        while index < MAX_HISTORY {
+            history.paths[index - 1] = history.paths[index]
+            index += 1
+        }
+        history.count = MAX_HISTORY - 1
+    }
+    if !Strings.CopyCString(path, history.paths[history.count][:]) { return }
+    history.count += 1
+}
+
+PopHistory :: (history: *History, output: []u8) -> bool {
+    if history.count <= 0 { return false }
+    source := history.paths[history.count - 1]
+    length: s64 = 0
+    while length < source.count && length < output.count && source[length] != 0 {
+        output[length] = source[length]
+        length += 1
+    }
+    if length >= output.count { return false }
+    output[length] = 0
+    history.count -= 1
+    return true
+}
+
+OpenPathTracked :: (manager: *Manager, path: string) -> bool {
+    old_buffer: [PATH_MAX]u8
+    old := ""
+    if Strings.CopyCString(manager.cwd, old_buffer[:]) { old = TextUntilNul(old_buffer[:]) }
+    if !OpenPath(manager, path) { return false }
+    if old != "" && old != manager.cwd {
+        PushHistory(*manager.back, old)
+        manager.forward.count = 0
+    }
+    return true
+}
+
+NavigateBack :: (manager: *Manager) -> bool {
+    path_buffer: [PATH_MAX]u8
+    if !PopHistory(*manager.back, path_buffer[:]) { return false }
+    path := TextUntilNul(path_buffer[:])
+    current_buffer: [PATH_MAX]u8
+    current := ""
+    if Strings.CopyCString(manager.cwd, current_buffer[:]) { current = TextUntilNul(current_buffer[:]) }
+    if !OpenPath(manager, path) { return false }
+    PushHistory(*manager.forward, current)
+    return true
+}
+
+NavigateForward :: (manager: *Manager) -> bool {
+    path_buffer: [PATH_MAX]u8
+    if !PopHistory(*manager.forward, path_buffer[:]) { return false }
+    path := TextUntilNul(path_buffer[:])
+    current_buffer: [PATH_MAX]u8
+    current := ""
+    if Strings.CopyCString(manager.cwd, current_buffer[:]) { current = TextUntilNul(current_buffer[:]) }
+    if !OpenPath(manager, path) { return false }
+    PushHistory(*manager.back, current)
+    return true
+}
+
+SearchDirectory :: (manager: *Manager, directory: string, query: string,
+    depth: s32) {
+    if depth > 32 || manager.entries.count >= MAX_ENTRIES { return }
+    names: Vec(string)
+    if !Files.ListDirectory(directory, *names) { return }
+    for name: names {
+        if manager.entries.count >= MAX_ENTRIES { break }
+        if !manager.show_hidden && name != "" && name[0] == #char "." { continue }
+        path: Text = Files.JoinPath(directory, name)
+        info := Files.PathStatus(path, true)
+        if ContainsFold(name, query) {
+            if !AppendEntry(manager, name, path, info) { break }
+        }
+        if info.kind == .Directory && Files.PathStatus(path, false).kind != .Link {
+            SearchDirectory(manager, path, query, depth + 1)
+        }
+    }
+    FreeNames(*names)
+}
+
+Search :: (manager: *Manager, query: string) -> bool {
+    if query == "" { return false }
+    root := ifx manager.search_active && manager.search_root != "" then manager.search_root else manager.cwd
+    ClearEntries(manager)
+    SearchDirectory(manager, root, query, 0)
+    manager.search_active = true
+    SetStoredText(*manager.search_root_text, root)
+    manager.search_root = TextView(manager.search_root_text)
+    SetStoredText(*manager.search_query_text, query)
+    manager.search_query = TextView(manager.search_query_text)
+    SetError(manager, "")
+    SortEntries(manager)
+    SelectFirst(manager)
+    return true
+}
+
+Refresh :: (manager: *Manager) -> bool {
+    if manager.search_active && manager.search_query != "" {
+        return Search(manager, manager.search_query)
+    }
+    return OpenPath(manager, manager.cwd)
+}
+
+Init :: (manager: *Manager, start_path: string = "") {
+    if manager == null { return }
+    Dispose(manager)
+    manager.sort_mode = .SortName
+    path := ifx start_path != "" then start_path else HomePath()
+    if !OpenPath(manager, path) { unused OpenPath(manager, "/") }
+    SetStoredText(*manager.tab_text[0], manager.cwd)
+    unused VecPush(manager.tabs, "")
+    manager.tabs[0] = TextView(manager.tab_text[0])
+    manager.active_tab = 0
+}
+
+Dispose :: (manager: *Manager) {
+    if manager == null { return }
+    ClearEntries(manager)
+    VecFree(manager.cwd_text.bytes)
+    VecFree(manager.search_root_text.bytes)
+    VecFree(manager.search_query_text.bytes)
+    VecFree(manager.error_text.bytes)
+    for index: cast(s32)0..MAX_TABS - 1 { VecFree(manager.tab_text[index].bytes) }
+    VecFree(manager.operation_text)
+    manager.cwd = ""
+    manager.search_root = ""
+    manager.search_query = ""
+    manager.error = ""
+    VecFree(manager.tabs)
+    VecFree(manager.clipboard.paths)
+    VecFree(manager.clipboard.text)
+    manager.clipboard.mode = .ClipboardNone
+    manager.back.count = 0
+    manager.forward.count = 0
+    manager.active_tab = 0
+    manager.search_active = false
+    manager.show_hidden = false
+    manager.sort_mode = .SortName
+    manager.sort_reverse = false
+    manager.view_mode = .ViewList
+    manager.prompt = .PromptNone
+}
+
+NewTab :: (manager: *Manager, path: string = "") -> bool {
+    if manager.tabs.count >= MAX_TABS { return false }
+    RememberTab(manager)
+    old_path: Text = TextCopy(manager.cwd)
+    target := ifx path != "" then path else TextView(old_path)
+    old_active := manager.active_tab
+    if !OpenPath(manager, target) {
+        unused OpenPath(manager, old_path)
+        manager.active_tab = old_active
+        return false
+    }
+    SetStoredText(*manager.tab_text[old_active], old_path)
+    manager.active_tab = cast(s32)manager.tabs.count
+    SetStoredText(*manager.tab_text[manager.active_tab], manager.cwd)
+    unused VecPush(manager.tabs, "")
+    manager.tabs[old_active] = TextView(manager.tab_text[old_active])
+    manager.tabs[manager.active_tab] = TextView(manager.tab_text[manager.active_tab])
+    return true
+}
+
+SwitchTab :: (manager: *Manager, index: s32) -> bool {
+    if index < 0 || index >= manager.tabs.count { return false }
+    RememberTab(manager)
+    manager.active_tab = index
+    return OpenPath(manager, manager.tabs[index])
+}
+
+SyncTabViews :: (manager: *Manager) {
+    for target: cast(s64)0..manager.tabs.count - 1 {
+        manager.tabs[target] = TextView(manager.tab_text[target])
+    }
+}
+
+CloseTab :: (manager: *Manager, index: s32) -> bool {
+    if manager.tabs.count <= 1 || index < 0 || index >= manager.tabs.count { return false }
+    VecFree(manager.tab_text[index].bytes)
+    for source: cast(s64)index + 1..manager.tabs.count - 1 {
+        VecSwap(manager.tab_text[source - 1].bytes, manager.tab_text[source].bytes)
+    }
+    if !VecResize(manager.tabs, manager.tabs.count - 1) { return false }
+    SyncTabViews(manager)
+    if manager.active_tab > index { manager.active_tab -= 1 }
+    else if manager.active_tab == index {
+        if manager.active_tab >= manager.tabs.count { manager.active_tab = cast(s32)manager.tabs.count - 1 }
+        return OpenPath(manager, manager.tabs[manager.active_tab])
+    }
+    return true
+}
+
+NextTab :: (manager: *Manager) {
+    if manager.tabs.count > 1 {
+        unused SwitchTab(manager, cast(s32)((manager.active_tab + 1) % manager.tabs.count))
+    }
+}
+
+SelectedCount :: (manager: *Manager) -> s32 {
+    count: s32
+    for value: manager.selected {
+        if value { count += 1 }
+    }
+    return count
+}
+
+FirstSelected :: (manager: *Manager) -> s32 {
+    for index: cast(s32)0..manager.entries.count - 1 {
+        if manager.selected[index] { return cast(s32)index }
+    }
+    return manager.cursor
+}
+
+EntryCount :: (manager: *Manager) -> s64 {
+    return manager.entries.count
+}
+
+EntryIsDirectory :: (manager: *Manager, index: s32) -> bool {
+    return index >= 0 && index < manager.entries.count &&
+        manager.entries[index].info.kind == .Directory
+}
+
+EntryName :: (manager: *Manager, index: s32) -> string {
+    if index < 0 || index >= manager.entries.count { return "" }
+    return manager.entries[index].name
+}
+
+EntryPath :: (manager: *Manager, index: s32) -> string {
+    if index < 0 || index >= manager.entries.count { return "" }
+    return manager.entries[index].path
+}
+
+ClearSelection :: (manager: *Manager) {
+    for * value: manager.selected { value.* = false }
+}
+
+SelectOne :: (manager: *Manager, index: s32) {
+    ClearSelection(manager)
+    if index >= 0 && index < manager.entries.count {
+        manager.selected[index] = true
+        manager.cursor = index
+        manager.anchor = index
+    }
+}
+
+SelectAll :: (manager: *Manager) {
+    for * value: manager.selected { value.* = true }
+    if manager.entries.count > 0 {
+        manager.cursor = 0
+        manager.anchor = 0
+    }
+}
+
+PathPresent :: (path: string) -> bool {
+    return Files.PathStatus(path, false).kind != .Missing
+}
+
+PathAvailable :: (path: string, trash_info: bool) -> bool {
+    return !PathPresent(path) && (!trash_info || !PathPresent(TrashInfoPath(path)))
+}
+
+UniquePath :: (directory: string, name: string, trash_info: bool = false) -> Text {
+    candidate: Text = Files.JoinPath(directory, name)
+    if PathAvailable(candidate, trash_info) { return candidate }
+    stem := Files.PathStem(name)
+    suffix := Files.PathSuffix(name)
+    number: s32 = 2
+    while number > 0 {
+        digits: [16]u8
+        builder: Vec(u8)
+        Append(*builder, directory)
+        Append(*builder, "/")
+        Append(*builder, stem)
+        BuilderPrint(*builder, " (%)", Number.FormatInteger(number, digits[:]))
+        Append(*builder, suffix)
+        candidate = BuilderFinish(builder)
+        if PathAvailable(candidate, trash_info) { return TextCopy(candidate) }
+        number += 1
+    }
+    return .{}
+}
+
+SelectedPaths :: (manager: *Manager) -> Vec(string) {
+    VecFree(manager.operation_text)
+    paths: Vec(string)
+    for index: cast(s32)0..manager.entries.count - 1 {
+        if manager.selected[index] && paths.count < MAX_SELECTION {
+            owned: Text = TextCopy(manager.entries[index].path)
+            if !VecPush(manager.operation_text, owned) { break }
+            copied := TextView(manager.operation_text[manager.operation_text.count - 1])
+            unused VecPush(paths, copied)
+        }
+    }
+    return paths
+}
+
+ValidName :: (name: string) -> bool {
+    if name == "" || name == "." || name == ".." { return false }
+    for byte: name { if byte == #char "/" || byte == 0 { return false } }
+    return true
+}
+
+RefreshError :: (manager: *Manager, message: string) -> bool {
+    saved: Text = TextCopy(message)
+    unused Refresh(manager)
+    SetError(manager, saved)
+    return false
+}
+
+CreateFolder :: (manager: *Manager, name: string) -> bool {
+    if !ValidName(name) { SetError(manager, "Enter a file name without slashes"); return false }
+    path: Text = Files.JoinPath(manager.cwd, name)
+    if PathPresent(path) || !Files.CreateDirectory(path) {
+        SetError(manager, path)
+        return false
+    }
+    return Refresh(manager)
+}
+
+CreateFile :: (manager: *Manager, name: string) -> bool {
+    if !ValidName(name) { SetError(manager, "Enter a file name without slashes"); return false }
+    path: Text = Files.JoinPath(manager.cwd, name)
+    file := WholeFiles.OpenNew(path)
+    if !file.valid {
+        SetError(manager, path)
+        return false
+    }
+    if !WholeFiles.CloseFile(file) { SetError(manager, path); return false }
+    return Refresh(manager)
+}
+
+RenameSelection :: (manager: *Manager, name: string) -> bool {
+    if !ValidName(name) || SelectedCount(manager) != 1 { return false }
+    index := FirstSelected(manager)
+    if index < 0 { return false }
+    parent := Files.PathParent(manager.entries[index].path)
+    target: Text = Files.JoinPath(parent, name)
+    if !RenamePath(manager.entries[index].path, target) {
+        SetError(manager, target)
+        return false
+    }
+    return Refresh(manager)
+}
+
+EscapeTrashPath :: (path: string) -> Text {
+    builder: Vec(u8)
+    index: s64 = 0
+    while index < path.count {
+        byte := path[index]
+        if byte <= #char " " || byte >= cast(u8)127 || byte == #char "%" ||
+            byte == #char "?" || byte == #char "#" || byte == #char "[" || byte == #char "]" {
+            digits := "0123456789ABCDEF"
+            unused VecPush(builder, #char "%")
+            unused VecPush(builder, digits[cast(s32)byte / 16])
+            unused VecPush(builder, digits[cast(s32)byte % 16])
+        } else {
+            Append(*builder, path[index:index + 1])
+        }
+        index += 1
+    }
+    return BuilderFinish(builder)
+}
+
+UnescapeTrashPath :: (path: string) -> Text {
+    builder: Vec(u8)
+    index: s64 = 0
+    while index < path.count {
+        if path[index] != #char "%" {
+            if !VecPush(builder, path[index]) { break }
+            index += 1
+            continue
+        }
+        if index + 2 >= path.count { VecFree(builder); return .{} }
+        high := HexValue(path[index + 1])
+        low := HexValue(path[index + 2])
+        if high < 0 || low < 0 { VecFree(builder); return .{} }
+        if !VecPush(builder, cast(u8)(high * 16 + low)) { break }
+        index += 3
+    }
+    return BuilderFinish(builder)
+}
+
+HexValue :: (value: u8) -> s32 {
+    if value >= #char "0" && value <= #char "9" { return cast(s32)value - cast(s32)#char "0" }
+    if value >= #char "a" && value <= #char "f" { return cast(s32)value - cast(s32)#char "a" + 10 }
+    if value >= #char "A" && value <= #char "F" { return cast(s32)value - cast(s32)#char "A" + 10 }
+    return -1
+}
+
+TrashInfoPath :: (trashed_path: string) -> Text {
+    return Files.JoinPath(TrashDirectory(true),
+        JoinText(Files.PathName(trashed_path), ".trashinfo"))
+}
+
+TrashOriginalPath :: (info_path: string) -> Text {
+    bytes: Vec(u8)
+    if !WholeFiles.ReadFileInto(info_path, *bytes) { return .{} }
+    text := TextView(bytes[:bytes.count])
+    start: s64 = 0
+    while start <= text.count {
+        end := start
+        while end < text.count && text[end] != #char "\n" { end += 1 }
+        line := text[start:end]
+        if line.count > 5 && line[0:5] == "Path=" {
+            result: Text = UnescapeTrashPath(line[5:])
+            VecFree(bytes)
+            return result
+        }
+        if end >= text.count { break }
+        start = end + 1
+    }
+    VecFree(bytes)
+    return .{}
+}
+
+TrashOne :: (path: string) -> bool {
+    files: Text = TrashDirectory(false)
+    info: Text = TrashDirectory(true)
+    if files.bytes.count == 0 || info.bytes.count == 0 { return false }
+    if !Files.CreateDirectories(files) || !Files.CreateDirectories(info) { return false }
+    name := Files.PathName(path)
+    trashed: Text = UniquePath(files, name, true)
+    info_path: Text = TrashInfoPath(trashed)
+    stamp_buffer: [32]u8
+    stamp := Calendar.FormatDateTime(DateTime.LocalNow(), "%Y-%m-%dT%H:%M:%S", stamp_buffer[:])
+    if stamp == "" { return false }
+    if !RenamePath(path, trashed) { return false }
+    body: Vec(u8)
+    BuilderPrint(*body, "[Trash Info]\nPath=%\nDeletionDate=%\n",
+        EscapeTrashPath(path), stamp)
+    metadata: Text = BuilderFinish(body)
+    if !Files.ReplaceFile(info_path, metadata) {
+        unused RenamePath(trashed, path)
+        return false
+    }
+    return true
+}
+
+DeleteSelection :: (manager: *Manager, use_trash: bool) -> bool {
+    paths := SelectedPaths(manager)
+    if paths.count == 0 { return false }
+    for path: paths {
+        ok := ifx use_trash then TrashOne(path) else Files.RemoveTree(path)
+        if !ok {
+            VecFree(paths)
+            return RefreshError(manager, path)
+        }
+    }
+    VecFree(paths)
+    return Refresh(manager)
+}
+
+RestoreSelection :: (manager: *Manager) -> bool {
+    paths := SelectedPaths(manager)
+    if paths.count == 0 { return false }
+    for path: paths {
+        original: Text = TrashOriginalPath(TrashInfoPath(path))
+        parent := Files.PathParent(original)
+        if original.bytes.count == 0 || parent == "" || !Files.CreateDirectories(parent) {
+            VecFree(paths)
+            return RefreshError(manager, path)
+        }
+        target: Text = UniquePath(parent, Files.PathName(original))
+        if !RenamePath(path, target) || !Files.RemoveTree(TrashInfoPath(path)) {
+            VecFree(paths)
+            return RefreshError(manager, original)
+        }
+    }
+    VecFree(paths)
+    return Refresh(manager)
+}
+
+CopySelection :: (manager: *Manager, cut: bool) -> bool {
+    VecFree(manager.clipboard.paths)
+    VecFree(manager.clipboard.text)
+    paths := SelectedPaths(manager)
+    for path: paths {
+        owned: Text = TextCopy(path)
+        if !VecPush(manager.clipboard.text, owned) { break }
+        view := TextView(manager.clipboard.text[manager.clipboard.text.count - 1])
+        if !VecPush(manager.clipboard.paths, view) { break }
+    }
+    VecFree(paths)
+    if manager.clipboard.paths.count == 0 { manager.clipboard.mode = .ClipboardNone }
+    else if cut { manager.clipboard.mode = .ClipboardCut }
+    else { manager.clipboard.mode = .ClipboardCopy }
+    return manager.clipboard.paths.count > 0
+}
+
+IsWithin :: (directory: string, ancestor: string) -> bool {
+    if directory == ancestor { return true }
+    if ancestor == "/" { return true }
+    return directory.count > ancestor.count && directory[0:ancestor.count] == ancestor &&
+        directory[ancestor.count] == #char "/"
+}
+
+CopyPath :: (source: string, target: string) -> bool {
+    kind := Files.PathStatus(source, false).kind
+    if kind == .Link { return Files.CopySymbolicLink(source, target) }
+    if kind == .Directory {
+        parent: Text = Files.ResolvePath(Files.PathParent(target))
+        origin: Text = Files.ResolvePath(source)
+        if parent.bytes.count == 0 || origin.bytes.count == 0 || IsWithin(parent, origin) { return false }
+        return Files.CopyTreeNew(source, target)
+    }
+    if kind != .File { return false }
+    return Files.CopyFileNew(source, target)
+}
+
+Paste :: (manager: *Manager) -> bool {
+    if manager.clipboard.paths.count == 0 { return false }
+    ok := true
+    completed: s64 = 0
+    failed_path := ""
+    for path: manager.clipboard.paths {
+        target: Text = UniquePath(manager.cwd, Files.PathName(path))
+        moved: bool
+        if manager.clipboard.mode == .ClipboardCut { moved = RenamePath(path, target) }
+        else { moved = CopyPath(path, target) }
+        if !moved {
+            failed_path = path
+            ok = false
+            break
+        }
+        completed += 1
+    }
+    if manager.clipboard.mode == .ClipboardCut {
+        for index: completed..manager.clipboard.paths.count - 1 {
+            manager.clipboard.paths[index - completed] = manager.clipboard.paths[index]
+        }
+        unused VecResize(manager.clipboard.paths, manager.clipboard.paths.count - completed)
+        if manager.clipboard.paths.count == 0 { manager.clipboard.mode = .ClipboardNone }
+    }
+    if !ok { return RefreshError(manager, failed_path) }
+    return Refresh(manager)
+}
+
+DuplicateSelection :: (manager: *Manager) -> bool {
+    paths := SelectedPaths(manager)
+    if paths.count == 0 { return false }
+    for path: paths {
+        target: Text = UniquePath(Files.PathParent(path), Files.PathName(path))
+        if !CopyPath(path, target) {
+            VecFree(paths)
+            return RefreshError(manager, path)
+        }
+    }
+    VecFree(paths)
+    return Refresh(manager)
+}
+
+MakeLinkSelection :: (manager: *Manager) -> bool {
+    paths := SelectedPaths(manager)
+    if paths.count == 0 { return false }
+    for path: paths {
+        target: Text = UniquePath(Files.PathParent(path), JoinText(Files.PathName(path), " link"))
+        if !CreateSymbolicLink(path, target) {
+            VecFree(paths)
+            return RefreshError(manager, path)
+        }
+    }
+    VecFree(paths)
+    return Refresh(manager)
+}
+
+CreateSymbolicLink :: (target: string, path: string) -> bool {
+    target_bytes: [4096]u8
+    path_bytes: [4096]u8
+    if !Strings.CopyCString(target, target_bytes[:]) ||
+        !Strings.CopyCString(path, path_bytes[:]) { return false }
+    return SymbolicLinkRaw(*target_bytes[0], *path_bytes[0]) == 0
+}

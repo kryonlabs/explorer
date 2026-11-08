@@ -1,0 +1,815 @@
+#scope_module
+using Model :: #import "model";
+using UI :: #import "kryon/Widgets";
+using TextBuffer :: #import "std/text_buffer";
+Input :: #import "kryon/tree_input";
+Opener :: #import "kryon/open_uri";
+Keys :: #import "kryon/key_input";
+Number :: #import "std/number_text";
+Tables :: #import "data_views/TableView";
+DateTime :: #import "std/date_time_linux";
+Calendar :: #import "std/calendar";
+Preview :: #import "preview";
+using FormatText :: #import "std/format";
+SystemTheme :: #import "kryon/SystemThemeLinux";
+Palettes :: #import "kryon/widget_palette";
+
+#scope_export
+HostSession :: struct {
+    slot: s32
+    epoch: u64
+}
+
+HostViewport :: struct {
+    x: float32
+    y: float32
+    width: float32
+    height: float32
+}
+
+FieldState :: struct {
+    bytes: []u8
+    length: s32
+    cursor: s32
+    anchor: s32
+    scroll_x: s32
+    focused: bool
+}
+
+DetailsCells :: struct {
+    cells: [4]string
+    size: [32]u8
+    modified: [32]u8
+}
+
+Host :: struct {
+    manager: Model.Manager
+    started: bool
+    field: FieldState
+    typed: [128]u8
+    field_value: [4096]u8
+    field_next: [4096]u8
+    column_widths: [4]s32
+    last_click_path: Text
+    last_click_ms: s64
+    last_click_view: Model.ViewMode
+    details_cells: Vec(DetailsCells)
+    details_rows: Vec(Tables.TableRow)
+    grid_items: Vec(GridMultiItem)
+    preview: Preview.State
+    palette: Palettes.WidgetPalette
+    palette_ms: s64
+    palette_loaded: bool
+}
+
+CopyInto :: (target: []u8, value: string) -> s32 {
+    count := cast(s32)value.count
+    if count > cast(s32)target.count { count = cast(s32)target.count }
+    for index: cast(s32)0..count - 1 { target[index] = value[index] }
+    return count
+}
+
+Prepare :: (host: *Host, start_path: string = "") -> bool {
+    if host == null || host.started { return false }
+    host.started = false
+    host.field.bytes = host.field_next[:]
+    host.field.length = 0
+    host.field.cursor = 0
+    host.field.anchor = 0
+    host.field.scroll_x = 0
+    host.field.focused = false
+    host.column_widths = s32.[300, 110, 140, 190]
+    host.last_click_ms = 0
+    host.palette_loaded = false
+    Model.Init(*host.manager, start_path)
+    host.started = true
+    return true
+}
+
+Close :: (host: *Host) {
+    if host == null { return }
+    if host.started { Model.Dispose(*host.manager) }
+    VecFree(host.last_click_path.bytes)
+    VecFree(host.details_cells)
+    VecFree(host.details_rows)
+    VecFree(host.grid_items)
+    Preview.Close(*host.preview)
+    host.last_click_ms = 0
+    host.palette_loaded = false
+    host.started = false
+    host.field.bytes = host.field_next[:]
+    host.field.length = 0
+    host.field.cursor = 0
+    host.field.anchor = 0
+    host.field.scroll_x = 0
+    host.field.focused = false
+}
+
+PromptTitle :: (host: *Host) -> string {
+    if host.manager.prompt == .PromptRename { return "New name" }
+    if host.manager.prompt == .PromptFolder { return "Folder name" }
+    if host.manager.prompt == .PromptFile { return "File name" }
+    if host.manager.prompt == .PromptLocation { return "Location" }
+    if host.manager.prompt == .PromptSearch { return "Search" }
+    return ""
+}
+
+OpenPrompt :: (host: *Host, prompt: Model.PromptKind) {
+    host.manager.prompt = prompt
+    host.field.length = 0
+    host.field.cursor = 0
+    host.field.anchor = 0
+    host.field.scroll_x = 0
+    host.field.focused = true
+    if prompt == .PromptLocation { host.field.length = CopyInto(host.field.bytes, host.manager.cwd) }
+    if prompt == .PromptRename && host.manager.cursor >= 0 {
+        host.field.length = CopyInto(host.field.bytes,
+            Model.EntryName(*host.manager, host.manager.cursor))
+    }
+    unused CopyInto(host.field_value[:], TextView(host.field.bytes[:host.field.length]))
+}
+
+FinishPrompt :: (host: *Host) {
+    prompt_buffer: [4096]u8
+    value_length := CopyInto(prompt_buffer[:], TextView(host.field.bytes[:host.field.length]))
+    value := TextView(prompt_buffer[:value_length])
+    prompt := host.manager.prompt
+    host.manager.prompt = .PromptNone
+    if prompt == .PromptRename { unused Model.RenameSelection(*host.manager, value) }
+    else if prompt == .PromptFolder { unused Model.CreateFolder(*host.manager, value) }
+    else if prompt == .PromptFile { unused Model.CreateFile(*host.manager, value) }
+    else if prompt == .PromptLocation { unused Model.OpenPathTracked(*host.manager, value) }
+    else if prompt == .PromptSearch { unused Model.Search(*host.manager, value) }
+    host.field.length = 0
+    host.field.focused = false
+}
+
+#scope_file
+ApplyFieldEdit :: (state: *FieldState, edit: UI.TextFieldEdit) -> bool {
+    if state == null { return false }
+    if !edit.changed { return true }
+    if edit.start < 0 || edit.end < edit.start || edit.end > state.length { return false }
+    new_length := state.length - (edit.end - edit.start) + cast(s32)edit.replacement.count
+    if new_length > cast(s32)state.bytes.count { return false }
+    scratch: [4096]u8
+    at: s32 = 0
+    for index: cast(s32)0..edit.start - 1 {
+        scratch[at] = state.bytes[index]
+        at += 1
+    }
+    for byte: edit.replacement {
+        scratch[at] = byte
+        at += 1
+    }
+    for index: edit.end..state.length - 1 {
+        scratch[at] = state.bytes[index]
+        at += 1
+    }
+    for index: cast(s32)0..new_length - 1 { state.bytes[index] = scratch[index] }
+    state.length = new_length
+    return true
+}
+
+Button :: (session: UI.Session, key: s32, label: string, bounds: UI.Rectangle) -> bool {
+    props: ButtonProps
+    props.key = cast(u64)key
+    props.id = key
+    props.bounds = bounds
+    props.label = label
+    props.fit_content = true
+    return UI.Button(session, props) == 1
+}
+
+ActivateEntry :: (host: *Host, row: s32) {
+    manager := *host.manager
+    if row < 0 || row >= manager.entries.count { return }
+    if Model.EntryIsDirectory(manager, row) {
+        unused Model.OpenPathTracked(manager, Model.EntryPath(manager, row))
+    } else {
+        OpenPreview(host, Model.EntryPath(manager, row))
+        if host.preview.kind != .Image && !Preview.ImagePath(Model.EntryPath(manager, row)) {
+            Preview.Close(*host.preview)
+            if !Opener.OpenUri(Model.EntryPath(manager, row)) {
+                Model.SetError(manager, "The default application could not be started.")
+            }
+        }
+    }
+    host.last_click_ms = 0
+}
+
+OpenPreview :: (host: *Host, path: string) {
+    Preview.Open(*host.preview, path)
+    // The canonical decoder also recognizes images with missing or misleading
+    // extensions. A name hint for thumbnails is never reported as a MIME type.
+    if host.preview.info.kind == .File && host.preview.kind != .Error &&
+        host.preview.kind != .Image {
+        texture := ImageTextureFor(ImageProps.{.asset_path = TextView(host.preview.path)})
+        if texture.width > 0 && texture.height > 0 {
+            host.preview.kind = .Image
+            VecClear(host.preview.body.bytes)
+        }
+    }
+}
+
+EntryClick :: (host: *Host, row: s32, modifiers: s32) {
+    if row < 0 || row >= host.manager.entries.count { return }
+    now := DateTime.UnixMilliseconds()
+    path := Model.EntryPath(*host.manager, row)
+    repeated := modifiers == 0 && host.last_click_ms > 0 &&
+        now >= host.last_click_ms && now - host.last_click_ms <= 400 &&
+        host.last_click_view == host.manager.view_mode && TextView(host.last_click_path) == path
+    Model.SetStoredText(*host.last_click_path, path)
+    host.last_click_ms = ifx modifiers == 0 then now else 0
+    host.last_click_view = host.manager.view_mode
+    if repeated { ActivateEntry(host, row) }
+}
+
+SortColumn :: (mode: Model.SortMode) -> s32 {
+    if mode == .SortSize { return 1 }
+    if mode == .SortType { return 2 }
+    if mode == .SortModified { return 3 }
+    return 0
+}
+
+SortForColumn :: (column: s32) -> Model.SortMode {
+    if column == 1 { return .SortSize }
+    if column == 2 { return .SortType }
+    if column == 3 { return .SortModified }
+    return .SortName
+}
+
+FileGridProps :: (manager: *Model.Manager, session: UI.Session, bounds: Rectangle) -> GridMultiProps {
+    props: GridMultiProps
+    // ScrollDevice ownership uses raw keys, so include this retained Host
+    // scope's identity when several Hosts share one UI session.
+    parent := TreeSubmittedNodeAt(session, TreeCurrentParent(session))
+    props.key = TreeIdentityHash(parent.identity_generation, cast(u64)44, 2147483646)
+    props.bounds = bounds
+    props.layout = ifx manager.view_mode == .ViewCompact then .GridMultiCompact else .GridMultiIcon
+    props.cell_width = ifx manager.view_mode == .ViewCompact then 192 else 128
+    props.cell_height = ifx manager.view_mode == .ViewCompact then 32 else 104
+    props.image_size = ifx manager.view_mode == .ViewCompact then 18 else 48
+    props.gap = 4
+    props.padding = 6
+    props.cursor = manager.cursor
+    props.anchor = manager.anchor
+    props.scroll_offset = manager.scroll
+    return props
+}
+
+DrawFileGrid :: (host: *Host, session: UI.Session, bounds: Rectangle,
+    key: s32, modifiers: s32, focused: bool) {
+    manager := *host.manager
+    if !VecResize(host.grid_items, manager.entries.count) { return }
+    for index: cast(s32)0..cast(s32)manager.entries.count - 1 {
+        host.grid_items[index].key = manager.entries[index].key
+        host.grid_items[index].label = Model.EntryName(manager, index)
+        icon := cast(s32)IconType.IconManual
+        if Model.EntryIsDirectory(manager, index) { icon = cast(s32)IconType.IconHome }
+        else if manager.entries[index].info.kind == .Link { icon = cast(s32)IconType.IconLink }
+        host.grid_items[index].image = ImageForIcon(icon, .{}, Model.EntryType(*manager.entries[index]))
+        host.grid_items[index].image.tint = host.palette.text
+        if !Model.EntryIsDirectory(manager, index) && Preview.ImagePath(Model.EntryPath(manager, index)) {
+            host.grid_items[index].image = ImageProps.{.asset_path = Model.EntryPath(manager, index),
+                .alt_text = Model.EntryName(manager, index), .fit = .ImageFitContain,
+                .tint = cast(u32)0xffffffff, .smooth = true}
+        }
+    }
+    props := FileGridProps(manager, session, bounds)
+    props.focused = focused
+    props.disabled = !focused
+    props.control = (modifiers & KeyModifierControl) != 0
+    props.shift = (modifiers & KeyModifierShift) != 0
+    if focused {
+        props.navigation.home = key == KeyHome
+        props.navigation.end = key == KeyEnd
+        props.navigation.left = key == KeyLeft
+        props.navigation.right = key == KeyRight
+        props.navigation.up = key == KeyUp
+        props.navigation.down = key == KeyDown
+        props.navigation.space = key == 32
+        props.navigation.enter = key == KeyEnter
+    }
+    // GridMulti reveals focus on cursor, layout and viewport changes while
+    // retaining independent wheel scrolling between navigation events.
+    manager.reveal_focus = false
+    result := GridMulti(session, props, host.grid_items[:], manager.selected[:])
+    if !result.valid { return }
+    manager.cursor = result.cursor
+    manager.anchor = result.anchor
+    manager.scroll = result.scroll_offset
+    if result.activated_index >= 0 { ActivateEntry(host, result.activated_index) }
+    else if result.clicked_index >= 0 { EntryClick(host, result.clicked_index, modifiers) }
+}
+
+DrawDetails :: (host: *Host, session: UI.Session, bounds: Rectangle,
+    key: s32, modifiers: s32, focused: bool) {
+    manager := *host.manager
+    columns: [4]string = .["Name", "Size (bytes)", "Type", "Modified"]
+    count := cast(s32)manager.entries.count
+    // Resize before borrowing any cell buffers: large directories must not
+    // overflow a fixed stack array or lose selection flags offscreen.
+    if !VecResize(host.details_cells, cast(s64)count) ||
+        !VecResize(host.details_rows, cast(s64)count) { return }
+    for index: cast(s32)0..count - 1 {
+        entry: *Model.Entry = *manager.entries[index]
+        data := *host.details_cells[index]
+        data.cells[0] = entry.name
+        data.cells[1] = Number.FormatInteger(entry.info.size, data.size[:])
+        if Model.EntryIsDirectory(manager, index) { data.cells[1] = "—" }
+        data.cells[2] = Model.EntryType(entry)
+        data.cells[3] = Calendar.FormatDateTime(DateTime.LocalAt(entry.info.modified),
+            "%Y-%m-%d %H:%M:%S", data.modified[:])
+        host.details_rows[index].cells = data.cells[:]
+    }
+    props: Tables.TableViewProps
+    props.key = cast(u64)40
+    props.bounds = bounds
+    props.columns = columns[:]
+    props.rows = host.details_rows[:]
+    props.column_widths = host.column_widths[:]
+    props.resizable = true
+    props.min_column_width = 60
+    props.row_height = 32
+    props.header_height = 32
+    props.multi_select = true
+    props.selection = manager.selected[:]
+    props.focused_row = manager.cursor
+    props.anchor = manager.anchor
+    props.selected_row = -1
+    props.selected_column = -1
+    props.sort_column = SortColumn(manager.sort_mode)
+    props.sort_direction = ifx manager.sort_reverse then -1 else 1
+    props.disabled = !focused
+    state := Tables.TableViewResult.{.focused_row = manager.cursor, .anchor = manager.anchor}
+    navigated := false
+    if focused && count > 0 {
+        row := manager.cursor
+        if row < 0 { row = 0 }
+        control := (modifiers & KeyModifierControl) != 0
+        shift := (modifiers & KeyModifierShift) != 0
+        navigated = key == KeyHome || key == KeyEnd || key == KeyUp || key == KeyDown
+        if key == KeyHome { row = 0 }
+        if key == KeyEnd { row = count - 1 }
+        if key == KeyUp && row > 0 { row -= 1 }
+        if key == KeyDown && row < count - 1 { row += 1 }
+        if navigated {
+            state = Tables.TableViewMultiSelect(manager.selected[:], count, state,
+                row, control, shift, control && !shift)
+        } else if key == 32 || key == KeyEnter {
+            state = Tables.TableViewMultiSelect(manager.selected[:], count, state,
+                row, key == 32, false)
+        }
+        manager.cursor = state.focused_row
+        manager.anchor = state.anchor
+        props.focused_row = manager.cursor
+        props.anchor = manager.anchor
+    }
+    if manager.reveal_focus || navigated || key == 32 || key == KeyEnter {
+        body := cast(s32)bounds.height - 34
+        max_scroll := count * 32 - body
+        if max_scroll < 0 { max_scroll = 0 }
+        manager.scroll = Tables.TableViewSelectionScrollOffset(manager.cursor, 0,
+            32, body, manager.scroll, max_scroll)
+        manager.reveal_focus = false
+    }
+    props.scroll_offset = manager.scroll
+    result := Tables.TableView(session, props)
+    manager.cursor = result.focused_row
+    manager.anchor = result.anchor
+    manager.scroll = result.scroll_offset
+    if result.sort_column != props.sort_column || result.sort_direction != props.sort_direction {
+        Model.SetSort(manager, SortForColumn(result.sort_column), result.sort_direction < 0)
+        host.last_click_ms = 0
+    }
+    if focused && key == KeyEnter { ActivateEntry(host, manager.cursor) }
+    else if result.clicked_row >= 0 { EntryClick(host, result.clicked_row, modifiers) }
+}
+
+PreviewStep :: (host: *Host, direction: s32) {
+    manager := *host.manager
+    images_only := host.preview.kind == .Image
+    row := manager.cursor + direction
+    while row >= 0 && row < manager.entries.count {
+        if !Model.EntryIsDirectory(manager, row) &&
+            (!images_only || Preview.ImagePath(Model.EntryPath(manager, row))) {
+            Model.SelectOne(manager, row)
+            manager.reveal_focus = true
+            OpenPreview(host, Model.EntryPath(manager, row))
+            return
+        }
+        row += direction
+    }
+}
+
+DrawPreviewText :: (host: *Host, session: UI.Session, bounds: Rectangle,
+    key: s32, modifiers: s32, focused: bool) {
+    state := *host.preview
+    if key == KeyHome { state.text_scroll = 0; state.pan_x = 0.0 }
+    if key == KeyEnd { state.text_scroll = state.lines * 20 }
+    if key == KeyDown { state.text_scroll += 20 }
+    if key == KeyUp { state.text_scroll -= 20 }
+    if key == KeyPageDown { state.text_scroll += cast(s32)bounds.height - 20 }
+    if key == KeyPageUp { state.text_scroll -= cast(s32)bounds.height - 20 }
+    if key == KeyRight { state.pan_x += 64.0 }
+    if key == KeyLeft { state.pan_x -= 64.0 }
+    if (modifiers & KeyModifierShift) != 0 {
+        state.pan_x -= Input.PointerWheelTake(session, bounds) * 48.0
+    }
+    if state.pan_x < 0.0 { state.pan_x = 0.0 }
+    // Keep even pathological long lines within the widget coordinate budget.
+    if state.pan_x > cast(float32)Preview.TEXT_LIMIT * 8.0 { state.pan_x = cast(float32)Preview.TEXT_LIMIT * 8.0 }
+    identity := TreeSubmittedNodeAt(session, TreeCurrentParent(session)).identity_generation
+    scroll := Scroll(session, ScrollProps.{.key = TreeIdentityHash(identity, cast(u64)91, 2147483646),
+        .bounds = bounds, .content_height = state.lines * 20,
+        .scroll_offset = state.text_scroll, .manual_scroll = true,
+        .input = .{.enabled = !focused, .disabled = !focused}})
+    if !scroll.opened { return }
+    defer { End(session) }
+    state.text_scroll = scroll.scroll_offset
+    text := TextView(state.body)
+    start: s64 = 0
+    row: s32 = 0
+    at: s64 = 0
+    while at <= text.count {
+        if at == text.count || text[at] == cast(u8)10 {
+            y := scroll.viewport.y + cast(float32)(row * 20 - state.text_scroll)
+            if y + 20.0 >= bounds.y && y < bounds.y + bounds.height {
+                line := text[start:at]
+                if line.count > 0 && line[line.count - 1] == cast(u8)13 { line = line[:line.count - 1] }
+                Text(session, TextProps.{.key = cast(u64)(row + 1000),
+                    .bounds = .{scroll.viewport.x + 4.0 - state.pan_x, y,
+                        cast(float32)Preview.TEXT_LIMIT * 8.0, 20.0},
+                    .text = line, .font = 14, .wrap = .TextWrapNone})
+            }
+            row += 1
+            start = at + 1
+        }
+        at += 1
+    }
+}
+
+DrawPreview :: (host: *Host, session: UI.Session, viewport: Rectangle,
+    key: s32, modifiers: s32, focused: bool) {
+    state := *host.preview
+    if key == KeyEscape || (key == 80 && (modifiers & KeyModifierControl) != 0) {
+        Preview.Close(state)
+        return
+    }
+    if state.kind == .Image {
+        if key == KeyPageUp || (state.zoom == 0 && key == KeyLeft) { PreviewStep(host, -1) }
+        if key == KeyPageDown || (state.zoom == 0 && key == KeyRight) { PreviewStep(host, 1) }
+        if key == 61 || key == 43 { Preview.Zoom(state, 1) }
+        if key == 45 { Preview.Zoom(state, -1) }
+        if key == KeyHome || key == 48 { state.zoom = 0; state.pan_x = 0.0; state.pan_y = 0.0 }
+    }
+    Box(session, BoxProps.{.key = cast(u64)80, .bounds = viewport,
+        .fill = ColorFromPacked(host.palette.background)})
+    Text(session, TextProps.{.key = cast(u64)81,
+        .bounds = .{viewport.x + 8.0, viewport.y + 8.0, viewport.width - 16.0, 24.0},
+        .text = TextView(state.path), .font = 16, .wrap = .TextWrapEllipsis})
+    x := viewport.x + 8.0
+    y := viewport.y + 40.0
+    if Button(session, 82, "Previous", .{x, y, 76.0, 32.0}) { PreviewStep(host, -1) }
+    if Button(session, 83, "Next", .{x + 82.0, y, 62.0, 32.0}) { PreviewStep(host, 1) }
+    if Button(session, 84, "Open", .{x + 150.0, y, 78.0, 32.0}) || key == KeyEnter {
+        if !Opener.OpenUri(TextView(state.path)) {
+            Model.SetError(*host.manager, "The default application could not be started.")
+        }
+    }
+    if Button(session, 85, "Close", .{viewport.x + viewport.width - 76.0, y, 68.0, 32.0}) {
+        Preview.Close(state)
+        return
+    }
+    controls_x := x + 238.0
+    content_y := y + 40.0
+    if viewport.width < 640.0 { controls_x = x; y += 38.0; content_y += 38.0 }
+    if state.kind == .Image {
+        if Button(session, 86, "Fit", .{controls_x, y, 58.0, 32.0}) {
+            state.zoom = 0; state.pan_x = 0.0; state.pan_y = 0.0
+        }
+        if Button(session, 87, "100%", .{controls_x + 64.0, y, 62.0, 32.0}) {
+            state.zoom = 100; state.pan_x = 0.0; state.pan_y = 0.0
+        }
+        if Button(session, 88, "−", .{controls_x + 132.0, y, 42.0, 32.0}) { Preview.Zoom(state, -1) }
+        if Button(session, 89, "+", .{controls_x + 180.0, y, 42.0, 32.0}) { Preview.Zoom(state, 1) }
+    }
+    body := Rectangle.{viewport.x + 8.0, content_y, viewport.width - 16.0,
+        viewport.y + viewport.height - 62.0 - content_y}
+    if body.width < 1.0 { body.width = 1.0 }
+    if body.height < 1.0 { body.height = 1.0 }
+    if state.kind == .Image {
+        image := ImageProps.{.key = cast(u64)90, .asset_path = TextView(state.path),
+            .alt_text = "Image preview unavailable", .bounds = body, .fit = .ImageFitContain,
+            .tint = cast(u32)0xffffffff, .smooth = true}
+        texture := ImageTextureFor(image)
+        if texture.width > 0 && texture.height > 0 {
+            fit := body.width / cast(float32)texture.width
+            if body.height / cast(float32)texture.height < fit { fit = body.height / cast(float32)texture.height }
+            if fit > 1.0 { fit = 1.0 }
+            state.fit_zoom = cast(s32)(fit * 100.0)
+            if state.fit_zoom < 1 { state.fit_zoom = 1 }
+            if state.zoom == 0 {
+                image.bounds = .{body.x + (body.width - cast(float32)texture.width * fit) * 0.5,
+                    body.y + (body.height - cast(float32)texture.height * fit) * 0.5,
+                    cast(float32)texture.width * fit, cast(float32)texture.height * fit}
+            }
+        }
+        if state.zoom > 0 && texture.width > 0 && texture.height > 0 {
+            scale := cast(float32)state.zoom / 100.0
+            width := body.width / scale
+            height := body.height / scale
+            if width > cast(float32)texture.width { width = cast(float32)texture.width }
+            if height > cast(float32)texture.height { height = cast(float32)texture.height }
+            if key == KeyLeft { state.pan_x -= 64.0 / scale }
+            if key == KeyRight { state.pan_x += 64.0 / scale }
+            if key == KeyUp { state.pan_y -= 64.0 / scale }
+            if key == KeyDown { state.pan_y += 64.0 / scale }
+            wheel := Input.PointerWheelTake(session, body) * 48.0 / scale
+            if (modifiers & KeyModifierShift) != 0 { state.pan_x -= wheel }
+            else { state.pan_y -= wheel }
+            max_x := (cast(float32)texture.width - width) * 0.5
+            max_y := (cast(float32)texture.height - height) * 0.5
+            if state.pan_x < -max_x { state.pan_x = -max_x }
+            if state.pan_x > max_x { state.pan_x = max_x }
+            if state.pan_y < -max_y { state.pan_y = -max_y }
+            if state.pan_y > max_y { state.pan_y = max_y }
+            image.source = .{max_x + state.pan_x, max_y + state.pan_y, width, height}
+            image.bounds = .{body.x + (body.width - width * scale) * 0.5,
+                body.y + (body.height - height * scale) * 0.5, width * scale, height * scale}
+        }
+        node := Box(session, BoxProps.{.key = cast(u64)92, .bounds = body,
+            .fill = ColorFromPacked(host.palette.base)})
+        if node >= 0 && TreePushScope(session, node) {
+            TreeSetChildClip(session, node, body)
+            Image(session, image)
+            End(session)
+        }
+        dimensions: Vec(u8)
+        BuilderPrint(*dimensions, "% × % pixels", texture.width, texture.height)
+        description := TextView(dimensions[:])
+        if texture.width <= 0 || texture.height <= 0 {
+            description = "Image preview unavailable. Choose Open to try its default application."
+        }
+        Text(session, TextProps.{.key = cast(u64)93,
+            .bounds = .{body.x, viewport.y + viewport.height - 54.0, body.width, 22.0},
+            .text = description, .font = 13})
+    } else if state.kind == .Text {
+        DrawPreviewText(host, session, body, key, modifiers, focused)
+    } else {
+        message := "No built-in preview for this file. Choose Open to use its default application."
+        if state.kind == .Error { message = TextView(state.body) }
+        Text(session, TextProps.{.key = cast(u64)94, .bounds = body,
+            .text = message, .font = 16})
+    }
+    if state.kind != .Image && state.info.kind != .Missing {
+        modified: [32]u8
+        date := Calendar.FormatDateTime(DateTime.LocalAt(state.info.modified), "%Y-%m-%d %H:%M:%S", modified[:])
+        metadata: Vec(u8)
+        BuilderPrint(*metadata, "% bytes · Modified %", state.info.size, date)
+        Text(session, TextProps.{.key = cast(u64)96,
+            .bounds = .{body.x, viewport.y + viewport.height - 54.0, body.width, 22.0},
+            .text = TextView(metadata[:]), .font = 13, .wrap = .TextWrapEllipsis})
+    }
+    help := "Open uses the default application · Esc closes preview"
+    if state.kind == .Image { help = "Fit / 100% / + − · arrows and wheel pan when zoomed · PgUp/PgDn browse · Esc closes" }
+    if state.kind == .Text && state.truncated { help = "Preview limited to 64 KiB · Open to read the complete file · Esc closes" }
+    if host.manager.error != "" { help = host.manager.error }
+    Text(session, TextProps.{.key = cast(u64)95,
+        .bounds = .{viewport.x + 8.0, viewport.y + viewport.height - 28.0, viewport.width - 16.0, 22.0},
+        .text = help, .font = 13, .wrap = .TextWrapEllipsis})
+}
+
+#scope_export
+RefreshTheme :: (host: *Host) {
+    now := DateTime.UnixMilliseconds()
+    if host.palette_loaded && now >= host.palette_ms && now - host.palette_ms < 1000 { return }
+    colors := SystemTheme.SystemPaletteRead()
+    host.palette = Palettes.WidgetPalette.{.background = colors.background,
+        .base = colors.base, .text = colors.text, .selected = colors.selected,
+        .selected_text = colors.selected_text, .border = colors.border,
+        .danger = colors.danger, .warning = colors.warning, .success = colors.success}
+    host.palette_ms = now
+    host.palette_loaded = true
+}
+
+Draw :: (host: *Host, host_session: HostSession, host_viewport: HostViewport,
+    focused: bool = true) -> s32 {
+    if host == null || !host.started { return 1 }
+    ui_session: UI.Session
+    ui_session.slot = host_session.slot
+    ui_session.epoch = host_session.epoch
+    ui_viewport: UI.Rectangle
+    ui_viewport.x = host_viewport.x
+    ui_viewport.y = host_viewport.y
+    ui_viewport.width = host_viewport.width
+    ui_viewport.height = host_viewport.height
+    session := ui_session
+    viewport := ui_viewport
+    snapshot: Input.InputSnapshot
+    if !focused { snapshot = Input.TreeInputSuspend(session) }
+    defer { if !focused { unused Input.TreeInputResume(session, snapshot) } }
+    RefreshTheme(host)
+    if !Palettes.WidgetPaletteUse(session, host.palette) { return 1 }
+    defer { unused Palettes.WidgetPaletteRestore(session) }
+    root := Box(session, BoxProps.{.key = cast(u64)500, .bounds = viewport,
+        .fill = ColorFromPacked(host.palette.background)})
+    if root < 0 || !TreePushScope(session, root) { return 1 }
+    TreeSetChildClip(session, root, viewport)
+    defer { End(session) }
+    manager := *host.manager
+    for index: cast(s32)0..host.field.length - 1 {
+        host.field_value[index] = host.field.bytes[index]
+    }
+    key: s32
+    modifiers: s32
+    if focused {
+        key = Input.KeyboardTake(session)
+        modifiers = Input.KeyboardModifiers(session)
+    }
+    if key != 0 { host.last_click_ms = 0 }
+    typed_text := Keys.TypedTextTake(session, host.typed[:])
+    if host.preview.opened {
+        DrawPreview(host, session, viewport, key, modifiers, focused)
+        return 0
+    }
+    if manager.prompt == .PromptNone && key == 80 && (modifiers & KeyModifierControl) != 0 &&
+        manager.cursor >= 0 {
+        OpenPreview(host, Model.EntryPath(manager, manager.cursor))
+        DrawPreview(host, session, viewport, 0, 0, focused)
+        return 0
+    }
+    field_input := Keys.TextFieldInputFor(key, modifiers, typed_text)
+
+    if manager.prompt == .PromptNone && (modifiers & KeyModifierControl) != 0 {
+        if key == 76 { OpenPrompt(host, .PromptLocation); key = 0 }
+        else if key == 70 { OpenPrompt(host, .PromptSearch); key = 0 }
+        else if key == 84 { unused Model.NewTab(manager); key = 0 }
+        else if key == KeyTab { Model.NextTab(manager); key = 0 }
+        else if key == 65 { Model.SelectAll(manager); key = 0 }
+        else if key == 49 { Model.SetView(manager, .ViewIcon); key = 0 }
+        else if key == 50 { Model.SetView(manager, .ViewList); key = 0 }
+        else if key == 51 { Model.SetView(manager, .ViewCompact); key = 0 }
+    }
+
+    toolbar := Rectangle.{viewport.x + 8.0, viewport.y + 8.0, viewport.width - 16.0, 40.0}
+    if Button(session, 1, "Back", Rectangle.{toolbar.x, toolbar.y, 58.0, 36.0}) {
+        unused Model.NavigateBack(manager)
+    }
+    if Button(session, 2, "Up", Rectangle.{toolbar.x + 64.0, toolbar.y, 48.0, 36.0}) {
+        unused Model.OpenPathTracked(manager, Model.PathParent(manager.cwd))
+    }
+    if Button(session, 3, "Home", Rectangle.{toolbar.x + 118.0, toolbar.y, 62.0, 36.0}) {
+        unused Model.OpenPathTracked(manager, Model.HomePath())
+    }
+    path_bounds := Rectangle.{toolbar.x + 188.0, toolbar.y + 5.0,
+        viewport.width - 530.0, 26.0}
+    if path_bounds.width < 160.0 { path_bounds.width = 160.0 }
+    Text(session, TextProps.{.key = cast(u64)20, .bounds = path_bounds,
+        .text = manager.cwd, .font = 15})
+
+    action_x := viewport.x + viewport.width - 328.0
+    if Button(session, 4, "Folder", Rectangle.{action_x, toolbar.y, 68.0, 36.0}) { OpenPrompt(host, .PromptFolder) }
+    if Button(session, 5, "File", Rectangle.{action_x + 74.0, toolbar.y, 50.0, 36.0}) { OpenPrompt(host, .PromptFile) }
+    if Button(session, 6, "Rename", Rectangle.{action_x + 130.0, toolbar.y, 72.0, 36.0}) { OpenPrompt(host, .PromptRename) }
+    if Button(session, 7, "Copy", Rectangle.{action_x + 208.0, toolbar.y, 56.0, 36.0}) { unused Model.CopySelection(manager, false) }
+    if Button(session, 8, "Paste", Rectangle.{action_x + 270.0, toolbar.y, 58.0, 36.0}) { unused Model.Paste(manager) }
+
+    second := Rectangle.{viewport.x + 8.0, viewport.y + 52.0, viewport.width - 16.0, 38.0}
+    if Button(session, 9, "Cut", Rectangle.{second.x, second.y, 46.0, 32.0}) { unused Model.CopySelection(manager, true) }
+    if Button(session, 10, "Duplicate", Rectangle.{second.x + 52.0, second.y, 88.0, 32.0}) { unused Model.DuplicateSelection(manager) }
+    if Button(session, 11, "Link", Rectangle.{second.x + 146.0, second.y, 50.0, 32.0}) { unused Model.MakeLinkSelection(manager) }
+    if Button(session, 12, "Trash", Rectangle.{second.x + 202.0, second.y, 56.0, 32.0}) { unused Model.DeleteSelection(manager, true) }
+    if Button(session, 13, "Hidden", Rectangle.{second.x + 264.0, second.y, 70.0, 32.0}) {
+        manager.show_hidden = !manager.show_hidden
+        unused Model.Refresh(manager)
+    }
+    if manager.cwd == Model.TrashDirectory(false) &&
+        Button(session, 14, "Restore", Rectangle.{second.x + 340.0, second.y, 72.0, 32.0}) {
+        unused Model.RestoreSelection(manager)
+    }
+    if manager.cwd != Model.TrashDirectory(false) &&
+        Button(session, 67, "Preview", .{second.x + 340.0, second.y, 84.0, 32.0}) && manager.cursor >= 0 {
+        OpenPreview(host, Model.EntryPath(manager, manager.cursor))
+    }
+    if manager.error != "" {
+        Text(session, TextProps.{.key = cast(u64)21,
+            .bounds = .{second.x + 420.0, second.y + 5.0, viewport.width - 716.0, 22.0},
+            .text = manager.error, .font = 13, .disabled = true})
+    }
+    tabs_x := viewport.x + viewport.width - 300.0
+    if Button(session, 15, "+", Rectangle.{tabs_x, second.y, 32.0, 32.0}) {
+        unused Model.NewTab(manager)
+    }
+    if Button(session, 16, "<", Rectangle.{tabs_x + 38.0, second.y, 32.0, 32.0}) {
+        unused Model.SwitchTab(manager, manager.active_tab - 1)
+    }
+    if Button(session, 17, ">", Rectangle.{tabs_x + 76.0, second.y, 32.0, 32.0}) {
+        unused Model.SwitchTab(manager, manager.active_tab + 1)
+    }
+    if Button(session, 18, "Close", Rectangle.{tabs_x + 114.0, second.y, 58.0, 32.0}) {
+        unused Model.CloseTab(manager, manager.active_tab)
+    }
+    tab_index: s32 = 0
+    while tab_index < cast(s32)manager.tabs.count && tab_index < 4 {
+        label_buffer: [8]u8
+        label := Number.FormatInteger(tab_index + 1, label_buffer[:])
+        if Button(session, 100 + tab_index, label,
+            Rectangle.{tabs_x + 178.0 + cast(float32)(tab_index * 30), second.y, 26.0, 32.0}) {
+            unused Model.SwitchTab(manager, tab_index)
+        }
+        tab_index += 1
+    }
+
+    sidebar := Rectangle.{viewport.x + 8.0, viewport.y + 96.0, 150.0, viewport.height - 106.0}
+    Text(session, TextProps.{.key = cast(u64)30, .bounds = .{sidebar.x, sidebar.y, sidebar.width, 24.0},
+        .text = "Places", .font = 16})
+    if Button(session, 31, "Home", Rectangle.{sidebar.x, sidebar.y + 30.0, sidebar.width, 32.0}) {
+        unused Model.OpenPathTracked(manager, Model.HomePath())
+    }
+    if Button(session, 32, "File System", Rectangle.{sidebar.x, sidebar.y + 68.0, sidebar.width, 32.0}) {
+        unused Model.OpenPathTracked(manager, "/")
+    }
+    if Button(session, 33, "Trash", Rectangle.{sidebar.x, sidebar.y + 106.0, sidebar.width, 32.0}) {
+        unused Model.OpenPathTracked(manager, Model.TrashDirectory(false))
+    }
+
+    view_x := viewport.x + 166.0
+    view_y := viewport.y + 96.0
+    if Button(session, 41, ifx manager.view_mode == .ViewIcon then "[Icon]" else "Icon",
+        .{view_x, view_y, 66.0, 32.0}) { Model.SetView(manager, .ViewIcon) }
+    if Button(session, 42, ifx manager.view_mode == .ViewList then "[List]" else "List",
+        .{view_x + 72.0, view_y, 62.0, 32.0}) { Model.SetView(manager, .ViewList) }
+    if Button(session, 43, ifx manager.view_mode == .ViewCompact then "[Compact]" else "Compact",
+        .{view_x + 140.0, view_y, 98.0, 32.0}) { Model.SetView(manager, .ViewCompact) }
+    sort_names: [4]string = .["Name", "Size", "Type", "Modified"]
+    active_sort_names: [4]string = .["[Name]", "[Size]", "[Type]", "[Modified]"]
+    for column: cast(s32)0..3 {
+        if Button(session, 60 + column,
+            ifx SortColumn(manager.sort_mode) == column then active_sort_names[column] else sort_names[column],
+            .{view_x + 250.0 + cast(float32)column * 78.0, view_y, 72.0, 32.0}) {
+            mode := SortForColumn(column)
+            Model.SetSort(manager, mode, ifx mode == manager.sort_mode then !manager.sort_reverse else false)
+            host.last_click_ms = 0
+        }
+    }
+    if Button(session, 64, ifx manager.sort_reverse then "Descending" else "Ascending",
+        .{view_x + 562.0, view_y, 100.0, 32.0}) {
+        Model.SetSort(manager, manager.sort_mode, !manager.sort_reverse)
+        host.last_click_ms = 0
+    }
+    selected_buffer: [16]u8
+    selected_count := Number.FormatInteger(Model.SelectedCount(manager), selected_buffer[:])
+    Text(session, TextProps.{.key = cast(u64)65,
+        .bounds = .{view_x, viewport.y + viewport.height - 26.0, 60.0, 22.0},
+        .text = selected_count, .font = 13})
+    Text(session, TextProps.{.key = cast(u64)66,
+        .bounds = .{view_x + 64.0, viewport.y + viewport.height - 26.0, 120.0, 22.0},
+        .text = "selected", .font = 13})
+    list_bounds := Rectangle.{viewport.x + 166.0, viewport.y + 136.0, viewport.width - 174.0,
+        viewport.height - 168.0}
+    if list_bounds.width < 1.0 { list_bounds.width = 1.0 }
+    if list_bounds.height < 1.0 { list_bounds.height = 1.0 }
+    if manager.view_mode == .ViewList {
+        DrawDetails(host, session, list_bounds, ifx manager.prompt == .PromptNone then key else 0,
+            modifiers, focused && manager.prompt == .PromptNone)
+    } else {
+        DrawFileGrid(host, session, list_bounds, ifx manager.prompt == .PromptNone then key else 0,
+            modifiers, focused && manager.prompt == .PromptNone)
+    }
+
+    if manager.prompt != .PromptNone {
+        prompt_bounds := Rectangle.{viewport.x + viewport.width * 0.5 - 220.0,
+            viewport.y + viewport.height * 0.5 - 46.0, 440.0, 92.0}
+        Box(session, BoxProps.{.key = cast(u64)50, .bounds = prompt_bounds,
+            .fill = ColorFromPacked(host.palette.base)})
+        Text(session, TextProps.{.key = cast(u64)51,
+            .bounds = .{prompt_bounds.x + 16.0, prompt_bounds.y + 12.0, 408.0, 22.0},
+            .text = PromptTitle(host), .font = 16})
+        props := TextFieldProps.{
+            .key = cast(u64)52, .bounds = .{prompt_bounds.x + 16.0,
+                prompt_bounds.y + 40.0, 408.0, 32.0},
+            .value = TextView(host.field_value[:host.field.length]),
+            .cursor = host.field.cursor, .anchor = host.field.anchor,
+            .scroll_x = host.field.scroll_x, .focused = host.field.focused && focused,
+            .max_bytes = 4096}
+        props.input = field_input
+        props.input.focus = host.field.focused && focused
+        edited := TextField(session, props)
+        if edited.clipboard_write { unused SystemClipboardSet(edited.clipboard_text) }
+        if focused && ApplyFieldEdit(*host.field, edited.edit) {
+            host.field.cursor = edited.cursor
+            host.field.anchor = edited.anchor
+            host.field.scroll_x = edited.scroll_x
+            if host.field.scroll_x < 0 { host.field.scroll_x = 0 }
+            host.field.focused = edited.focused
+        }
+        if edited.committed { FinishPrompt(host) }
+        else if edited.escaped {
+            manager.prompt = .PromptNone
+            host.field.length = 0
+            host.field.focused = false
+        }
+    }
+    return 0
+}

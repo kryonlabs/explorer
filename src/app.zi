@@ -1,0 +1,18 @@
+AppHost :: #import "app_host";
+using UI :: #import "kryon/Widgets";
+
+host: AppHost.Host;
+
+#program_export
+Frame :: (session: Session, viewport: Rectangle) -> s32 {
+    if !host.started { unused AppHost.Prepare(*host) }
+    host_session: AppHost.HostSession
+    host_session.slot = session.slot
+    host_session.epoch = session.epoch
+    host_viewport: AppHost.HostViewport
+    host_viewport.x = viewport.x
+    host_viewport.y = viewport.y
+    host_viewport.width = viewport.width
+    host_viewport.height = viewport.height
+    return AppHost.Draw(*host, host_session, host_viewport)
+}

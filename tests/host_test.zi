@@ -1,0 +1,546 @@
+App :: #import "app_host";
+using Model :: #import "model";
+Sessions :: #import "kryon/session";
+Geometry :: #import "kryon/geometry";
+Frames :: #import "kryon/tree_draw";
+Tree :: #import "kryon/tree";
+Input :: #import "kryon/tree_input";
+Pixmap :: #import "kryon/pixmap";
+Keys :: #import "kryon/input_protocol";
+Kinds :: #import "kryon/widget_kind";
+Scrolls :: #import "kryon/scroll_device";
+UI :: #import "kryon/Widgets";
+Files :: #import "std/file_tree_linux";
+Number :: #import "std/number_text";
+using Bytes :: #import "std/byte_text_linux";
+Preview :: #import "preview";
+Palettes :: #import "kryon/widget_palette";
+DateTime :: #import "std/date_time_linux";
+using FormatText :: #import "std/format";
+
+frame_seconds: float64;
+frame_wheel: float32;
+theme_pixels: [576000]u32;
+
+Render :: (host: *App.Host, session: Sessions.Session, focused: bool) -> bool {
+    viewport := Geometry.Rectangle.{240.0, 120.0, 960.0, 600.0}
+    return RenderAt(host, session, focused, viewport)
+}
+
+RenderAt :: (host: *App.Host, session: Sessions.Session, focused: bool,
+    viewport: Geometry.Rectangle) -> bool {
+    frame_seconds += 0.017
+    Scrolls.BeginScrollFrame(session, .{480.0, 400.0}, false, false, false, frame_wheel, frame_seconds)
+    frame_wheel = 0.0
+    Pixmap.PixmapBegin(cast(u32)0xffffffff)
+    if cast(s32)Frames.BeginFrame(session, cast(u64)1, viewport) != 0 { return false }
+    handle := App.HostSession.{session.slot, session.epoch}
+    bounds := App.HostViewport.{viewport.x, viewport.y, viewport.width, viewport.height}
+    if App.Draw(host, handle, bounds, focused) != 0 { return false }
+    return cast(s32)Frames.EndFrame(session) == 0
+}
+
+Press :: (host: *App.Host, session: Sessions.Session, key: s32,
+    modifiers: s32 = 0) -> bool {
+    unused Input.KeyboardModifiersSend(session, modifiers)
+    unused Input.KeyboardSend(session, key)
+    return Render(host, session, true)
+}
+
+Click :: (host: *App.Host, session: Sessions.Session, x: float32, y: float32,
+    modifiers: s32 = 0) -> bool {
+    unused Input.KeyboardModifiersSend(session, modifiers)
+    unused Input.TreePointerUpdate(session, Input.PointerFrame.{x, y, true, true, false})
+    unused Input.TreePointerUpdate(session, Input.PointerFrame.{x, y, false, false, true})
+    return Render(host, session, true)
+}
+
+DetailsTest :: (host: *App.Host, session: Sessions.Session, root: string) -> bool {
+    folder := Files.JoinPath(root, "00-folder")
+    if !Files.CreateDirectories(folder) { return false }
+    for index: cast(s32)10..69 {
+        name: [16]u8
+        if !Files.ReplaceFile(Files.JoinPath(root, Number.FormatInteger(index, name[:])), "data") { return false }
+    }
+    if !Model.OpenPathTracked(*host.manager, root) || !Render(host, session, true) { return false }
+    Model.SetView(*host.manager, .ViewList)
+    if !Render(host, session, true) { return false }
+    size_seen := false
+    type_seen := false
+    for index: cast(s32)0..Tree.TreeCount(session) - 1 {
+        entry := Tree.TreeNodeAt(session, index)
+        if entry.semantic_label == "4" { size_seen = true }
+        if entry.semantic_label == "File" { type_seen = true }
+    }
+    if !size_seen || !type_seen { return false }
+    if !Click(host, session, 430.0, 306.0) || host.manager.cursor != 0 ||
+        Model.SelectedCount(*host.manager) != 1 || host.manager.cwd != root { return false }
+    if !Click(host, session, 430.0, 370.0, Keys.KeyModifierControl) ||
+        host.manager.cursor != 2 || Model.SelectedCount(*host.manager) != 2 { return false }
+    if !Click(host, session, 430.0, 402.0, Keys.KeyModifierShift) ||
+        host.manager.cursor != 3 || host.manager.anchor != 2 ||
+        Model.SelectedCount(*host.manager) != 2 || !host.manager.selected[2] ||
+        !host.manager.selected[3] { return false }
+    if !Click(host, session, 430.0, 306.0, Keys.KeyModifierControl | Keys.KeyModifierShift) ||
+        Model.SelectedCount(*host.manager) != 4 || host.manager.anchor != 2 { return false }
+    if !Press(host, session, Keys.KeyEnd, Keys.KeyModifierControl) ||
+        host.manager.cursor != 60 || Model.SelectedCount(*host.manager) != 4 ||
+        host.manager.scroll <= 0 { return false }
+    if !Press(host, session, 32) || Model.SelectedCount(*host.manager) != 5 ||
+        !host.manager.selected[60] { return false }
+    unused Input.PointerWheelSend(session, 480.0, 400.0, 2.0)
+    previous_scroll := host.manager.scroll
+    if !Render(host, session, true) || host.manager.scroll >= previous_scroll ||
+        host.manager.cursor != 60 { return false }
+    if !Press(host, session, Keys.KeyHome) || host.manager.cursor != 0 ||
+        host.manager.scroll != 0 || Model.SelectedCount(*host.manager) != 1 { return false }
+    if !Press(host, session, Keys.KeyDown, Keys.KeyModifierShift) ||
+        host.manager.anchor != 0 || Model.SelectedCount(*host.manager) != 2 { return false }
+    selected_path := Model.EntryPath(*host.manager, host.manager.cursor)
+    // The Name header changes direction without changing selected identities.
+    if !Click(host, session, 430.0, 270.0) || !host.manager.sort_reverse ||
+        Model.SelectedCount(*host.manager) != 2 ||
+        Model.EntryPath(*host.manager, host.manager.cursor) != selected_path { return false }
+    // Header dividers resize the same caller-owned widths used next frame.
+    unused Input.TreePointerUpdate(session, Input.PointerFrame.{706.0, 270.0, true, true, false})
+    unused Input.TreePointerUpdate(session, Input.PointerFrame.{746.0, 270.0, true, false, false})
+    if !Render(host, session, true) || host.column_widths[0] != 340 { return false }
+    unused Input.TreePointerUpdate(session, Input.PointerFrame.{746.0, 270.0, false, false, true})
+    if !Render(host, session, true) || !Press(host, session, Keys.KeyHome) ||
+        !Press(host, session, Keys.KeyEnter) || host.manager.cwd != folder { return false }
+    if !Model.NavigateBack(*host.manager) || !Render(host, session, true) { return false }
+    // First click selects; only a second plain click within the bounded window opens.
+    host.last_click_ms = 0
+    if !Click(host, session, 430.0, 306.0) || host.manager.cwd != root ||
+        !Click(host, session, 430.0, 306.0) || host.manager.cwd != folder { return false }
+    return true
+}
+
+EntryBounds :: (session: Sessions.Session, label: string, min_x: float32 = 0.0) -> Geometry.Rectangle {
+    for index: cast(s32)0..Tree.TreeCount(session) - 1 {
+        node := Tree.TreeNodeAt(session, index)
+        if node.semantic_label == label && node.kind == cast(s32)Kinds.WidgetKind.WidgetKindSelectable &&
+            node.bounds.x >= min_x {
+            return node.bounds
+        }
+    }
+    return .{}
+}
+
+ClickEntry :: (host: *App.Host, session: Sessions.Session, row: s32,
+    modifiers: s32 = 0) -> bool {
+    bounds := EntryBounds(session, Model.EntryName(*host.manager, row))
+    if bounds.width <= 0.0 { return false }
+    return Click(host, session, bounds.x + bounds.width * 0.5,
+        bounds.y + bounds.height * 0.5, modifiers)
+}
+
+GridFailure :: (host: *App.Host, checkpoint: s32) -> bool {
+    print("grid checkpoint %, mode %, cursor %, anchor %, scroll %, selected %\n",
+        checkpoint, cast(s32)host.manager.view_mode, host.manager.cursor,
+        host.manager.anchor, host.manager.scroll, Model.SelectedCount(*host.manager))
+    return false
+}
+
+GridWheel :: (host: *App.Host, session: Sessions.Session, delta: float32) -> bool {
+    frame_wheel = delta
+    return Render(host, session, true)
+}
+
+GridTest :: (host: *App.Host, session: Sessions.Session, root: string,
+    mode: Model.ViewMode) -> bool {
+    if !Model.OpenPath(*host.manager, root) { return GridFailure(host, 1) }
+    Model.SetSort(*host.manager, .SortName, false)
+    Model.SetView(*host.manager, mode)
+    if !Render(host, session, true) { return GridFailure(host, 2) }
+    first := EntryBounds(session, Model.EntryName(*host.manager, 0))
+    second := EntryBounds(session, Model.EntryName(*host.manager, 1))
+    if first.width <= 0.0 || second.width <= 0.0 { return GridFailure(host, 3) }
+    if mode == .ViewIcon && (second.x <= first.x || second.y != first.y) { return GridFailure(host, 4) }
+    if mode == .ViewCompact && (second.y <= first.y || second.x != first.x) { return GridFailure(host, 5) }
+    // Both layouts render through the canonical Image widget.
+    images: s32
+    for index: cast(s32)0..Tree.TreeCount(session) - 1 {
+        if Tree.TreeNodeAt(session, index).kind == cast(s32)Kinds.WidgetKind.WidgetKindImage { images += 1 }
+    }
+    if images <= 0 || images >= host.manager.entries.count { return GridFailure(host, 6) }
+    host.last_click_ms = 0
+    if !ClickEntry(host, session, 0) || host.manager.cwd != root ||
+        !ClickEntry(host, session, 2, Keys.KeyModifierControl) || Model.SelectedCount(*host.manager) != 2 ||
+        !ClickEntry(host, session, 3, Keys.KeyModifierShift) || Model.SelectedCount(*host.manager) != 2 ||
+        host.manager.anchor != 2 || !host.manager.selected[2] || !host.manager.selected[3] ||
+        !ClickEntry(host, session, 0, Keys.KeyModifierControl | Keys.KeyModifierShift) ||
+        Model.SelectedCount(*host.manager) != 4 { return GridFailure(host, 7) }
+    if !Press(host, session, Keys.KeyEnd, Keys.KeyModifierControl) ||
+        host.manager.cursor != 60 || Model.SelectedCount(*host.manager) != 4 ||
+        host.manager.scroll <= 0 || !Press(host, session, 32) ||
+        Model.SelectedCount(*host.manager) != 5 { return GridFailure(host, 8) }
+    focus_bounds := EntryBounds(session, Model.EntryName(*host.manager, 60))
+    if focus_bounds.width <= 0.0 || focus_bounds.x >= 1192.0 || focus_bounds.y >= 688.0 { return GridFailure(host, 9) }
+    scroll := host.manager.scroll
+    if !GridWheel(host, session, 2.0) || host.manager.scroll >= scroll ||
+        host.manager.cursor != 60 { return GridFailure(host, 10) }
+    if !Press(host, session, Keys.KeyHome) || host.manager.cursor != 0 ||
+        Model.SelectedCount(*host.manager) != 1 || !Press(host, session, Keys.KeyLeft) ||
+        !Press(host, session, Keys.KeyUp) || host.manager.cursor != 0 { return GridFailure(host, 11) }
+    first = EntryBounds(session, Model.EntryName(*host.manager, 0))
+    if !Press(host, session, Keys.KeyRight) { return GridFailure(host, 12) }
+    right := EntryBounds(session, Model.EntryName(*host.manager, host.manager.cursor))
+    if right.x <= first.x || right.y != first.y {
+        print("grid right geometry: first %,%; next %,%\n", first.x, first.y, right.x, right.y)
+        return GridFailure(host, 13)
+    }
+    if !Press(host, session, Keys.KeyHome) || !Press(host, session, Keys.KeyDown) { return GridFailure(host, 14) }
+    down := EntryBounds(session, Model.EntryName(*host.manager, host.manager.cursor))
+    if down.y <= first.y || down.x != first.x { return GridFailure(host, 15) }
+    if !Press(host, session, Keys.KeyEnd) || !Press(host, session, Keys.KeyRight) ||
+        !Press(host, session, Keys.KeyDown) || host.manager.cursor != 60 { return GridFailure(host, 16) }
+    // Selection and focus survive both directions of each view transition.
+    selected_path := Model.EntryPath(*host.manager, host.manager.cursor)
+    Model.SetView(*host.manager, .ViewList)
+    if !Render(host, session, true) || host.manager.scroll <= 0 { return GridFailure(host, 17) }
+    Model.SetView(*host.manager, mode)
+    if !Render(host, session, true) || host.manager.scroll <= 0 ||
+        Model.EntryPath(*host.manager, host.manager.cursor) != selected_path ||
+        Model.SelectedCount(*host.manager) != 1 { return GridFailure(host, 18) }
+    Model.SetSort(*host.manager, .SortName, true)
+    if !Render(host, session, true) || Model.EntryPath(*host.manager, host.manager.cursor) != selected_path ||
+        Model.SelectedCount(*host.manager) != 1 || !host.manager.selected[host.manager.cursor] { return GridFailure(host, 19) }
+    // A clipped-out row cannot steal input outside the content viewport.
+    count := Model.SelectedCount(*host.manager)
+    if !Click(host, session, 400.0, 300.0) || Model.SelectedCount(*host.manager) != count { return GridFailure(host, 20) }
+    if !Press(host, session, Keys.KeyHome) || !Press(host, session, Keys.KeyEnter) ||
+        host.manager.cwd != Files.JoinPath(root, "00-folder") { return GridFailure(host, 21) }
+    if !Model.NavigateBack(*host.manager) || !Press(host, session, Keys.KeyHome) { return GridFailure(host, 22) }
+    host.last_click_ms = 0
+    if !ClickEntry(host, session, 0) || host.manager.cwd != root ||
+        !ClickEntry(host, session, 0) || host.manager.cwd != Files.JoinPath(root, "00-folder") { return GridFailure(host, 23) }
+    if !Press(host, session, Keys.KeyHome) || !Press(host, session, Keys.KeyEnd) ||
+        !Press(host, session, 32) || !Press(host, session, Keys.KeyEnter) ||
+        host.manager.cursor != -1 || host.manager.anchor != -1 ||
+        Model.SelectedCount(*host.manager) != 0 { return GridFailure(host, 24) }
+    // Passive grid input must not mutate the model or consume the owner's key.
+    unused Input.KeyboardSend(session, Keys.KeyEnd)
+    if !Render(host, session, false) || Input.KeyboardTake(session) != Keys.KeyEnd { return GridFailure(host, 25) }
+    return true
+}
+
+ViewportTest :: (host: *App.Host, session: Sessions.Session, root: string) -> bool {
+    other: App.Host
+    if !App.Prepare(*other, root) { return false }
+    defer { App.Close(*other) }
+    other_session := Sessions.SessionOpen()
+    defer { unused Frames.CloseSession(other_session) }
+    viewport := Geometry.Rectangle.{1280.0, 720.0, 780.0, 520.0}
+    if !RenderAt(*other, other_session, true, viewport) { return false }
+    found := false
+    index: s32 = 0
+    while index < Tree.TreeCount(other_session) {
+        node := Tree.TreeNodeAt(other_session, index)
+        if node.key == cast(u64)40 && node.bounds.x == 1446.0 &&
+            node.bounds.y == 856.0 && node.bounds.width == 606.0 { found = true }
+        index += 1
+    }
+    if !found { return false }
+    // Input addressed to one session and a passive Host stays with that owner.
+    unused Input.KeyboardSend(other_session, 51)
+    unused Input.KeyboardModifiersSend(other_session, Keys.KeyModifierControl)
+    unused Input.TreePointerUpdate(other_session, Input.PointerFrame.{1480.0, 905.0, true, true, false})
+    unused Input.TreePointerUpdate(other_session, Input.PointerFrame.{1480.0, 905.0, false, false, true})
+    cursor := other.manager.cursor
+    if !RenderAt(*other, other_session, false, viewport) ||
+        other.manager.cursor != cursor || Input.KeyboardTake(other_session) != 51 ||
+        !Render(host, session, true) { return false }
+    unused Input.KeyboardModifiersSend(other_session, 0)
+    // Narrow viewports clip content and still produce a valid retained frame.
+    if !RenderAt(*other, other_session, true, .{33.0, 55.0, 360.0, 320.0}) { return false }
+    App.Close(*other)
+    return App.Prepare(*other, root) && RenderAt(*other, other_session, true, viewport)
+}
+
+LargeViewTest :: (host: *App.Host, session: Sessions.Session, root: string) -> bool {
+    Model.ClearEntries(*host.manager)
+    for index: cast(s32)0..Model.MAX_ENTRIES + 4 {
+        name: [32]u8
+        label := Number.FormatInteger(index, name[:])
+        if !Model.AppendEntry(*host.manager, label, Files.JoinPath(root, label),
+            Files.PathInfo.{.kind = .File, .size = cast(s64)index}) { return false }
+    }
+    last := cast(s32)host.manager.entries.count - 1
+    Model.SelectOne(*host.manager, last)
+    for mode: cast(s32)0..2 {
+        Model.SetView(*host.manager, cast(Model.ViewMode)mode)
+        if !RenderAt(host, session, true, .{33.0, 55.0, 640.0, 480.0}) ||
+            host.manager.scroll <= 0 || host.manager.cursor != last ||
+            Model.SelectedCount(*host.manager) != 1 || !host.manager.selected[last] ||
+            Tree.TreeCount(session) >= 300 { return false }
+    }
+    return true
+}
+
+DrawScoped :: (host: *App.Host, session: Sessions.Session, bounds: Geometry.Rectangle,
+    key: u64, focused: bool) -> bool {
+    node := UI.Box(session, UI.BoxProps.{.key = key, .bounds = bounds})
+    if node < 0 || !Tree.TreePushScope(session, node) { return false }
+    defer { Tree.End(session) }
+    return App.Draw(host, App.HostSession.{session.slot, session.epoch},
+        App.HostViewport.{bounds.x, bounds.y, bounds.width, bounds.height}, focused) == 0
+}
+
+Packed :: (color: UI.Color) -> u32 {
+    return (cast(u32)color.r << cast(u32)24) | (cast(u32)color.g << cast(u32)16) |
+        (cast(u32)color.b << cast(u32)8) | cast(u32)color.a
+}
+
+ThemeScopeTest :: (host: *App.Host, session: Sessions.Session, root: string) -> bool {
+    other: App.Host
+    if !App.Prepare(*other, root) { return false }
+    defer { App.Close(*other); host.palette_loaded = false }
+    light := Palettes.WidgetPalette.{.background = cast(u32)0xf6faf8ff,
+        .base = cast(u32)0xe4e9e7ff, .text = cast(u32)0x191c1bff,
+        .selected = cast(u32)0x386bafff, .selected_text = cast(u32)0xffffffff,
+        .border = cast(u32)0x737d79ff}
+    dark := Palettes.WidgetPalette.{.background = cast(u32)0x20242cff,
+        .base = cast(u32)0x151922ff, .text = cast(u32)0xeef1f5ff,
+        .selected = cast(u32)0x376aafff, .selected_text = cast(u32)0xffffffff,
+        .border = cast(u32)0x586274ff}
+    fallback := UI.ColorFromPacked(cast(u32)0x765432ff)
+    original := Packed(UI.StyleTokenColorOr("canvas", fallback))
+    for mode: cast(s32)0..2 {
+        Model.SetView(*host.manager, cast(Model.ViewMode)mode)
+        Model.SetView(*other.manager, cast(Model.ViewMode)mode)
+        host.palette = light
+        other.palette = dark
+        host.palette_loaded = true
+        other.palette_loaded = true
+        host.palette_ms = DateTime.UnixMilliseconds()
+        other.palette_ms = host.palette_ms
+        if !Pixmap.PixmapBeginInto(cast(u32)0xffffffff, 960, 600, theme_pixels[:]) ||
+            cast(s32)Frames.BeginFrame(session, cast(u64)1, .{0.0, 0.0, 960.0, 600.0}) != 0 ||
+            !Palettes.WidgetPaletteUse(session, dark) { return false }
+        if !DrawScoped(host, session, .{8.0, 8.0, 440.0, 400.0}, cast(u64)720, false) ||
+            Packed(UI.StyleTokenColorOr("canvas", fallback)) != dark.background ||
+            Packed(UI.StyleTokenColorOr("text", fallback)) != dark.text ||
+            !DrawScoped(*other, session, .{480.0, 100.0, 440.0, 400.0}, cast(u64)721, true) ||
+            Packed(UI.StyleTokenColorOr("canvas", fallback)) != dark.background {
+            unused Palettes.WidgetPaletteRestore(session)
+            return false
+        }
+        if !Palettes.WidgetPaletteRestore(session) ||
+            Packed(UI.StyleTokenColorOr("canvas", fallback)) != original ||
+            cast(s32)Frames.EndFrame(session) != 0 { return false }
+        if (theme_pixels[9 * 960 + 9] & cast(u32)0xffffff) != (light.background >> cast(u32)8) ||
+            (theme_pixels[101 * 960 + 481] & cast(u32)0xffffff) != (dark.background >> cast(u32)8) ||
+            (theme_pixels[0] & cast(u32)0xffffff) != cast(u32)0xffffff { return false }
+    }
+    return true
+}
+
+SharedFrameTest :: (host: *App.Host, session: Sessions.Session, root: string) -> bool {
+    other: App.Host
+    if !App.Prepare(*other, root) { return false }
+    defer { App.Close(*other) }
+    Model.SetView(*host.manager, .ViewList)
+    Model.SetView(*other.manager, .ViewIcon)
+    unused Input.KeyboardModifiersSend(session, Keys.KeyModifierControl)
+    unused Input.KeyboardSend(session, 51)
+    Pixmap.PixmapBegin(cast(u32)0xffffffff)
+    if cast(s32)Frames.BeginFrame(session, cast(u64)1, .{0.0, 0.0, 2400.0, 1200.0}) != 0 ||
+        !DrawScoped(host, session, .{40.0, 60.0, 960.0, 600.0}, cast(u64)700, false) ||
+        !DrawScoped(*other, session, .{1100.0, 500.0, 960.0, 600.0}, cast(u64)701, true) ||
+        cast(s32)Frames.EndFrame(session) != 0 { return false }
+    unused Input.KeyboardModifiersSend(session, 0)
+    return host.manager.view_mode == .ViewList && other.manager.view_mode == .ViewCompact &&
+        other.manager.tabs.count == 1 && host.manager.tabs.count == 2
+}
+
+SharedGridFrame :: (left: *App.Host, right: *App.Host, session: Sessions.Session,
+    wheel: float32, right_key: s32) -> bool {
+    frame_seconds += 0.017
+    Scrolls.BeginScrollFrame(session, .{480.0, 300.0}, false, false, false, wheel, frame_seconds)
+    Pixmap.PixmapBegin(cast(u32)0xffffffff)
+    if cast(s32)Frames.BeginFrame(session, cast(u64)1, .{0.0, 0.0, 1800.0, 600.0}) != 0 ||
+        !DrawScoped(left, session, .{40.0, 60.0, 700.0, 440.0}, cast(u64)710, true) { return false }
+    // Deliver navigation to the second Host after the first draws; both grids
+    // remain active so the first's wheel momentum must continue independently.
+    if right_key != 0 { unused Input.KeyboardSend(session, right_key) }
+    if !DrawScoped(right, session, .{900.0, 60.0, 700.0, 440.0}, cast(u64)711, true) ||
+        cast(s32)Frames.EndFrame(session) != 0 { return false }
+    return true
+}
+
+SharedGridMotionTest :: (host: *App.Host, session: Sessions.Session, root: string) -> bool {
+    other: App.Host
+    if !App.Prepare(*other, root) || !Model.OpenPath(*host.manager, root) { return false }
+    defer { App.Close(*other) }
+    Model.SetView(*host.manager, .ViewIcon)
+    Model.SetView(*other.manager, .ViewCompact)
+    unused Input.KeyboardModifiersSend(session, 0)
+    if !SharedGridFrame(host, *other, session, 0.0, 0) ||
+        !SharedGridFrame(host, *other, session, -1.0, Keys.KeyEnd) ||
+        host.manager.scroll <= 0 || other.manager.cursor != 60 ||
+        other.manager.scroll <= 0 || !Scrolls.ScrollDeviceMoving(session) {
+        print("shared grid wheel left %, right cursor % scroll %, moving %\n",
+            host.manager.scroll, other.manager.cursor, other.manager.scroll, Scrolls.ScrollDeviceMoving(session))
+        return false
+    }
+    left_offset := host.manager.scroll
+    if !SharedGridFrame(host, *other, session, 0.0, Keys.KeyHome) ||
+        host.manager.scroll <= left_offset || other.manager.cursor != 0 ||
+        other.manager.scroll < 0 || other.manager.scroll > 6 || !Scrolls.ScrollDeviceMoving(session) {
+        print("shared grid Home left % -> %, right cursor % scroll %, moving %\n",
+            left_offset, host.manager.scroll, other.manager.cursor, other.manager.scroll, Scrolls.ScrollDeviceMoving(session))
+        return false
+    }
+    left_offset = host.manager.scroll
+    right_offset := other.manager.scroll
+    first := EntryBounds(session, Model.EntryName(*other.manager, 0), 1066.0)
+    if first.width <= 0.0 || first.x < 1066.0 || first.x + first.width > 1592.0 ||
+        first.y < 196.0 || first.y + first.height > 468.0 { return false }
+    if !SharedGridFrame(host, *other, session, 0.0, 0) ||
+        host.manager.scroll <= left_offset || other.manager.scroll != right_offset {
+        print("shared grid coast left % -> %, right %\n", left_offset, host.manager.scroll, other.manager.scroll)
+        return false
+    }
+    return true
+}
+
+PreviewHostTest :: (host: *App.Host, session: Sessions.Session, root: string) -> bool {
+    folder := Files.JoinPath(root, "preview-host")
+    first_path := Files.JoinPath(folder, "01-image.png")
+    second_path := Files.JoinPath(folder, "02-image.JPG")
+    text_path := Files.JoinPath(folder, "03-notes.txt")
+    if !Files.CreateDirectories(folder) || !Files.ReplaceFile(first_path, "fixture") ||
+        !Files.ReplaceFile(second_path, "fixture") { return false }
+    notes: Vec(u8)
+    for row: cast(s32)0..199 { BuilderPrint(*notes, "preview line %\n", row) }
+    if !Files.ReplaceFile(text_path, TextView(notes[:])) { return false }
+    pixels: [12288]u32
+    for * pixel: pixels { pixel.* = cast(u32)0xff2255aa }
+    if !Pixmap.PixmapSetImage(0, first_path, 128, 96, pixels[:]) ||
+        !Pixmap.PixmapSetImage(1, second_path, 128, 96, pixels[:]) { return false }
+    if !Model.OpenPath(*host.manager, folder) { return false }
+    Model.SetSort(*host.manager, .SortName, false)
+    Model.SetView(*host.manager, .ViewIcon)
+    if !Press(host, session, Keys.KeyHome) || !Press(host, session, Keys.KeyEnter) ||
+        !host.preview.opened || host.preview.kind != .Image ||
+        TextView(host.preview.path) != first_path || !Render(host, session, true) { return false }
+    // Zoomed source cropping stays inside the image and inside this nonzero viewport.
+    host.preview.zoom = 800
+    if !Press(host, session, Keys.KeyRight) || host.preview.pan_x <= 0.0 ||
+        !Press(host, session, Keys.KeyDown) || host.preview.pan_y <= 0.0 { return false }
+    found := false
+    for row: cast(s32)0..Tree.TreeCount(session) - 1 {
+        node := Tree.TreeNodeAt(session, row)
+        if node.kind == cast(s32)Kinds.WidgetKind.WidgetKindImage {
+            found = true
+            if node.bounds.x < 248.0 || node.bounds.y < 200.0 ||
+                node.bounds.x + node.bounds.width > 1192.0 ||
+                node.bounds.y + node.bounds.height > 658.0 { return false }
+        }
+    }
+    if !found || !Press(host, session, Keys.KeyHome) || host.preview.zoom != 0 ||
+        !Press(host, session, Keys.KeyPageDown) || TextView(host.preview.path) != second_path ||
+        host.manager.cursor != 1 || Model.SelectedCount(*host.manager) != 1 { return false }
+    // Unfocused preview leaves queued navigation for the actual input owner.
+    unused Input.KeyboardSend(session, Keys.KeyEscape)
+    if !Render(host, session, false) || !host.preview.opened ||
+        Input.KeyboardTake(session) != Keys.KeyEscape { return false }
+    if !Press(host, session, Keys.KeyEscape) || host.preview.opened ||
+        !Render(host, session, true) { return false }
+    Model.SelectOne(*host.manager, 2)
+    if !Press(host, session, 80, Keys.KeyModifierControl) || host.preview.kind != .Text ||
+        !Press(host, session, Keys.KeyEnd) || host.preview.text_scroll <= 0 { return false }
+    if !Press(host, session, Keys.KeyHome) || host.preview.text_scroll != 0 ||
+        !Press(host, session, Keys.KeyEscape) || host.preview.opened { return false }
+    // Close must also clean up a preview left open by the embedding host.
+    Preview.Open(*host.preview, text_path)
+    return host.preview.path.bytes.count > 0 && host.preview.body.bytes.count > 0
+}
+
+#program_export
+main :: (argc: s32, argv: **u8) -> s32 {
+    if argc != 2 { return 64 }
+    root := Bytes.TextFromCString(argv[1])
+    unused Files.RemoveTree(root)
+    if !Files.CreateDirectories(root) { return 65 }
+    if !Files.ReplaceFile(Files.JoinPath(root, "fixture.txt"), "fixture") { return 66 }
+    host: App.Host
+    if !App.Prepare(*host, root) { return 1 }
+    defer { App.Close(*host) }
+    session := Sessions.SessionOpen()
+    if !Sessions.SessionValid(session) { return 2 }
+    defer { unused Frames.CloseSession(session) }
+    if !Render(*host, session, true) { return 3 }
+    found := false
+    index: s32 = 0
+    while index < Tree.TreeCount(session) {
+        entry := Tree.TreeNodeAt(session, index)
+        if entry.bounds.x == 248.0 && entry.bounds.y == 128.0 && entry.bounds.width == 58.0 {
+            found = true
+        }
+        index += 1
+    }
+    if !found { print("host viewport origin failed\n"); return 4 }
+    if !ThemeScopeTest(*host, session, root) { print("system palette viewport/scope isolation failed\n"); return 31 }
+
+    if !DetailsTest(*host, session, Files.JoinPath(root, "views")) {
+        print("details selection/navigation/metadata sort/activation failed\n"); return 20
+    }
+    if !GridTest(*host, session, Files.JoinPath(root, "views"), .ViewIcon) {
+        print("Icon grid behavior failed\n"); return 23
+    }
+    if !GridTest(*host, session, Files.JoinPath(root, "views"), .ViewCompact) {
+        print("Compact grid behavior failed\n"); return 24
+    }
+    if !Model.OpenPath(*host.manager, root) || !Render(*host, session, true) { return 21 }
+    if !ViewportTest(*host, session, root) { print("multiple viewport isolation failed\n"); return 22 }
+
+    // Passive embedded windows must leave all queued input for their owner.
+    unused Input.KeyboardSend(session, 84)
+    unused Input.KeyboardModifiersSend(session, Keys.KeyModifierControl)
+    unused Input.TypedCodepointSend(session, #char "x")
+    unused Input.PointerWheelSend(session, 450.0, 320.0, -2.0)
+    if !Render(*host, session, false) || host.manager.tabs.count != 1 ||
+        Input.KeyboardTake(session) != 84 || Input.TypedCodepointTake(session) != #char "x" ||
+        Input.PointerWheelTake(session, Geometry.Rectangle.{240.0, 120.0, 960.0, 600.0}) != -2.0 {
+        print("passive host consumed input\n"); return 5
+    }
+    unused Input.KeyboardSend(session, 84)
+    if !Render(*host, session, true) || host.manager.tabs.count != 2 ||
+        !Render(*host, session, true) {
+        print("host tab frame failed\n"); return 6
+    }
+
+    App.OpenPrompt(*host, .PromptFile)
+    unused Input.KeyboardModifiersSend(session, 0)
+    if !Render(*host, session, false) || !host.field.focused { return 7 }
+    if !Render(*host, session, true) || !Render(*host, session, true) { return 9 }
+    unused Input.TypedCodepointSend(session, #char "x")
+    if !Render(*host, session, true) || host.field.length != 1 { return 10 }
+    unused Input.KeyboardSend(session, Keys.KeyEnter)
+    if !Render(*host, session, true) || !Files.PathExists(Files.JoinPath(root, "x")) { return 11 }
+    if !SharedFrameTest(*host, session, root) { print("shared frame viewport/focus isolation failed\n"); return 28 }
+    if !SharedGridMotionTest(*host, session, Files.JoinPath(root, "views")) {
+        print("shared Host grid momentum isolation failed\n"); return 29
+    }
+    if !LargeViewTest(*host, session, root) { print("large view storage/reveal failed\n"); return 25 }
+    if !PreviewHostTest(*host, session, root) { print("preview image/text/input/viewport behavior failed\n"); return 30 }
+    App.Close(*host)
+    if host.manager.entry_text.count != 0 || host.manager.cwd_text.bytes.count != 0 ||
+        host.manager.clipboard.text.count != 0 || host.details_cells.count != 0 ||
+        host.details_rows.count != 0 || host.grid_items.count != 0 ||
+        host.last_click_path.bytes.count != 0 || host.preview.opened ||
+        host.preview.path.bytes.count != 0 || host.preview.body.bytes.count != 0 ||
+        host.palette_loaded { return 12 }
+    if host.started || !App.Prepare(*host, root) || host.manager.tabs.count != 1 ||
+        host.manager.prompt != .PromptNone || host.field.length != 0 { return 8 }
+    for mode: cast(s32)0..2 {
+        Model.SetView(*host.manager, cast(Model.ViewMode)mode)
+        if !Render(*host, session, true) { return 26 }
+        App.Close(*host)
+        if !App.Prepare(*host, root) { return 27 }
+    }
+    print("Shelf three-view host selection, sorting, layout, clipping, viewport, input, storage and reopen local tests passed\n")
+    return 0
+}

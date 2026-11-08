@@ -1,0 +1,150 @@
+#scope_module
+using Bytes :: #import "std/byte_text_linux";
+using Texts :: #import "std/format";
+Files :: #import "std/file";
+Paths :: #import "std/file_tree_linux";
+Utf8 :: #import "std/utf8";
+
+#scope_export
+TEXT_LIMIT :: 65536;
+
+Kind :: enum {
+    None :: 0
+    Image :: 1
+    Text :: 2
+    Other :: 3
+    Error :: 4
+}
+
+State :: struct {
+    path: Text
+    body: Text
+    kind: Kind
+    opened: bool
+    truncated: bool
+    lines: s32
+    zoom: s32
+    fit_zoom: s32
+    pan_x: float32
+    pan_y: float32
+    text_scroll: s32
+    info: Paths.PathInfo
+}
+
+ImagePath :: (path: string) -> bool {
+    dot: s64 = -1
+    for at: cast(s64)0..path.count - 1 {
+        if path[at] == cast(u8)47 { dot = -1 }
+        else if path[at] == cast(u8)46 { dot = at }
+    }
+    if dot < 0 { return false }
+    extension: [12]u8
+    count := path.count - dot - 1
+    if count < 1 || count > 12 { return false }
+    for at: cast(s64)0..count - 1 {
+        byte := path[dot + 1 + at]
+        if byte >= cast(u8)65 && byte <= cast(u8)90 { byte += cast(u8)32 }
+        extension[at] = byte
+    }
+    value := TextView(extension[:count])
+    return value == "png" || value == "jpg" || value == "jpeg" || value == "jpe" ||
+        value == "webp" || value == "avif" || value == "gif" || value == "svg" ||
+        value == "bmp" || value == "tif" || value == "tiff" || value == "ico" ||
+        value == "ppm" || value == "pgm" || value == "pbm" || value == "xpm" || value == "xbm"
+}
+
+Close :: (state: *State) {
+    VecFree(state.path.bytes)
+    VecFree(state.body.bytes)
+    state.kind = .None
+    state.opened = false
+    state.truncated = false
+    state.lines = 0
+    state.zoom = 0
+    state.fit_zoom = 0
+    state.pan_x = 0.0
+    state.pan_y = 0.0
+    state.text_scroll = 0
+}
+
+Open :: (state: *State, path: string) {
+    // Copy before Close so reopening the owned path is safe too.
+    saved: Text = TextCopy(path)
+    Close(state)
+    VecSwap(state.path.bytes, saved.bytes)
+    state.opened = true
+    state.info = Paths.PathStatus(TextView(state.path), true)
+    state.kind = .Other
+    if state.info.kind == .Missing {
+        state.kind = .Error
+        Store(*state.body, "The file is no longer available.")
+        return
+    }
+    if state.info.kind != .File { return }
+    file := Files.OpenRead(TextView(state.path))
+    if !file.valid {
+        state.kind = .Error
+        Store(*state.body, "The file could not be read.")
+        return
+    }
+    defer { unused Files.CloseFile(file) }
+    if ImagePath(TextView(state.path)) { state.kind = .Image; return }
+    if !VecResize(state.body.bytes, TEXT_LIMIT + 4) {
+        state.kind = .Error
+        return
+    }
+    count: s64 = 0
+    while count < TEXT_LIMIT + 4 {
+        read := Files.ReadAt(file, state.body.bytes[count:TEXT_LIMIT + 4], count)
+        if read < 0 {
+            VecClear(state.body.bytes)
+            Store(*state.body, "The file could not be read.")
+            state.kind = .Error
+            return
+        }
+        if read == 0 { break }
+        count += read
+    }
+    unused VecResize(state.body.bytes, count)
+    at, lines, valid := TextPrefix(TextView(state.body))
+    if !valid {
+        VecClear(state.body.bytes)
+        return
+    }
+    state.lines = lines
+    state.truncated = cast(s64)at < count || state.info.size > at
+    unused VecResize(state.body.bytes, cast(s64)at)
+    state.kind = .Text
+}
+
+TextPrefix :: (text: string) -> (count: s32, lines: s32, valid: bool) {
+    at: s32 = 0
+    line_count: s32 = 1
+    while at < text.count && at < TEXT_LIMIT {
+        decoded := Utf8.Decode(text, at)
+        if !decoded.valid || (decoded.value < cast(u32)32 &&
+            decoded.value != cast(u32)9 && decoded.value != cast(u32)10 && decoded.value != cast(u32)13) ||
+            decoded.value == cast(u32)127 {
+            return 0, 0, false
+        }
+        if decoded.after > TEXT_LIMIT { break }
+        if decoded.value == cast(u32)10 { line_count += 1 }
+        at = decoded.after
+    }
+    return at, line_count, true
+}
+
+Store :: (owner: *Text, value: string) {
+    copy: Text = TextCopy(value)
+    VecSwap(owner.bytes, copy.bytes)
+}
+
+Zoom :: (state: *State, direction: s32) {
+    value := state.zoom
+    if value == 0 { value = ifx state.fit_zoom > 0 then state.fit_zoom else 100 }
+    if direction > 0 { value = value * 5 / 4 }
+    else { value = value * 4 / 5 }
+    if value < 25 { value = 25 }
+    if value > 800 { value = 800 }
+    state.zoom = value
+}
