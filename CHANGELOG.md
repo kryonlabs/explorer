@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+- Switch open menus on hover and support keyboard menu navigation with visible
+  shortcuts. Apply native wheel distances immediately, handle keypad Delete,
+  confirm permanent deletion, and preserve text-editor key behavior. Honor the
+  normal arrow over disabled file-manager controls.
+- Add view zoom, Help and read-only Properties, window/tab shortcuts and
+  clipboard Insert aliases. Undo and redo retain complete operation batches,
+  protect replacement objects and keep recovery data across history disposal.
+
+- Use native GTK theme rendering, Pango fonts and discovered icon assets for
+  Thunar-style menus, toolbar, location entry, Places sidebar, file views and
+  status bar. Native scrollbar geometry, gestures and fading follow GTK.
+- Discover devices and virtual locations through GIO, retain URI routes across
+  tabs and panes, and report unavailable backends without losing the current
+  directory. Format file metadata and status summaries with native locale data.
+
 - Add local split view with a native draggable divider, independent pane tabs
   and navigation state, explicit active-pane actions and a shared file clipboard.
   Collapsing retains both panes in memory; failed creation or re-enable preserves
@@ -10,7 +25,7 @@
 - Replace numbered tab controls with a native labeled strip, close buttons,
   scrolling overflow and drag/keyboard reorder. Dynamic tabs retain independent
   history, selection, focus, scrolling and view state; failed navigation keeps
-  the previous usable tab and the last tab remains open.
+  the previous usable tab; closing the final tab closes the window.
 
 - Add local breadcrumb navigation and an inline location editor with common-prefix
   completion, keyboard suggestions, literal relative/Home paths and lossless raw

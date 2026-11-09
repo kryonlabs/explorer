@@ -8,6 +8,7 @@ import select
 import subprocess
 import sys
 import time
+from ui_test import menu_action
 from PIL import Image, ImageChops
 
 
@@ -71,28 +72,28 @@ def main():
             return target
 
         key('ctrl+e')
-        click(22, 212)  # Home disclosure; cwd remains the fixture root.
+        click(14, 181)  # Home disclosure; cwd remains the fixture root.
         capture('expanded')
-        click(115, 244)  # Unicode/newline folder label.
+        click(107, 213)  # Unicode/newline folder label.
         opened(alpha)
         (alpha / 'zzz-refreshed.txt').write_text('new')
-        click(115, 244)  # Already-selected label must activate and refresh again.
+        click(107, 213)  # Already-selected label must activate and refresh again.
         opened(alpha, b'zzz-refreshed.txt')
-        click(40, 244)  # Expand alpha, then refuse the loop to Home.
-        click(58, 276)
+        click(32, 213)  # Expand alpha, then refuse the loop to Home.
+        click(50, 245)
         capture('cycle-error')
         opened(alpha, b'zzz-refreshed.txt')
-        click(40, 244)  # Collapse alpha, restoring direct-child rows.
-        click(115, 276)
+        click(32, 213)  # Collapse alpha, restoring direct-child rows.
+        click(107, 245)
         opened(bravo)
-        click(115, 308)
+        click(107, 277)
         opened(raw)
         # Ctrl+E preserves Places as the default alternative; Ctrl+B also
         # returns there. Bookmarks are retained across each switch.
         key('ctrl+b'); capture('places')
         key('ctrl+e')
-        click(305, 74)  # Hidden applies to the tree: hidden is the first child.
-        click(115, 244)
+        menu_action(xdo, window, "View", 3)  # Hidden applies to the tree: hidden is the first child.
+        click(107, 213)
         opened(hidden)
         capture('hidden')
         key('ctrl+e', 'ctrl+e', 'ctrl+b')
@@ -134,7 +135,7 @@ def main():
         click(40, 575)
         after = capture('deep-left')
         with Image.open(before) as a, Image.open(after) as b:
-            assert ImageChops.difference(a.crop((8, 164, 158, 558)), b.crop((8, 164, 158, 558))).getbbox(), 'horizontal button did not move tree content'
+            assert ImageChops.difference(a.crop((8, 133, 158, 558)), b.crop((8, 133, 158, 558))).getbbox(), 'horizontal button did not move tree content'
         click(115, 575)
         key('ctrl+e', 'ctrl+e', 'Left', 'Return')
         opened(deep)

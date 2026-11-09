@@ -213,10 +213,12 @@ SmallFooter :: (host: *App.Host, session: Sessions.Session) -> bool {
     Model.SetError(manager, "Cannot refresh retained split pane; current pane retained")
     if !HostTests.RenderAt(host, session, true, viewport) { return Fail(91) }
     error := FooterBounds(session, 21)
-    controls := FooterBounds(session, 240)
     panes := FooterBounds(session, 548)
-    if error.width < 250.0 || error.height < 32.0 || error.y + error.height > controls.y ||
-        panes.y + panes.height > error.y { return Fail(92) }
+    if error.width < 250.0 || error.height < 32.0 || error.y + error.height > viewport.y+viewport.height ||
+        panes.y + panes.height > error.y {
+        print("Split footer error=(%,%,%,%) panes=(%,%,%,%) viewport=(%,%,%,%)\n",error.x,error.y,error.width,error.height,panes.x,panes.y,panes.width,panes.height,viewport.x,viewport.y,viewport.width,viewport.height)
+        return Fail(92)
+    }
     Model.SetError(manager, "")
     unused Input.KeyboardModifiersSend(session, Keys.KeyModifierControl)
     unused Input.KeyboardSend(session, 76)
@@ -226,7 +228,7 @@ SmallFooter :: (host: *App.Host, session: Sessions.Session) -> bool {
     unused Input.KeyboardModifiersSend(session, 0)
     unused Input.KeyboardSend(session, Keys.KeyEscape)
     if !HostTests.RenderAt(host, session, true, viewport) || manager.prompt != .PromptNone { return Fail(95) }
-    print("Split 440px footer: complete help/error above viewport edge and controls; no partial label\n")
+    print("Split 440px footer: complete help/error above viewport edge and panes; no partial label\n")
     return true
 }
 
@@ -285,13 +287,14 @@ Native :: (root: string) -> bool {
         host.preview.opened || right.error == "" || !Model.CloseTab(right, right.active_tab) { return Fail(47) }
     // Native divider drag, with release beyond the edge clamped by canonical PanedView.
     before := host.divider
-    x := 406.0 + cast(float32)before
+    panes := FooterBounds(session, 548)
+    x := panes.x + cast(float32)before
     unused Input.TreePointerUpdate(session, Input.PointerFrame.{x, 450.0, true, true, false})
     if !HostTests.Render(*host, session, true) { return Fail(37) }
     unused Input.TreePointerUpdate(session, Input.PointerFrame.{x + 120.0, 450.0, true, false, false})
     if !HostTests.Render(*host, session, true) || host.divider <= before { return Fail(38) }
     unused Input.TreePointerUpdate(session, Input.PointerFrame.{2000.0, 450.0, false, false, true})
-    if !HostTests.Render(*host, session, true) || host.divider > 686 { return Fail(39) }
+    if !HostTests.Render(*host, session, true) || host.divider > cast(s32)panes.width - 100 { return Fail(39) }
     unused Input.KeyboardModifiersSend(session, Keys.KeyModifierControl)
     unused Input.KeyboardSend(session, 84)
     count := right.tabs.count

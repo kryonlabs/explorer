@@ -6,6 +6,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import time
+from ui_test import menu_action
 
 
 def main():
@@ -83,11 +84,11 @@ def main():
         geometry = dict(line.split('=', 1) for line in xdo('getwindowgeometry', '--shell', window).splitlines())
         width = int(geometry['WIDTH'])
         # Rename opens lossless byte escapes. Return unchanged must keep raw bytes.
-        xdo('mousemove', '--window', window, width - 165, 26); xdo('click', '1')
+        menu_action(xdo, window, 'File', 4)
         time.sleep(.15); key('Return')
         assert os.path.exists(raw_file) and literal_file.exists()
         # Preserve the invalid suffix while editing the name through escaped text.
-        xdo('mousemove', '--window', window, width - 165, 26); xdo('click', '1')
+        menu_action(xdo, window, 'File', 4)
         time.sleep(.15); key('ctrl+a')
         xdo('type', '--clearmodifiers', '--delay', '1', r'\xGG')
         key('Return')
@@ -100,7 +101,7 @@ def main():
         # Refresh resets selection. Select and open the renamed entry explicitly.
         key('End', 'Return')
         opened(renamed)
-        xdo('mousemove', '--window', window, 90, 68); xdo('click', '1')
+        menu_action(xdo, window, 'Edit', 6)
         time.sleep(.3); healthy()
         duplicated = os.fsencode(source) + b'/04-renamed-\xff\xfe (2).txt'
         assert os.path.exists(duplicated) and os.path.exists(renamed)

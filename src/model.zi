@@ -1,5 +1,6 @@
 #scope_module
 Files :: #import "std/file_tree_linux";
+Operations :: #import "operation_history";
 WholeFiles :: #import "std/file";
 DateTime :: #import "std/date_time_linux";
 Calendar :: #import "std/calendar";
@@ -8,12 +9,14 @@ using Format :: #import "std/format";
 Number :: #import "std/number_text";
 Strings :: #import "std/c_string";
 Display :: #import "file_display";
+using DesktopLocations :: #import "desktop_locations";
 using Bytes :: #import "std/byte_text_linux";
 using TextBuffer :: #import "std/text_buffer";
 using Options :: #import "std/option";
 
 libc :: #system_library "c";
 SymbolicLinkRaw :: (target: *u8, path: *u8) -> s32 #foreign libc "symlink";
+MatchPattern :: (pattern: *u8, name: *u8, flags: s32) -> s32 #foreign libc "fnmatch";
 
 #scope_export
 MAX_ENTRIES :: 4096;
@@ -73,6 +76,8 @@ PromptKind :: enum {
     PromptLocation :: 4
     PromptSearch :: 5
     PromptBookmarkRename :: 6
+    PromptDelete :: 7
+    PromptSelectPattern :: 8
 }
 
 #scope_export
@@ -82,6 +87,9 @@ Entry :: struct {
     path: string
     info: Files.PathInfo
     caption: string
+    icon_serialized: string
+    content_type: string
+    uri: string
 }
 
 PathKey :: (path: string) -> u64 {
@@ -109,6 +117,7 @@ Manager :: struct {
     tab_slots: Vec(s32)
     next_tab_key: u64
     operation_text: Vec(Text)
+    operations: Operations.Journal
     cwd: string
     entries: Vec(Entry)
     selected: Vec(bool)
@@ -140,8 +149,26 @@ HomePath :: () -> string {
     return Environment("HOME")
 }
 
+IsUri :: (path: string) -> bool {
+    if path.count<4 || path[0]==#char "/" { return false }
+    if !((path[0]>=#char "a" && path[0]<=#char "z") || (path[0]>=#char "A" && path[0]<=#char "Z")) { return false }
+    for i: cast(s64)1..path.count-3 {
+        if path[i:i+3]=="://" { return true }
+        c:=path[i]
+        if !((c>=#char "a" && c<=#char "z") || (c>=#char "A" && c<=#char "Z") || (c>=#char "0" && c<=#char "9") || c==#char "+" || c==#char "-" || c==#char ".") { return false }
+    }
+    return false
+}
 PathParent :: (path: string) -> string {
     return Files.PathParent(path)
+}
+NavigateUp :: (manager: *Manager) -> bool {
+    if IsUri(manager.cwd) {
+        parent: Text=DesktopLocations.ParentUri(manager.cwd)
+        if parent.bytes.count==0 { return false }
+        return OpenPathTracked(manager,TextView(parent))
+    }
+    return OpenPathTracked(manager,PathParent(manager.cwd))
 }
 
 DataHome :: () -> Text {
@@ -149,13 +176,13 @@ DataHome :: () -> Text {
     if value != "" { return TextCopy(value) }
     home := HomePath()
     if home == "" { return .{} }
-    return Files.JoinPath(home, ".local/share")
+    return OperationPath(home, ".local/share")
 }
 
 TrashDirectory :: (info: bool) -> Text {
     root: Text = DataHome()
     if root.bytes.count == 0 { return .{} }
-    return Files.JoinPath(root, ifx info then "Trash/info" else "Trash/files")
+    return OperationPath(root, ifx info then "Trash/info" else "Trash/files")
 }
 
 SameText :: (left: string, right: string) -> bool {
@@ -368,9 +395,63 @@ OpenPath :: (manager: *Manager, path: string) -> bool {
     return OpenPathChecked(manager, path)
 }
 
+AppendDesktopEntry :: (pending: *Manager, item: DesktopLocationEntry) -> bool {
+    target:=ifx item.target_uri!="" then item.target_uri else item.uri
+    route:=ifx item.local_path!="" then item.local_path else target
+    info:=Files.PathInfo.{.kind=ifx item.is_navigable then .Directory else .File,.size=item.size,.modified=item.modified}
+    if !AppendEntry(pending,item.name,route,info) { return false }
+    index:=pending.entries.count-1
+    icon: Text=TextCopy(item.icon_serialized); content: Text=TextCopy(item.content_type); identity: Text=TextCopy(item.uri)
+    caption: Text=Display.Caption(item.caption)
+    if icon.bytes.count!=item.icon_serialized.count || content.bytes.count!=item.content_type.count || identity.bytes.count!=item.uri.count || (item.caption!="" && caption.bytes.count==0) { return false }
+    if !VecPush(pending.entry_text,icon) || !VecPush(pending.entry_text,content) || !VecPush(pending.entry_text,identity) || !VecPush(pending.entry_text,caption) { return false }
+    pending.entries[index].key=item.key
+    pending.entries[index].icon_serialized=TextView(pending.entry_text[pending.entry_text.count-4])
+    pending.entries[index].content_type=TextView(pending.entry_text[pending.entry_text.count-3])
+    pending.entries[index].uri=TextView(pending.entry_text[pending.entry_text.count-2])
+    pending.entries[index].caption=TextView(pending.entry_text[pending.entry_text.count-1])
+    return true
+}
+
+OpenDesktopPath :: (manager: *Manager, uri: string) -> bool {
+    native: DesktopLocations.State
+    DesktopLocations.Init(*native)
+    defer DesktopLocations.Release(*native)
+    if !DesktopLocations.OpenUri(*native,uri) { SetError(manager,native.error.message); return false }
+    pending: Manager
+    pending.cursor=-1;pending.anchor=-1;pending.show_hidden=manager.show_hidden
+    pending.sort_mode=manager.sort_mode;pending.sort_reverse=manager.sort_reverse
+    at: s64
+    while at<native.entries.count {
+        item:=native.entries[at];at+=1
+        if item.is_hidden && !manager.show_hidden { continue }
+        if !AppendDesktopEntry(*pending,item) { SetError(manager,"Cannot retain complete native listing");return false }
+    }
+    next: Text=TextCopy(native.current_uri)
+    next_tab: Text=TextCopy(native.current_uri)
+    if next.bytes.count!=native.current_uri.count || next_tab.bytes.count!=native.current_uri.count { SetError(manager,"Cannot retain native location"); return false }
+    SortEntries(*pending)
+    VecSwap(manager.cwd_text.bytes,next.bytes);manager.cwd=TextView(manager.cwd_text)
+    VecSwap(manager.entry_text,pending.entry_text);VecSwap(manager.entries,pending.entries);VecSwap(manager.selected,pending.selected)
+    manager.cursor=-1;manager.anchor=-1;manager.scroll=0;manager.reveal_focus=true;manager.search_active=false
+    SetStoredText(*manager.search_query_text,"");manager.search_query=""
+    SetStoredText(*manager.search_root_text,"");manager.search_root=""
+    SelectFirst(manager);SetError(manager,"")
+    if manager.active_tab>=0 && manager.active_tab<manager.tabs.count {
+        slot:=manager.tab_slots[manager.active_tab]
+        VecSwap(manager.tab_text[slot].bytes,next_tab.bytes);manager.tabs[manager.active_tab]=TextView(manager.tab_text[slot])
+    }
+    return true
+}
+
 OpenPathChecked :: (manager: *Manager, path: string, select_name: string = "",
     expected: Files.PathInfo = .{}, include_hidden: bool = false) -> bool {
-    if path == "" { SetError(manager, "Enter a local folder path"); return false }
+    if path == "" { SetError(manager, "Enter a folder path or URI"); return false }
+    if IsUri(path) {
+        local: Text=DesktopLocations.PathForUri(path)
+        if local.bytes.count>0 { return OpenPathChecked(manager,TextView(local),select_name,expected,include_hidden) }
+        return OpenDesktopPath(manager,path)
+    }
     resolved: Text = Files.ResolvePath(path)
     before := Files.PathQuery(resolved)
     if resolved.bytes.count == 0 || !before.valid || before.info.kind != .Directory || !before.info.identity_valid {
@@ -464,6 +545,11 @@ SamePathIdentity :: (left: Files.PathInfo, right: Files.PathInfo) -> bool {
 
 // A typed file location selects the file in its parent; it never executes it.
 OpenLocationTracked :: (manager: *Manager, path: string) -> bool {
+    if IsUri(path) {
+        local: Text=DesktopLocations.PathForUri(path)
+        if local.bytes.count>0 { return OpenLocationTracked(manager,TextView(local)) }
+        return OpenPathTracked(manager,path)
+    }
     query := Files.PathQuery(path)
     if !query.valid { SetError(manager, ifx query.missing then "Location does not exist" else "Location is inaccessible or cannot be represented"); return false }
     if query.info.kind == .Directory { return OpenPathTracked(manager, path) }
@@ -570,6 +656,7 @@ SearchDirectory :: (manager: *Manager, directory: string, query: string,
 }
 
 Search :: (manager: *Manager, query: string) -> bool {
+    if !LocalDestination(manager) { return false }
     if query == "" { return false }
     root := ifx manager.search_active && manager.search_root != "" then manager.search_root else manager.cwd
     ClearEntries(manager)
@@ -628,6 +715,7 @@ FirstTab :: (manager: *Manager) -> bool {
 
 Dispose :: (manager: *Manager) {
     if manager == null { return }
+    Operations.Close(*manager.operations)
     ClearEntries(manager)
     VecFree(manager.cwd_text.bytes)
     VecFree(manager.search_root_text.bytes)
@@ -733,7 +821,8 @@ RestoreTab :: (pending: *Manager, tab: *TabState) {
             if !tab.selected[old] && old != tab.cursor && old != tab.anchor { continue }
             for index: cast(s32)0..cast(s32)pending.entries.count - 1 {
                 if tab.entries[old].path == pending.entries[index].path &&
-                    SamePathIdentity(tab.entries[old].info, pending.entries[index].info) {
+                    ((tab.entries[old].uri!="" && tab.entries[old].uri==pending.entries[index].uri) ||
+                    SamePathIdentity(tab.entries[old].info, pending.entries[index].info)) {
                     pending.selected[index] = tab.selected[old]
                     if old == tab.cursor { pending.cursor = index }
                     if old == tab.anchor { pending.anchor = index }
@@ -931,39 +1020,56 @@ PathPresent :: (path: string) -> bool {
 }
 
 PathAvailable :: (path: string, trash_info: bool) -> bool {
-    return !PathPresent(path) && (!trash_info || !PathPresent(TrashInfoPath(path)))
+    if path == "" || !Files.PathQuery(path, false).missing { return false }
+    return !trash_info || Files.PathQuery(TrashInfoPath(path), false).missing
 }
-
 UniquePath :: (directory: string, name: string, trash_info: bool = false) -> Text {
-    candidate: Text = Files.JoinPath(directory, name)
+    candidate: Text = OperationPath(directory, name)
+    if candidate.bytes.count == 0 { return .{} }
     if PathAvailable(candidate, trash_info) { return candidate }
     stem := Files.PathStem(name)
     suffix := Files.PathSuffix(name)
     number: s32 = 2
-    while number > 0 {
+    while number <= 100000 {
         digits: [16]u8
         builder: Vec(u8)
-        Append(*builder, directory)
-        Append(*builder, "/")
-        Append(*builder, stem)
+        if !VecReserve(builder, directory.count + name.count + 32) { return .{} }
+        Append(*builder, directory); Append(*builder, "/"); Append(*builder, stem)
         BuilderPrint(*builder, " (%)", Number.FormatInteger(number, digits[:]))
         Append(*builder, suffix)
         candidate = BuilderFinish(builder)
-        if PathAvailable(candidate, trash_info) { return TextCopy(candidate) }
+        if candidate.bytes.count > 4095 { return .{} }
+        if PathAvailable(candidate, trash_info) { return candidate }
         number += 1
     }
     return .{}
 }
 
+SelectPattern :: (manager: *Manager, pattern: string) -> bool {
+    native_pattern: [4096]u8
+    native_name: [4096]u8
+    if !Strings.CopyCString(pattern,native_pattern[:]) { return false }
+    for i: cast(s32)0..cast(s32)manager.entries.count-1 {
+        manager.selected[i]=Strings.CopyCString(manager.entries[i].name,native_name[:]) && MatchPattern(*native_pattern[0],*native_name[0],0)==0
+    }
+    return true
+}
+
 SelectedPaths :: (manager: *Manager) -> Vec(string) {
     VecFree(manager.operation_text)
     paths: Vec(string)
+    count := cast(s64)SelectedCount(manager)
+    if !VecReserve(paths, count) || !VecReserve(manager.operation_text, count) {
+        SetError(manager, "Cannot retain complete operation selection"); return paths
+    }
     for index: cast(s32)0..manager.entries.count - 1 {
-        if manager.selected[index] && paths.count < MAX_SELECTION {
+        if manager.selected[index] {
             owned: Text = TextCopy(manager.entries[index].path)
-            if !VecPush(manager.operation_text, owned) { break }
-            copied := TextView(manager.operation_text[manager.operation_text.count - 1])
-            unused VecPush(paths, copied)
+            if owned.bytes.count != manager.entries[index].path.count {
+                VecFree(paths); SetError(manager, "Cannot retain complete operation selection"); return .{}
+            }
+            unused VecPush(manager.operation_text, owned)
+            unused VecPush(paths, TextView(manager.operation_text[manager.operation_text.count - 1]))
         }
     }
     return paths
@@ -978,51 +1084,125 @@ ValidName :: (name: string) -> bool {
 RefreshError :: (manager: *Manager, message: string) -> bool {
     saved: Text = TextCopy(message)
     unused Refresh(manager)
-    SetError(manager, saved)
+    SetError(manager, ifx saved.bytes.count == message.count && message.count > 0 then TextView(saved) else "Filesystem operation failed; cannot retain details")
     return false
 }
 
+LocalDestination :: (manager: *Manager) -> bool {
+    if !IsUri(manager.cwd) { return true }
+    SetError(manager,"This location has no local destination for file operations");return false
+}
+LocalSelection :: (manager: *Manager) -> bool {
+    for i: cast(s32)0..manager.entries.count-1 {
+        if manager.selected[i] && IsUri(manager.entries[i].path) { SetError(manager,"This item has no local path for file operations");return false }
+    }
+    return true
+}
+
+OperationPath :: (directory: string, name: string) -> Text {
+    result: Vec(u8)
+    count := directory.count + name.count + 1
+    if directory == "" || directory[0] != #char "/" || name == "" || count > 4095 || !VecReserve(result, count) { return .{} }
+    Append(*result, directory)
+    if directory.count > 0 && directory[directory.count - 1] != #char "/" { Append(*result, "/") }
+    Append(*result, name)
+    return BuilderFinish(result)
+}
+
+// One user action owns one batch, even if a later item fails.
+BeginOperation :: (manager: *Manager, batch: *Operations.Batch, count: s64) -> bool {
+    if Operations.Begin(*manager.operations, batch, count) { return true }
+    SetError(manager, "Cannot allocate filesystem operation history"); return false
+}
+FinishOperation :: (manager: *Manager, batch: *Operations.Batch, ok: bool, path: string = "") -> bool {
+    Operations.Finish(*manager.operations, batch)
+    if !ok { return RefreshError(manager, ifx path != "" then path else "Filesystem operation failed; completed items remain in history") }
+    return Refresh(manager)
+}
+// action: move, copy, link, directory, file.
+PerformOperation :: (batch: *Operations.Batch, source: string, target: string, action: s32) -> bool {
+    if !Files.PathQuery(target, false).missing { return false }
+    if !Operations.Prepare(batch, ifx action == 0 then source else "", target) { return false }
+    ok: bool
+    if action == 0 { ok = RenamePath(source, target) }
+    else if action == 1 { ok = CopyPath(source, target) }
+    else if action == 2 { ok = CreateSymbolicLink(source, target) }
+    else if action == 3 { ok = Files.CreateDirectory(target) }
+    else {
+        file := WholeFiles.OpenNew(target)
+        if file.valid {
+            Operations.Commit(batch)
+            return WholeFiles.CloseFile(file)
+        }
+    }
+    if ok { Operations.Commit(batch) } else { Operations.Cancel(batch) }
+    if !ok && action == 0 {
+        origin := Files.PathQuery(source, false)
+        parent := Files.PathQuery(Files.PathParent(target))
+        if origin.valid && parent.valid && (origin.info.device_major != parent.info.device_major ||
+            origin.info.device_minor != parent.info.device_minor) {
+            // Cross-device moves retain the original on its filesystem. No
+            // destructive tree removal can discard concurrent source changes.
+            if batch.steps.count + 2 > Operations.MAX_STEPS || !Operations.Reserve(batch, batch.steps.count + 2) { return false }
+            if !PerformOperation(batch, source, target, 1) { return false }
+            return ParkOperation(batch, source)
+        }
+    }
+    return ok
+}
+ParkOperation :: (batch: *Operations.Batch, path: string) -> bool {
+    recovery: Text = Operations.Recovery(path)
+    if recovery.bytes.count == 0 { return false }
+    parked: Text = OperationPath(recovery, "payload")
+    if !PerformOperation(batch, path, parked, 0) { return false }
+    Operations.AdoptRecovery(batch, *recovery)
+    return true
+}
+Undo :: (manager: *Manager) -> bool {
+    ok := Operations.Undo(*manager.operations)
+    if !ok { return RefreshError(manager, "Cannot undo: no action, changed identity, occupied path or inaccessible recovery payload") }
+    return Refresh(manager)
+}
+Redo :: (manager: *Manager) -> bool {
+    ok := Operations.Redo(*manager.operations)
+    if !ok { return RefreshError(manager, "Cannot redo: no action, changed identity, occupied path or inaccessible recovery payload") }
+    return Refresh(manager)
+}
+
 CreateFolder :: (manager: *Manager, name: string, changed: *bool = null) -> bool {
-    if !ValidName(name) { SetError(manager, "Enter a file name without slashes"); return false }
-    path: Text = Files.JoinPath(manager.cwd, name)
-    if PathPresent(path) || !Files.CreateDirectory(path) {
-        SetError(manager, path)
-        return false
-    }
-    if changed != null { changed[0] = true }
-    return Refresh(manager)
+    return CreateEntry(manager, name, true, changed)
 }
-
 CreateFile :: (manager: *Manager, name: string, changed: *bool = null) -> bool {
-    if !ValidName(name) { SetError(manager, "Enter a file name without slashes"); return false }
-    path: Text = Files.JoinPath(manager.cwd, name)
-    file := WholeFiles.OpenNew(path)
-    if !file.valid {
-        SetError(manager, path)
-        return false
-    }
-    if changed != null { changed[0] = true }
-    if !WholeFiles.CloseFile(file) { SetError(manager, path); return false }
-    if changed != null { changed[0] = true }
-    return Refresh(manager)
+    return CreateEntry(manager, name, false, changed)
 }
-
+CreateEntry :: (manager: *Manager, name: string, directory: bool, changed: *bool) -> bool {
+    if !LocalDestination(manager) { return false }
+    if !ValidName(name) { SetError(manager, "Enter a file name without slashes"); return false }
+    batch: Operations.Batch
+    if !BeginOperation(manager, *batch, 1) { return false }
+    path: Text = OperationPath(manager.cwd, name)
+    ok := PerformOperation(*batch, "", path, ifx directory then 3 else 4)
+    if changed != null && batch.steps.count > 0 { changed[0] = true }
+    return FinishOperation(manager, *batch, ok, path)
+}
 RenameSelection :: (manager: *Manager, name: string, changed: *bool = null) -> bool {
+    if !LocalSelection(manager) { return false }
     if !ValidName(name) || SelectedCount(manager) != 1 { return false }
     index := FirstSelected(manager)
     if index < 0 { return false }
-    parent := Files.PathParent(manager.entries[index].path)
-    target: Text = Files.JoinPath(parent, name)
-    if !RenamePath(manager.entries[index].path, target) {
-        SetError(manager, target)
-        return false
-    }
-    if changed != null { changed[0] = true }
-    return Refresh(manager)
+    // Accept an unchanged byte name without touching the filesystem or history.
+    if EntryName(manager,index)==name { SetError(manager,""); return true }
+    batch: Operations.Batch
+    if !BeginOperation(manager, *batch, 1) { return false }
+    target: Text = OperationPath(Files.PathParent(manager.entries[index].path), name)
+    ok := PerformOperation(*batch, manager.entries[index].path, target, 0)
+    if changed != null && ok { changed[0] = true }
+    return FinishOperation(manager, *batch, ok, target)
 }
 
 EscapeTrashPath :: (path: string) -> Text {
     builder: Vec(u8)
+    if !VecReserve(builder, path.count * 3) { return .{} }
     index: s64 = 0
     while index < path.count {
         byte := path[index]
@@ -1067,11 +1247,15 @@ HexValue :: (value: u8) -> s32 {
 }
 
 TrashInfoPath :: (trashed_path: string) -> Text {
-    return Files.JoinPath(TrashDirectory(true),
-        JoinText(Files.PathName(trashed_path), ".trashinfo"))
+    if trashed_path == "" { return .{} }
+    name: Text = JoinText(Files.PathName(trashed_path), ".trashinfo")
+    if name.bytes.count != Files.PathName(trashed_path).count + 10 { return .{} }
+    return OperationPath(TrashDirectory(true), name)
 }
 
 TrashOriginalPath :: (info_path: string) -> Text {
+    status := Files.PathQuery(info_path, false)
+    if !status.valid || status.info.kind != .File || status.info.size <= 0 || status.info.size > 16384 { return .{} }
     bytes: Vec(u8)
     if !WholeFiles.ReadFileInto(info_path, *bytes) { return .{} }
     text := TextView(bytes[:bytes.count])
@@ -1093,63 +1277,80 @@ TrashOriginalPath :: (info_path: string) -> Text {
 }
 
 TrashOne :: (path: string) -> bool {
+    batch: Operations.Batch
+    if !Operations.Reserve(*batch, 2) { return false }
+    ok := TrashRecorded(*batch, path)
+    Operations.Discard(*batch)
+    return ok
+}
+
+// Metadata is created exclusively and journaled independently. A later failure
+// retains every successful step, including payloads and Trash metadata.
+TrashRecorded :: (batch: *Operations.Batch, path: string) -> bool {
     files: Text = TrashDirectory(false)
     info: Text = TrashDirectory(true)
-    if files.bytes.count == 0 || info.bytes.count == 0 { return false }
-    if !Files.CreateDirectories(files) || !Files.CreateDirectories(info) { return false }
-    name := Files.PathName(path)
-    trashed: Text = UniquePath(files, name, true)
+    if files.bytes.count == 0 || info.bytes.count == 0 ||
+        !Files.CreateDirectories(files) || !Files.CreateDirectories(info) { return false }
+    trashed: Text = UniquePath(files, Files.PathName(path), true)
+    if trashed.bytes.count == 0 { return false }
     info_path: Text = TrashInfoPath(trashed)
+    if info_path.bytes.count == 0 { return false }
     stamp_buffer: [32]u8
     stamp := Calendar.FormatDateTime(DateTime.LocalNow(), "%Y-%m-%dT%H:%M:%S", stamp_buffer[:])
-    if stamp == "" { return false }
-    if !RenamePath(path, trashed) { return false }
+    if stamp == "" || !Operations.Prepare(batch, "", info_path) { return false }
     body: Vec(u8)
-    BuilderPrint(*body, "[Trash Info]\nPath=%\nDeletionDate=%\n",
-        EscapeTrashPath(path), stamp)
-    metadata: Text = BuilderFinish(body)
-    if !Files.ReplaceFile(info_path, metadata) {
-        unused RenamePath(trashed, path)
-        return false
-    }
-    return true
+    escaped: Text = EscapeTrashPath(path)
+    if escaped.bytes.count == 0 || !VecReserve(body, escaped.bytes.count + stamp.count + 64) { Operations.Cancel(batch); return false }
+    BuilderPrint(*body, "[Trash Info]\nPath=%\nDeletionDate=%\n", TextView(escaped), stamp)
+    file := WholeFiles.OpenNew(info_path)
+    if !file.valid { Operations.Cancel(batch); return false }
+    written := WholeFiles.Write(file, body[:body.count]) == body.count
+    closed := WholeFiles.CloseFile(file)
+    Operations.Commit(batch)
+    if !written || !closed { return false }
+    return PerformOperation(batch, path, trashed, 0)
 }
-
 DeleteSelection :: (manager: *Manager, use_trash: bool) -> bool {
+    if !LocalSelection(manager) { return false }
     paths := SelectedPaths(manager)
     if paths.count == 0 { return false }
+    batch: Operations.Batch
+    if use_trash && !BeginOperation(manager, *batch, paths.count * 2) { return false }
+    // An irreversible delete is a history barrier. In particular a previous
+    // cross-device move must not resurrect its retained source on partial undo.
+    if !use_trash { Operations.Close(*manager.operations) }
     for path: paths {
-        ok := ifx use_trash then TrashOne(path) else Files.RemoveTree(path)
-        if !ok {
-            VecFree(paths)
-            return RefreshError(manager, path)
-        }
+        ok := ifx use_trash then TrashRecorded(*batch, path) else Files.RemoveTree(path)
+        if !ok { return FinishOperation(manager, *batch, false, path) }
     }
-    VecFree(paths)
-    return Refresh(manager)
+    // Permanent deletion has no fabricated inverse.
+    return FinishOperation(manager, *batch, true)
 }
-
 RestoreSelection :: (manager: *Manager) -> bool {
+    if !LocalSelection(manager) { return false }
     paths := SelectedPaths(manager)
     if paths.count == 0 { return false }
+    batch: Operations.Batch
+    if !BeginOperation(manager, *batch, paths.count * 2) { return false }
     for path: paths {
-        original: Text = TrashOriginalPath(TrashInfoPath(path))
+        info_path: Text = TrashInfoPath(path)
+        original: Text = TrashOriginalPath(info_path)
         parent := Files.PathParent(original)
-        if original.bytes.count == 0 || parent == "" || !Files.CreateDirectories(parent) {
-            VecFree(paths)
-            return RefreshError(manager, path)
+        trash: Text = TrashDirectory(false)
+        if original.bytes.count == 0 || TextView(original)[0] != #char "/" ||
+            Files.PathParent(path) != TextView(trash) || parent == "" || !Files.CreateDirectories(parent) {
+            return FinishOperation(manager, *batch, false, path)
         }
         target: Text = UniquePath(parent, Files.PathName(original))
-        if !RenamePath(path, target) || !Files.RemoveTree(TrashInfoPath(path)) {
-            VecFree(paths)
-            return RefreshError(manager, original)
-        }
+        if !PerformOperation(*batch, path, target, 0) { return FinishOperation(manager, *batch, false, path) }
+        // Retain metadata rather than deleting it, so restore itself can undo.
+        if !ParkOperation(*batch, info_path) { return FinishOperation(manager, *batch, false, info_path) }
     }
-    VecFree(paths)
-    return Refresh(manager)
+    return FinishOperation(manager, *batch, true)
 }
 
 SnapshotSelection :: (manager: *Manager, cut: bool, clipboard: *Clipboard) -> bool {
+    if !LocalSelection(manager) { return false }
     // Clipboard snapshots include the whole selection. The bounded operation
     // helper is for other actions; never publish a silently truncated list.
     pending: Clipboard
@@ -1204,60 +1405,44 @@ Paste :: (manager: *Manager) -> bool {
 }
 
 PasteClipboard :: (manager: *Manager, clipboard: *Clipboard, changed: *u64 = null) -> bool {
-    if clipboard.paths.count == 0 { return false }
+    if !LocalDestination(manager) || clipboard.paths.count == 0 { return false }
+    batch: Operations.Batch
+    if !BeginOperation(manager, *batch, clipboard.paths.count) { return false }
     ok := true
     completed: s64 = 0
     failed_path := ""
     for path: clipboard.paths {
         target: Text = UniquePath(manager.cwd, Files.PathName(path))
-        moved: bool
-        if clipboard.mode == .ClipboardCut { moved = RenamePath(path, target) }
-        else { moved = CopyPath(path, target) }
-        if !moved {
-            failed_path = path
-            ok = false
-            break
+        if !PerformOperation(*batch, path, target, ifx clipboard.mode == .ClipboardCut then 0 else 1) {
+            failed_path = path; ok = false; break
         }
         completed += 1
         if changed != null { changed[0] += cast(u64)1 }
     }
     if clipboard.mode == .ClipboardCut {
-        for index: completed..clipboard.paths.count - 1 {
-            clipboard.paths[index - completed] = clipboard.paths[index]
-        }
+        for index: completed..clipboard.paths.count - 1 { clipboard.paths[index - completed] = clipboard.paths[index] }
         unused VecResize(clipboard.paths, clipboard.paths.count - completed)
         if clipboard.paths.count == 0 { clipboard.mode = .ClipboardNone }
     }
-    if !ok { return RefreshError(manager, failed_path) }
-    return Refresh(manager)
+    return FinishOperation(manager, *batch, ok, failed_path)
 }
-
-DuplicateSelection :: (manager: *Manager) -> bool {
+DuplicateSelection :: (manager: *Manager) -> bool { return CopyOrLinkSelection(manager, false) }
+MakeLinkSelection :: (manager: *Manager) -> bool { return CopyOrLinkSelection(manager, true) }
+CopyOrLinkSelection :: (manager: *Manager, link: bool) -> bool {
+    if !LocalSelection(manager) { return false }
     paths := SelectedPaths(manager)
     if paths.count == 0 { return false }
+    batch: Operations.Batch
+    if !BeginOperation(manager, *batch, paths.count) { return false }
     for path: paths {
-        target: Text = UniquePath(Files.PathParent(path), Files.PathName(path))
-        if !CopyPath(path, target) {
-            VecFree(paths)
-            return RefreshError(manager, path)
+        name: Text = JoinText(Files.PathName(path), ifx link then " link" else "")
+        if name.bytes.count != Files.PathName(path).count + (ifx link then 5 else 0) { return FinishOperation(manager, *batch, false, path) }
+        target: Text = UniquePath(Files.PathParent(path), name)
+        if !PerformOperation(*batch, path, target, ifx link then 2 else 1) {
+            return FinishOperation(manager, *batch, false, path)
         }
     }
-    VecFree(paths)
-    return Refresh(manager)
-}
-
-MakeLinkSelection :: (manager: *Manager) -> bool {
-    paths := SelectedPaths(manager)
-    if paths.count == 0 { return false }
-    for path: paths {
-        target: Text = UniquePath(Files.PathParent(path), JoinText(Files.PathName(path), " link"))
-        if !CreateSymbolicLink(path, target) {
-            VecFree(paths)
-            return RefreshError(manager, path)
-        }
-    }
-    VecFree(paths)
-    return Refresh(manager)
+    return FinishOperation(manager, *batch, true)
 }
 
 CreateSymbolicLink :: (target: string, path: string) -> bool {

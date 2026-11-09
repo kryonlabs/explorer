@@ -8,17 +8,15 @@ import sys
 import os
 import threading
 import time
+from native_limits import allocation_probe
 
 root = Path(__file__).resolve().parents[1] / 'build/tabs-failure-fixture'
 shutil.rmtree(root, ignore_errors=True)
 root.mkdir(mode=0o700)
 (root / 'selected.txt').write_text('owned')
 try:
-    def limit():
-        resource.setrlimit(resource.RLIMIT_AS, (32 * 1024 * 1024,) * 2)
     for executable in sys.argv[1:]:
-        result = subprocess.run([executable, '--oom', str(root)], preexec_fn=limit,
-                                capture_output=True, text=True, timeout=45)
+        result, ceiling = allocation_probe([executable, '--oom', str(root)], root / 'oom-ready')
         assert result.returncode == 0, (result.returncode, result.stdout[-1200:], result.stderr[-1200:])
         assert 'Actual tab allocation failure retained' in result.stdout
         print(result.stdout.strip(), flush=True)

@@ -6,7 +6,7 @@ SOURCES := $(wildcard src/*.zi) $(wildcard tests/*.zi) ziran.toml ziran.lock scr
 NATIVE_FLAGS := -std=c99 -O2 -ffunction-sections -fdata-sections -Wl,--gc-sections
 HOST_TEST_ENV := python3 tests/private_desktop.py --headless env -u GTK_THEME HOME=$(CURDIR)/build/host-test-fixture XDG_CONFIG_HOME=$(CURDIR)/build/host-test-fixture/config XDG_DATA_HOME=$(CURDIR)/build/host-test-fixture/data-home
 
-.PHONY: test-split test-split-native test-tabs test-tabs-native build check test test-ui test-installed test-file-clipboard test-filenames test-bookmarks test-bookmarks-native test-tree test-tree-native test-location test-location-native run install clean test-saved
+.PHONY: test-native-status test-native-theme test-locations test-thunar test-split test-split-native test-tabs test-tabs-native build check test test-ui test-installed test-file-clipboard test-filenames test-bookmarks test-bookmarks-native test-tree test-tree-native test-location test-location-native run install clean test-saved
 
 build:
 	build-queue -- $(ZIRAN) build
@@ -20,20 +20,25 @@ run:
 	build-queue -- $(ZIRAN) run
 
 build/model-test: $(SOURCES)
-	build-queue -- /bin/sh -c \
-		'$(ZIRAN) build --project --target=c --entry model_test:main -o build/model-test-c tests/model_test.zi && \
-		$(CC) $(NATIVE_FLAGS) -I$$($(ZIRAN) pkg path ziran)/include -Ibuild/model-test-c build/model-test-c/*.c -lm -o build/model-test'
+	build-queue -- $(ZIRAN) build --project --target=c --exe --entry model_test:main -o build/model-test-c tests/model_test.zi
+	cp build/model-test-c/model_test build/model-test
 
 build/host-test: $(SOURCES)
 	build-queue -- $(ZIRAN) build --project --target=c --exe --entry host_test:main -o build/host-test-c tests/host_test.zi
 	cp build/host-test-c/host_test build/host-test
 
-test: build/model-test build/host-test
+test: build/model-test build/host-test test-operation-history
 	rm -rf build/model-test-fixture
 	mkdir -p build/model-test-fixture
 	python3 tests/private_desktop.py --headless env XDG_DATA_HOME=$(CURDIR)/build/model-test-fixture/data-home build/model-test $(CURDIR)/build/model-test-fixture
 	$(HOST_TEST_ENV) build/host-test $(CURDIR)/build/host-test-fixture
 	$(MAKE) test-saved
+
+test-native-theme: build/host-test
+	python3 tests/private_desktop.py env G_DEBUG=fatal-criticals build/host-test $(CURDIR)/build/native-theme-fixture --native-large
+	build-queue -- $(ZIRAN) ir --project --entry host_test:main -o build/host-test-ir tests/host_test.zi
+	build-queue -- $(ZIRAN) build --project --target=c --exe --entry host_test:main -o build/host-test-saved-c build/host-test-ir/host_test.zir
+	python3 tests/private_desktop.py env G_DEBUG=fatal-criticals build/host-test-saved-c/host_test $(CURDIR)/build/native-theme-fixture --native-large
 
 test-saved:
 	build-queue -- $(ZIRAN) ir --project --entry model_test:main -o build/model-test-ir tests/model_test.zi
@@ -60,6 +65,38 @@ test-file-clipboard: build build/file-clipboard-probe
 
 test-installed:
 	python3 tests/private_desktop.py python3 tests/ui_test.py --executable "$(HOME)/.local/bin/shelf" --capture-prefix installed-ui
+
+.PHONY: test-native-window
+test-native-window: test-window-lifecycle
+	python3 tests/private_desktop.py python3 tests/native_window_test.py
+
+.PHONY: test-window-lifecycle
+build/window-lifecycle-probe: $(SOURCES)
+	build-queue -- $(ZIRAN) build --project --target=c --exe --entry window_lifecycle_probe:main -o build/window-lifecycle-probe-c tests/window_lifecycle_probe.zi
+	cp build/window-lifecycle-probe-c/window_lifecycle_probe build/window-lifecycle-probe
+	build-queue -- $(ZIRAN) ir --project --entry window_lifecycle_probe:main -o build/window-lifecycle-probe-ir tests/window_lifecycle_probe.zi
+	build-queue -- $(ZIRAN) build --project --target=c --exe --entry window_lifecycle_probe:main -o build/window-lifecycle-probe-saved-c build/window-lifecycle-probe-ir/window_lifecycle_probe.zir
+
+test-window-lifecycle: build build/window-lifecycle-probe
+	python3 tests/private_desktop.py python3 tests/window_lifecycle_test.py $(CURDIR)/build/window-lifecycle-probe
+	python3 tests/private_desktop.py python3 tests/window_lifecycle_test.py $(CURDIR)/build/window-lifecycle-probe-saved-c/window_lifecycle_probe
+	python3 tests/private_desktop.py python3 tests/window_lifecycle_test.py
+
+.PHONY: test-interactions
+test-interactions: build
+	python3 tests/private_desktop.py python3 tests/interaction_test.py
+
+test-locations:
+	build-queue -- python3 tests/desktop_locations_test.py
+
+test-native-status:
+	build-queue -- $(ZIRAN) build --project --target=c --exe --entry native_status_probe:main -o build/native-status-probe-c tests/native_status_probe.zi
+	build-queue -- $(ZIRAN) ir --project --entry native_status_probe:main -o build/native-status-probe-ir tests/native_status_probe.zi
+	build-queue -- $(ZIRAN) build --project --target=c --exe --entry native_status_probe:main -o build/native-status-probe-saved-c build/native-status-probe-ir/native_status_probe.zir
+	python3 tests/private_desktop.py python3 tests/native_status_test.py $(CURDIR)/build/native-status-probe-c/native_status_probe $(CURDIR)/build/native-status-probe-saved-c/native_status_probe
+
+test-thunar: build
+	build-queue -- python3 tests/thunar_visual_test.py
 
 install:
 	build-queue -- $(ZIRAN) install
@@ -135,3 +172,7 @@ test-split-native: build/split-test
 
 test-split: build test-split-native
 	python3 tests/private_desktop.py python3 tests/split_test.py
+
+.PHONY: test-operation-history
+test-operation-history:
+	build-queue -- python3 tests/operation_history_test.py

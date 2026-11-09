@@ -26,7 +26,7 @@ def main():
             path = root / folder
             path.mkdir(mode=0o700)
             env[key] = str(path)
-        env.update(YUE_DESKTOP_RECOVERY="0", SDL_VIDEODRIVER="x11")
+        env.update(YUE_DESKTOP_RECOVERY="0", SDL_VIDEODRIVER="x11", SHELF_PRIVATE_DESKTOP="1", PYTHONDONTWRITEBYTECODE="1")
         command = sys.argv[1:]
         if command[0] == "--headless":
             command = command[1:]

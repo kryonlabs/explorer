@@ -75,26 +75,32 @@ def main():
         key('ctrl+shift+Prior'); assert cwd() == str(paths[-1]); capture('keyboard-reordered')
         # Reveal the first tab, then drag it across two neighbours. The native
         # widget decides the target; the complete cycle proves no identities lost.
-        for _ in paths: key('ctrl+Prior')
+        for _ in paths:
+            if cwd() == str(root): break
+            key('ctrl+Prior')
         assert cwd() == str(root)
-        xdo('mousemove', '--window', window, 470, 68); xdo('mousedown', 1)
-        time.sleep(.15); xdo('mousemove', '--window', window, 810, 68); time.sleep(.25)
+        key('ctrl+Prior'); assert cwd() == str(paths[-2]), 'adjacent tabs must wrap like native Thunar'
+        key('ctrl+Next'); assert cwd() == str(root)
+        before_drag = []
+        for _ in paths: before_drag.append(cwd()); key('ctrl+Tab')
+        assert cwd() == str(root)
+        xdo('mousemove', '--window', window, 230, 81); xdo('mousedown', 1)
+        time.sleep(.15); xdo('mousemove', '--window', window, 560, 81); time.sleep(.25)
         capture('dragging'); xdo('mouseup', 1); time.sleep(.25)
         assert cwd() == str(root); capture('pointer-reordered')
-        for _ in paths: key('ctrl+Prior')
         observed = []
         for _ in paths: observed.append(cwd()); key('ctrl+Tab')
         assert Counter(observed) == Counter(map(str, paths)), observed
-        assert observed.index(str(root)) > 0, 'native drag did not reorder the first tab'
+        assert observed != before_drag, 'native drag did not reorder the first tab'
         # Wheel overflow must remain usable independently of active-tab reveal.
-        xdo('mousemove', '--window', window, 650, 68); xdo('click', '--repeat', 8, '--delay', 60, 5)
+        xdo('mousemove', '--window', window, 650, 81); xdo('click', '--repeat', 8, '--delay', 60, 5)
         time.sleep(.2); capture('wheel-overflow')
         before = cwd(); edit('missing'); key('ctrl+Tab')
         assert field() == 'missing', 'tab shortcut stole editor input'; key('Escape'); assert cwd() == before
         xdo('windowsize', window, 560, 600); time.sleep(.3); capture('narrow-overflow')
         key('ctrl+l'); capture('narrow-editor'); key('Escape')
         for _ in range(len(paths) - 1): key('ctrl+w')
-        only = cwd(); key('ctrl+w'); assert cwd() == only; capture('last-tab')
+        capture('last-tab')
         navigate(str(paths[1])); key('ctrl+t'); navigate(str(paths[2]))
         shutil.rmtree(paths[1]); key('ctrl+w'); assert cwd() == str(paths[2]); capture('failed-close')
         paths[1].mkdir(); key('ctrl+w'); assert cwd() == str(paths[1])
@@ -103,6 +109,8 @@ def main():
         key('Return'); assert cwd().endswith(r'raw-\xFF\x0A'); capture('raw-label')
         key('ctrl+Tab'); assert cwd() == str(paths[1]); key('ctrl+shift+Tab')
         assert cwd().endswith(r'raw-\xFF\x0A')
+        key('ctrl+w'); capture('last-tab-before-close')
+        key('ctrl+w'); assert proc.wait(timeout=10) == 0, 'Ctrl+W must close the final window'
         passed = True
         print('Native16+ labeled tabs/duplicate-Unicode-long-raw labels/overflow/drag/keyboard/close/modal/narrow tests passed', flush=True)
     finally:

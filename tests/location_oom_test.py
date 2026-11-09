@@ -8,6 +8,7 @@ import time
 import shutil
 import subprocess
 import sys
+from native_limits import allocation_probe
 
 
 def main():
@@ -33,15 +34,8 @@ def main():
         try:
             child = os.open('z' * 255, os.O_WRONLY | os.O_CREAT, 0o600, dir_fd=fd); os.close(child)
         finally: os.close(fd)
-        soft, hard = resource.getrlimit(resource.RLIMIT_AS)
-        cap = 32 * 1024 * 1024
-        for bound in (soft, hard):
-            if bound != resource.RLIM_INFINITY: cap = min(cap, bound)
-        def lower_limit():
-            resource.setrlimit(resource.RLIMIT_AS, (cap, cap))
         for executable in sys.argv[1:]:
-            result = subprocess.run([executable, '--oom', str(initial), str(target)],
-                                    preexec_fn=lower_limit, capture_output=True, text=True, timeout=60)
+            result, cap = allocation_probe([executable, '--oom', str(initial), str(target)], initial / 'oom-ready')
             assert result.returncode == 0, f'{executable}: {result.returncode}: {result.stdout[-1500:]} {result.stderr[-1500:]}'
             assert 'Actual allocation failure preserved route/selection/history' in result.stdout
             print(f'{Path(executable).name}, RLIMIT_AS={cap}: {result.stdout.strip()}', flush=True)

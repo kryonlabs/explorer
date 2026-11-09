@@ -1,0 +1,207 @@
+using Model :: #import "model";
+Ops :: #import "operation_history";
+Files :: #import "std/file_tree_linux";
+Whole :: #import "std/file";
+using Bytes :: #import "std/byte_text_linux";
+Number :: #import "std/number_text";
+Fail :: (stage: s32) -> bool { print("operation history stage % failed\n", stage); return false }
+Select :: (m: *Manager, name: string) -> bool {
+    for i: cast(s32)0..cast(s32)m.entries.count - 1 {
+        if m.entries[i].name == name { Model.SelectOne(m, i); return true }
+    }
+    return false
+}
+Exists :: (root: string, name: string) -> bool { return Files.PathQuery(Files.JoinPath(root, name), false).valid }
+Contents :: (path: string, expected: string) -> bool {
+    bytes: Vec(u8)
+    return Whole.ReadFileInto(path, *bytes) && TextView(bytes[:bytes.count]) == expected
+}
+Edit :: (path: string, text: string) -> bool {
+    bytes: Text = TextCopy(text)
+    file := Whole.OpenWrite(path)
+    if !file.valid { return false }
+    ok := Whole.Write(file, bytes.bytes[:bytes.bytes.count]) == bytes.bytes.count
+    closed := Whole.CloseFile(file)
+    return ok && closed
+}
+Run :: (root: string) -> bool {
+    a: Text = Files.JoinPath(root, "a")
+    b: Text = Files.JoinPath(root, "b")
+    if !Files.CreateDirectories(a) || !Files.CreateDirectories(b) { return Fail(1) }
+    m: Manager
+    Model.Init(*m, a)
+    if !Model.CreateFile(*m, "file") || !Exists(a, "file") || !Model.Undo(*m) || Exists(a, "file") ||
+        !Model.Redo(*m) || !Exists(a, "file") { return Fail(2) }
+    before_count:=m.operations.batches.count; before_cursor:=m.operations.cursor
+    original:=Files.PathStatus(Files.JoinPath(a,"file"),false)
+    changed: bool
+    if !Select(*m,"file") || !Model.RenameSelection(*m,"file",*changed) || changed ||
+        Model.EntryName(*m,Model.FirstSelected(*m))!="file" || m.operations.batches.count!=before_count ||
+        m.operations.cursor!=before_cursor { return Fail(37) }
+    unchanged:=Files.PathStatus(Files.JoinPath(a,"file"),false)
+    if unchanged.inode!=original.inode || unchanged.changed!=original.changed || unchanged.changed_nanoseconds!=original.changed_nanoseconds { return Fail(38) }
+    if !Select(*m, "file") || !Model.RenameSelection(*m, "renamed") || Exists(a, "file") ||
+        !Model.Undo(*m) || !Exists(a, "file") || !Model.Redo(*m) || !Exists(a, "renamed") { return Fail(3) }
+    if !Select(*m, "renamed") || !Model.CopySelection(*m, false) || !Model.OpenPathTracked(*m, b) ||
+        !Model.Paste(*m) || !Model.Undo(*m) || Exists(b, "renamed") || !Model.Redo(*m) { return Fail(4) }
+    if !Model.OpenPathTracked(*m, a) || !Select(*m, "renamed") || !Model.CopySelection(*m, true) ||
+        !Model.OpenPathTracked(*m, b) || !Model.Paste(*m) || Exists(a, "renamed") ||
+        !Model.Undo(*m) || !Exists(a, "renamed") || Exists(b, "renamed (2)") || !Model.Redo(*m) { return Fail(5) }
+    if !Select(*m, "renamed") || !Model.DuplicateSelection(*m) || !Exists(b, "renamed (3)") ||
+        !Model.Undo(*m) || Exists(b, "renamed (3)") || !Model.Redo(*m) { return Fail(6) }
+    if !Select(*m, "renamed") || !Model.MakeLinkSelection(*m) || !Exists(b, "renamed link") ||
+        !Model.Undo(*m) || Exists(b, "renamed link") || !Model.Redo(*m) { return Fail(7) }
+    if !Model.CreateFolder(*m, "folder") || !Files.ReplaceFile(Files.JoinPath(b, "folder/external"), "preserve") ||
+        !Model.Undo(*m) || Exists(b, "folder") || !Model.Redo(*m) ||
+        !Contents(Files.JoinPath(b, "folder/external"), "preserve") { return Fail(8) }
+    // Replacement objects and occupied redo targets must be left intact.
+    if !Model.CreateFile(*m, "identity") || !Whole.RenameNoReplace(Files.JoinPath(b, "identity"), Files.JoinPath(b, "original")) ||
+        !Files.ReplaceFile(Files.JoinPath(b, "identity"), "replacement") || Model.Undo(*m) ||
+        !Contents(Files.JoinPath(b, "identity"), "replacement") { return Fail(9) }
+    if !Files.RemoveTree(Files.JoinPath(b, "identity")) ||
+        !Whole.RenameNoReplace(Files.JoinPath(b, "original"), Files.JoinPath(b, "identity")) { return Fail(10) }
+    // A rename outside the journal changes ctime, but the pinned inode is safe.
+    if !Model.Undo(*m) || !Model.CreateSymbolicLink("missing", Files.JoinPath(b, "identity")) ||
+        Model.Redo(*m) || !Exists(b, "identity") { return Fail(11) }
+    if !Files.RemoveTree(Files.JoinPath(b, "identity")) || !Model.Redo(*m) { return Fail(12) }
+    if !Select(*m, "renamed") || !Model.DeleteSelection(*m, true) || Exists(b, "renamed") ||
+        !Model.Undo(*m) || !Exists(b, "renamed") || !Model.Redo(*m) { return Fail(13) }
+    trash: Text = Model.TrashDirectory(false)
+    if !Model.OpenPathTracked(*m, trash) || !Select(*m, "renamed") || !Model.RestoreSelection(*m) ||
+        !Exists(b, "renamed") || Exists(trash, "renamed") || !Model.Undo(*m) ||
+        Exists(b, "renamed") || !Exists(trash, "renamed") || !Model.Redo(*m) { return Fail(14) }
+    if !Model.OpenPathTracked(*m, b) || !Select(*m, "renamed") { return Fail(15) }
+    Ops.Close(*m.operations)
+    if !Model.DeleteSelection(*m, false) || Model.Undo(*m) || Exists(b, "renamed") { return Fail(16) }
+    // A partial cut keeps its remaining clipboard and reverses its completed part.
+    if !Model.OpenPathTracked(*m, a) || !Model.CreateFile(*m, "first") || !Model.CreateFile(*m, "second") { return Fail(17) }
+    Model.SelectAll(*m)
+    if !Model.CopySelection(*m, true) || !Files.RemoveTree(Files.JoinPath(a, "second")) || !Model.OpenPathTracked(*m, b) { return Fail(18) }
+    if Model.Paste(*m) || !Exists(b, "first") || Exists(a, "first") || m.clipboard.paths.count != 1 ||
+        !Model.Undo(*m) || !Exists(a, "first") || Exists(b, "first") || !Model.Redo(*m) { return Fail(19) }
+    // Two-item replay retains progress at collisions and can reverse direction.
+    if !Model.OpenPathTracked(*m, a) || !Files.ReplaceFile(Files.JoinPath(a, "first"), "one") ||
+        !Files.ReplaceFile(Files.JoinPath(a, "second"), "two") ||
+        !Model.Refresh(*m) { return Fail(20) }
+    Model.SelectAll(*m)
+    if !Model.CopySelection(*m, false) || !Model.OpenPathTracked(*m, b) || !Model.Paste(*m) || !Model.Undo(*m) { return Fail(21) }
+    if !Files.ReplaceFile(Files.JoinPath(b, "second"), "collision") || Model.Redo(*m) ||
+        !Exists(b, "first (2)") || !Model.Undo(*m) || Exists(b, "first (2)") ||
+        !Contents(Files.JoinPath(b, "second"), "collision") { return Fail(22) }
+    Model.Dispose(*m)
+    print("Native history create/rename/copy/cut/duplicate/link/Trash/restore/collision/replacement/partial batch tests passed\n")
+    return true
+}
+Edges :: (root: string) -> bool {
+    folder: Text = Files.JoinPath(root, "edges")
+    if !Files.CreateDirectories(folder) { return Fail(60) }
+    m: Manager
+    Model.Init(*m, folder); m.show_hidden = true
+    if !Model.CreateFile(*m, "proof") || m.entries.count != 1 || !Select(*m, "proof") ||
+        !Model.DuplicateSelection(*m) || m.entries.count != 2 { return Fail(61) }
+    if !Model.CreateFolder(*m, "tree") || !Files.ReplaceFile(Files.JoinPath(folder, "tree/added"), "external") ||
+        !Model.Undo(*m) { return Fail(62) }
+    payload: Text = Ops.RecoveryPayload(*m.operations, m.operations.batches.count - 1)
+    Model.Dispose(*m)
+    if !Contents(Files.JoinPath(payload, "added"), "external") { return Fail(63) }
+    Model.Init(*m, folder)
+    for i: 0..39 {
+        digits: [32]u8
+        if !Model.CreateFile(*m, Number.FormatInteger(i, digits[:])) { return Fail(64) }
+    }
+    if m.operations.batches.count != Ops.MAX_BATCHES { return Fail(65) }
+    for i: 0..Ops.MAX_BATCHES - 1 { if !Model.Undo(*m) { return Fail(66) } }
+    if Model.Undo(*m) || !Exists(folder, "0") || Exists(folder, "39") { return Fail(67) }
+    if !Model.CreateFile(*m, "replacement-test") || !Edit(Files.JoinPath(folder, "replacement-test"), "edited") ||
+        !Model.Undo(*m) { return Fail(68) }
+    saved: Text = Ops.RecoveryPayload(*m.operations, m.operations.batches.count - 1)
+    kept: Text = Files.JoinPath(Files.PathParent(saved), "kept")
+    if !Whole.RenameNoReplace(saved, kept) || !Files.ReplaceFile(saved, "external replacement") || Model.Redo(*m) ||
+        !Contents(saved, "external replacement") || !Contents(kept, "edited") { return Fail(69) }
+    Model.Dispose(*m)
+    if !Contents(saved, "external replacement") || !Contents(kept, "edited") { return Fail(70) }
+    print("Hidden listings/eviction/durable recovery/modified payload/replaced redo tests passed\n")
+    return true
+}
+Bounded :: (root: string) -> bool {
+    source: Text = Files.JoinPath(root, "source")
+    target: Text = Files.JoinPath(root, "target")
+    if !Files.CreateDirectories(source) || !Files.CreateDirectories(target) { return Fail(30) }
+    for i: 0..299 {
+        digits: [32]u8
+        if !Files.ReplaceFile(Files.JoinPath(source, Number.FormatInteger(i, digits[:])), "data") { return Fail(31) }
+    }
+    m: Manager
+    Model.Init(*m, source); Model.SelectAll(*m)
+    if !Model.CopySelection(*m, false) || !Model.OpenPathTracked(*m, target) || !Model.Paste(*m) ||
+        !Model.Undo(*m) || !Model.Redo(*m) { return Fail(32) }
+    Model.Dispose(*m)
+    if m.operations.batches.count != 0 { return Fail(33) }
+    print("Bounded descriptors: 300-item copy/undo/redo and dispose passed\n")
+    return true
+}
+Allocation :: (root: string) -> bool {
+    m: Manager
+    Model.Init(*m, root)
+    ready: Text = Files.JoinPath(root, "oom-ready")
+    if !Files.ReplaceFile(ready, "ready") { return Fail(40) }
+    input := Whole.FileHandle.{.fd = 0, .valid = true}
+    gate: [1]u8
+    if Whole.Read(input, gate[:]) != 1 { return Fail(41) }
+    chunks: Vec(Vec(u8))
+    if !VecReserve(chunks, 1024) { return Fail(42) }
+    for i: 0..1023 {
+        bytes: Vec(u8)
+        if !VecResize(bytes, 1048576) { break }
+        unused VecPush(chunks, bytes)
+    }
+    // Exhaust small allocations too; all buffers stay live until after action.
+    small: Vec(Vec(u8))
+    unused VecReserve(small, 1024)
+    for i: 0..1023 {
+        bytes: Vec(u8)
+        if !VecResize(bytes, 1024) { break }
+        if !VecPush(small, bytes) { break }
+    }
+    result := Model.CreateFile(*m, "must-not-exist")
+    VecFree(chunks); VecFree(small)
+    if result || Exists(root, "must-not-exist") || m.operations.batches.count != 0 { return Fail(43) }
+    Model.Dispose(*m)
+    print("Actual allocation failure preserved filesystem and history\n")
+    return true
+}
+CrossDevice :: (root: string, second: string) -> bool {
+    if Files.PathStatus(root).device_minor == Files.PathStatus(second).device_minor &&
+        Files.PathStatus(root).device_major == Files.PathStatus(second).device_major { return Fail(50) }
+    source: Text = Files.JoinPath(root, "cross-source")
+    if !Files.CreateDirectories(Files.JoinPath(source, "tree/nested")) ||
+        !Files.ReplaceFile(Files.JoinPath(source, "tree/nested/data"), "cross-device") ||
+        !Model.CreateSymbolicLink("missing", Files.JoinPath(source, "tree/link")) { return Fail(51) }
+    m: Manager
+    Model.Init(*m, source)
+    if !Select(*m, "tree") || !Model.CopySelection(*m, true) || !Model.OpenPathTracked(*m, second) ||
+        !Model.Paste(*m) || Exists(source, "tree") || !Exists(second, "tree/link") ||
+        !Model.Undo(*m) || !Exists(source, "tree/link") || Exists(second, "tree") ||
+        !Model.Redo(*m) || Exists(source, "tree") || !Contents(Files.JoinPath(second, "tree/nested/data"), "cross-device") { return Fail(52) }
+    if !Select(*m, "tree") || !Model.DeleteSelection(*m, true) || Exists(second, "tree") ||
+        !Model.Undo(*m) || !Exists(second, "tree/link") || !Model.Redo(*m) { return Fail(53) }
+    trash: Text = Model.TrashDirectory(false)
+    if !Model.OpenPathTracked(*m, trash) || !Select(*m, "tree") || !Model.RestoreSelection(*m) ||
+        !Exists(second, "tree/link") || !Model.Undo(*m) || Exists(second, "tree") ||
+        !Exists(trash, "tree/link") || !Model.Redo(*m) || !Exists(second, "tree/link") { return Fail(54) }
+    if !Model.OpenPathTracked(*m, second) || !Select(*m, "tree") || !Model.DeleteSelection(*m, true) ||
+        !Model.OpenPathTracked(*m, trash) || !Select(*m, "tree") || !Model.DeleteSelection(*m, false) ||
+        Model.Undo(*m) || Exists(second, "tree") || Exists(trash, "tree") { return Fail(55) }
+    Model.Dispose(*m)
+    print("Real cross-device tree/link cut/Trash/restore undo/redo passed\n")
+    return true
+}
+main :: (argc: s32, argv: **u8) -> s32 {
+    if argc < 2 { return 2 }
+    ok: bool
+    if argc == 4 && TextFromCString(argv[1]) == "--cross" { ok = CrossDevice(TextFromCString(argv[2]), TextFromCString(argv[3])) }
+    else if argc == 3 && TextFromCString(argv[1]) == "--fds" { ok = Bounded(TextFromCString(argv[2])) }
+    else if argc == 3 && TextFromCString(argv[1]) == "--oom" { ok = Allocation(TextFromCString(argv[2])) }
+    else { ok = Run(TextFromCString(argv[1])) && Edges(TextFromCString(argv[1])) }
+    return ifx ok then 0 else 1
+}

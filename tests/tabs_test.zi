@@ -81,6 +81,9 @@ Allocation :: (root: string) -> bool {
     manager: Manager
     Model.Init(*manager, root)
     if manager.tabs.count != 1 || manager.entries.count == 0 { return Fail(30) }
+    if !Files.ReplaceFile(Files.JoinPath(root,"oom-ready"),"READY") { return Fail(30) }
+    gate: [1]u8; input:=WholeFiles.FileHandle.{.fd=0,.valid=true}
+    if WholeFiles.Read(input,gate[:])!=1 { return Fail(30) }
     reached: bool
     for attempt: cast(s32)0..255 {
         count := manager.tabs.count; active := manager.active_tab

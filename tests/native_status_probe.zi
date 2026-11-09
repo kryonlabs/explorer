@@ -1,0 +1,65 @@
+using Model :: #import "model";
+Status :: #import "native_status";
+Bytes :: #import "std/byte_text_linux";
+using Vectors :: #import "std/vec";
+Files :: #import "std/file_tree_linux";
+libc :: #system_library "c";
+SetLocale :: (category: s32, locale: *u8) -> *u8 #foreign libc "setlocale";
+Pause :: (micros: u32) -> s32 #foreign libc "usleep";
+
+Emit :: (manager: *Manager) -> bool {
+    output: Vec(u8)
+    if !Status.Append(manager,-1,*output) { return false }
+    print("%\n",TextView(output[:]))
+    return true
+}
+Cache :: (root: string) -> s32 {
+    manager: Manager
+    if !Files.CreateDirectories(root) || !Files.ReplaceFile(Files.JoinPath(root,"note.txt"),"x") { return 1 }
+    Model.Init(*manager,root)
+    Model.ClearSelection(*manager)
+    if !Emit(*manager) || !Files.ReplaceFile(Files.JoinPath(root,".hidden"),"hidden") || !Emit(*manager) { return 2 }
+    manager.show_hidden=true
+    if !Model.Refresh(*manager) { return 3 }
+    Model.ClearSelection(*manager)
+    if !Emit(*manager) || !Files.ReplaceFile(Files.JoinPath(root,"note.txt"),"longer") || !Model.Refresh(*manager) { return 4 }
+    Model.ClearSelection(*manager)
+    if !Emit(*manager) || !Files.ReplaceFile(Files.JoinPath(root,".hidden"),"updated hidden") { return 5 }
+    unused Pause(1100000)
+    if !Emit(*manager) { return 6 }
+    Model.Dispose(*manager)
+    return 0
+}
+
+#program_export
+main :: (argc: s32, argv: **u8) -> s32 {
+    if argc<3 { return 64 }
+    empty: [1]u8
+    unused SetLocale(6,*empty[0])
+    if Bytes.TextFromCString(argv[2])=="cache" { return Cache(Bytes.TextFromCString(argv[1])) }
+    manager: Manager
+    if Bytes.TextFromCString(argv[2])=="uri" {
+        manager.cwd="network:///"
+        if !Model.AppendEntry(*manager,"Network folder","",.{.kind=.Directory}) { return 4 }
+        manager.entries[0].content_type="inode/directory"
+    } else { Model.Init(*manager,Bytes.TextFromCString(argv[1])) }
+    defer Model.Dispose(*manager)
+    if manager.error!="" { print("%\n",manager.error); return 1 }
+    Model.ClearSelection(*manager)
+    for arg: cast(s32)3..argc-1 {
+        name:=Bytes.TextFromCString(argv[arg])
+        found:=false
+        index: s32
+        while index<manager.entries.count {
+            if manager.entries[index].name==name { manager.selected[index]=true; found=true }
+            index+=1
+        }
+        if !found { return 2 }
+    }
+    free: s64= -1
+    if Bytes.TextFromCString(argv[2])=="free" { free=4096 }
+    output: Vec(u8)
+    if !Status.Append(*manager,free,*output) { return 3 }
+    print("%\n",TextView(output[:]))
+    return 0
+}

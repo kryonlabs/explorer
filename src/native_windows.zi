@@ -1,0 +1,171 @@
+// Native authenticated Shelf lifecycle.
+#scope_module
+CString :: #import "std/c_string";
+Bytes :: #import "std/byte_text_linux";
+Number :: #import "std/number_text";
+libc :: #system_library "c";
+glib :: #system_library "glib-2.0";
+Socket :: (domain: s32, kind: s32, protocol: s32)->s32 #foreign libc "socket";
+Bind :: (fd: s32, address: *Address, length: u32)->s32 #foreign libc "bind";
+Option :: (fd: s32, level: s32, name: s32, value: *s32, length: u32)->s32 #foreign libc "setsockopt";
+Send :: (fd: s32, data: *Packet, size: usize, flags: s32, address: *Address, length: u32)->s64 #foreign libc "sendto";
+Receive :: (fd: s32, message: *Message, flags: s32)->s64 #foreign libc "recvmsg";
+Close :: (fd: s32)->s32 #foreign libc "close";
+Open :: (path: *u8, flags: s32)->s32 #foreign libc "open";
+Read :: (fd: s32, data: *u8, size: usize)->s64 #foreign libc "read";
+Stat :: (directory: s32, path: *u8, flags: s32, mask: u32, output: *u32)->s32 #foreign libc "statx";
+Pid :: ()->s32 #foreign libc "getpid";
+Uid :: ()->u32 #foreign libc "getuid";
+Environment :: (name: *u8)->*u8 #foreign libc "getenv";
+DirOpen :: (path: *u8, flags: u32, error: **void)->*void #foreign glib "g_dir_open";
+DirNext :: (directory: *void)->*u8 #foreign glib "g_dir_read_name";
+DirClose :: (directory: *void) #foreign glib "g_dir_close";
+Address :: struct { family: u16; path: [48]u8; }
+Vector :: struct { data: *void; size: usize; }
+Message :: struct { name: *void; name_size: u32; vector: *Vector; count: usize; control: *void; control_size: usize; flags: s32; }
+Credentials :: struct { size: usize; level: s32; kind: s32; pid: s32; uid: u32; gid: u32; padding: u32; }
+Packet :: struct { magic: u64; sender_start: u64; recipient_start: u64; }
+Identity :: struct { start: u64; inode_low: u32; inode_high: u32; major: u32; minor: u32; valid: bool; }
+descriptor: s32;
+initialized: bool;
+scope: u64;
+self: Identity;
+Magic :: 0x5348454c46434c31;
+ProcPath :: (pid: s32, suffix: string, output: []u8)->bool {
+    digits: [32]u8
+    number:=Number.FormatInteger(cast(s64)pid,digits[:])
+    at: s64
+    parts: [3]string = .{"/proc/",number,suffix}
+    for part: parts {
+        for byte: part { if at>=output.count-1 { return false }; output[at]=byte; at+=1 }
+    }
+    output[at]=0; return true
+}
+Inspect :: (pid: s32)->Identity {
+    result: Identity; path: [128]u8
+    if pid<=0 || !ProcPath(pid,"/stat",path[:]) { return result }
+    fd:=Open(*path[0],0x80000); if fd<0 { return result }; defer { unused Close(fd) }
+    text: [4096]u8; count:=Read(fd,*text[0],4096)
+    if count<=0 || count>=4096 { return result }
+    end: s64= -1
+    for index:0..count-1 { if text[index]==41 { end=index } }
+    if end<0 { return result }
+    at:=end+2; field: s32=3
+    while field<22 && at<count {
+        while at<count && text[at]!=32 { at+=1 }
+        at+=1; field+=1
+    }
+    while at<count && text[at]>=48 && text[at]<=57 {
+        result.start=result.start*10+cast(u64)(text[at]-48); at+=1
+    }
+    if result.start==0 || !ProcPath(pid,"/exe",path[:]) { return .{} }
+    stat: [64]u32
+    if !ProcPath(pid,"",path[:]) || Stat(-100,*path[0],0,8,*stat[0])!=0 || (stat[0]&8)==0 || stat[5]!=Uid() { return .{} }
+    if !ProcPath(pid,"/exe",path[:]) { return .{} }
+    if Stat(-100,*path[0],0,0x108,*stat[0])!=0 || (stat[0]&0x108)!=0x108 { return .{} }
+    result.inode_low=stat[8]; result.inode_high=stat[9]
+    result.major=stat[34]; result.minor=stat[35]; result.valid=true
+    return result
+}
+SameExecutable :: (other: Identity)->bool {
+    return other.valid && other.inode_low==self.inode_low && other.inode_high==self.inode_high && other.major==self.major && other.minor==self.minor
+}
+Endpoint :: (pid: s32, start: u64)->Address {
+    result: Address; result.family=1
+    // Fixed abstract address includes display scope, PID and birth time.
+    for byte,index:"shelf-close-v1" { result.path[index+1]=byte }
+    for index:0..7 {
+        result.path[16+index]=cast(u8)(scope >> cast(u64)(index*8))
+        result.path[24+index]=cast(u8)(cast(u64)pid >> cast(u64)(index*8))
+        result.path[32+index]=cast(u8)(start >> cast(u64)(index*8))
+    }
+    return result
+}
+#scope_export
+Initialize :: ()->bool {
+    if initialized { return descriptor>=0 }
+    initialized=true; descriptor= -1
+    self=Inspect(Pid()); if !self.valid { return false }
+    scope=1469598103934665603
+    names: [3]string = .{"DISPLAY","WAYLAND_DISPLAY","XDG_RUNTIME_DIR"}
+    for name: names {
+        key: [32]u8
+        if !CString.CopyCString(name,key[:]) { return false }
+        value:=Environment(*key[0])
+        if value!=null { for byte: Bytes.TextFromCString(value) { scope=(scope^cast(u64)byte)*1099511628211 } }
+        scope=(scope^255)*1099511628211
+    }
+    fd:=Socket(1,2|0x800|0x80000,0); if fd<0 { return false }
+    enabled: s32=1; address:=Endpoint(Pid(),self.start)
+    if Option(fd,1,16,*enabled,4)!=0 || Bind(fd,*address,50)!=0 { unused Close(fd); return false }
+    descriptor=fd; return true
+}
+Pending :: struct { pid: s32; identity: Identity; }
+pending: [256]Pending;
+pending_count: s32;
+closing: bool;
+failed: bool;
+deadline: s64;
+Clock :: ()->s64 #foreign glib "g_get_monotonic_time";
+Ack :: 0x5348454c46414b31;
+PollClose :: ()->bool {
+    if !Initialize() { return false }
+    for attempt:0..15 {
+        packet: Packet; credentials: Credentials
+        vector: Vector; vector.data=cast(*void)*packet; vector.size=24
+        message: Message; message.vector=*vector; message.count=1
+        message.control=cast(*void)*credentials; message.control_size=32
+        count:=Receive(descriptor,*message,0x40)
+        if count<0 { break }
+        if count!=24 || (message.flags&40)!=0 || message.control_size<28 || credentials.size!=28 || credentials.level!=1 || credentials.kind!=2 || credentials.uid!=Uid() { continue }
+        if packet.recipient_start!=self.start { continue }
+        sender:=Inspect(credentials.pid)
+        if packet.magic==Ack && closing {
+            // ACK may outlive the peer: match kernel PID and recorded birth.
+            for index:0..pending_count-1 {
+                if pending[index].pid==credentials.pid && pending[index].identity.start==packet.sender_start { pending[index].pid=0 }
+            }
+        } else if packet.magic==Magic && SameExecutable(sender) && sender.start==packet.sender_start {
+            address:=Endpoint(credentials.pid,sender.start)
+            reply: Packet; reply.magic=Ack; reply.sender_start=self.start; reply.recipient_start=sender.start
+            unused Send(descriptor,*reply,24,0x40|0x4000,*address,50)
+            return true
+        }
+    }
+    if closing {
+        remaining: s32
+        for index:0..pending_count-1 {
+            if pending[index].pid!=0 {
+                peer:=Inspect(pending[index].pid)
+                if peer.valid && peer.start==pending[index].identity.start { remaining+=1 }
+            }
+        }
+        if remaining==0 { closing=false; return true }
+        if Clock()>deadline { closing=false; failed=true }
+    }
+    return false
+}
+TakeFailure :: ()->bool { result:=failed; failed=false; return result }
+CloseAll :: ()->bool {
+    if !Initialize() { return false }
+    if closing { return true }
+    path: [16]u8; if !CString.CopyCString("/proc",path[:]) { return false }
+    directory:=DirOpen(*path[0],0,null); if directory==null { return false }; defer DirClose(directory)
+    pending_count=0
+    for attempt:0..65535 {
+        name:=DirNext(directory)
+        if name==null { closing=true; deadline=Clock()+3000000; return true }
+        text:=Bytes.TextFromCString(name); pid: s64; numeric:=text.count>0 && text.count<=10
+        for byte: text { if byte<48 || byte>57 { numeric=false; break }; pid=pid*10+cast(s64)(byte-48) }
+        if !numeric || pid<=0 || pid>2147483647 || pid==cast(s64)Pid() { continue }
+        other:=Inspect(cast(s32)pid); if !SameExecutable(other) { continue }
+        address:=Endpoint(cast(s32)pid,other.start)
+        packet: Packet; packet.magic=Magic; packet.sender_start=self.start; packet.recipient_start=other.start
+        // Another display has no endpoint in this namespace.
+        if Send(descriptor,*packet,24,0x40|0x4000,*address,50)==24 {
+            if pending_count>=256 { return false }
+            pending[pending_count].pid=cast(s32)pid; pending[pending_count].identity=other; pending_count+=1
+        }
+    }
+    return false
+}

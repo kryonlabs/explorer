@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import sys
 import time
+from ui_test import menu_action, wait_for
 
 
 def main():
@@ -69,7 +70,7 @@ def main():
             return subprocess.check_output([sys.executable, str(repo / 'tests/file_clipboard_test.py'), '--read', 'UTF8_STRING'], timeout=15).decode()
         def cwd():
             key('ctrl+l'); value = field(); key('Escape'); return value
-        def other(): click(828, 583)
+        def other(): menu_action(xdo, window, "View", 7)
         def capture(suffix):
             xdo('windowraise', window); time.sleep(.1)
             path = repo / 'build' / f'{args.capture_prefix}-{suffix}.png'
@@ -79,16 +80,39 @@ def main():
         other(); navigate(b); assert cwd() == str(b); capture('right-active')
         other(); assert cwd() == str(a)
         # The newline/Unicode file is selected by its visible sorted identity.
-        key('Home', 'ctrl+c'); other(); key('ctrl+v')
+        key('Home', 'ctrl+c')
+        advertised = subprocess.check_output([sys.executable, str(repo / 'tests/file_clipboard_test.py'), '--read', 'x-special/gnome-copied-files'], timeout=15)
+        assert (a / special).as_uri().encode() in advertised.splitlines(), advertised
+        capture('source-selected')
+        other(); capture('destination-before-paste')
+        retained = subprocess.check_output([sys.executable, str(repo / 'tests/file_clipboard_test.py'), '--read', 'x-special/gnome-copied-files'], timeout=15)
+        assert retained == advertised, (advertised, retained)
+        key('ctrl+v')
+        wait_for(lambda: (b / special).exists(), 'cross-pane clipboard copy completion', proc)
+        capture('paste-result')
         assert (b / special).read_text() == 'original Unicode newline' and (a / special).exists()
         key('End', 'ctrl+x'); other(); key('ctrl+v')
+        wait_for(lambda: (a / 'reverse.src').exists() and not (b / 'reverse.src').exists(), 'cross-pane clipboard cut completion', proc)
         assert (a / 'reverse.src').read_text() == 'reverse cut' and not (b / 'reverse.src').exists()
         key('ctrl+v'); assert len(list(a.glob('reverse*'))) == 1
         capture('cross-pane-clipboard')
         # Incoming Thunar copy goes into the active RIGHT pane; no second host or owner is used.
         other()
         thunar = subprocess.Popen(['thunar', str(external)], env=dict(os.environ, HOME=str(root)), stdout=log, stderr=log)
-        tw = find(thunar.pid); key('ctrl+a', 'ctrl+c', win=tw); key('ctrl+v')
+        tw = find(thunar.pid)
+        # A visible native window may precede its asynchronous directory load.
+        # Wait for the exact URI offer before testing the receiving pane.
+        deadline = time.monotonic() + 10
+        expected_uri = (external / 'thunar.txt').as_uri().encode()
+        while True:
+            key('ctrl+a', 'ctrl+c', win=tw)
+            advertised = subprocess.run([sys.executable, str(repo / 'tests/file_clipboard_test.py'),
+                                         '--read', 'x-special/gnome-copied-files'],
+                                        capture_output=True, timeout=15)
+            if advertised.returncode == 0 and expected_uri in advertised.stdout.splitlines():
+                break
+            assert time.monotonic() < deadline, 'Thunar did not offer the loaded fixture file'
+        key('ctrl+v')
         deadline = time.monotonic() + 10
         while not (b / 'thunar.txt').exists() and time.monotonic() < deadline: time.sleep(.05)
         assert (b / 'thunar.txt').read_text() == 'external peer' and not (a / 'thunar.txt').exists()
@@ -110,8 +134,10 @@ def main():
         other(); assert cwd() == str(a)
         # Genuine divider pointer drag and wheel scrolling in an inactive pane.
         xdo('windowraise', window); xdo('windowfocus', '--sync', window)
-        xdo('mousemove', '--window', window, 559, 360); xdo('mousedown', 1); time.sleep(.15)
-        xdo('mousemove', '--window', window, 650, 360); time.sleep(.15); xdo('mouseup', 1); time.sleep(.2)
+        geometry = dict(line.split('=', 1) for line in xdo('getwindowgeometry', '--shell', window).splitlines())
+        divider_x = 170 + (int(geometry['WIDTH']) - 170) // 2
+        xdo('mousemove', '--window', window, divider_x, 360); xdo('mousedown', 1); time.sleep(.15)
+        xdo('mousemove', '--window', window, divider_x + 90, 360); time.sleep(.15); xdo('mouseup', 1); time.sleep(.2)
         assert cwd() == str(a), 'divider drag changed the active pane'
         capture('divider-dragged')
         xdo('mousemove', '--window', window, 300, 400); xdo('click', '--repeat', 8, '--delay', 40, 5)
@@ -120,7 +146,7 @@ def main():
         # Regression: an open action menu owns tab A while Ctrl+Tab arrives.
         key('ctrl+t'); navigate(popup_b); key('ctrl+shift+Tab'); assert cwd() == str(a)
         xdo('windowsize', window, 560, 600); time.sleep(.2)
-        click(470, 26); key('ctrl+Tab', 'Home', 'Return')
+        menu_action(xdo, window, "File"); key('ctrl+Tab', 'Home', 'Return')
         offer('popup-owned'); key('ctrl+v', 'Return')
         assert (a / 'popup-owned').is_dir() and not (popup_b / 'popup-owned').exists(), 'open Actions retargeted its command to tab B'
         capture('popup-owner')
@@ -131,7 +157,7 @@ def main():
         key('F3'); assert cwd() == str(b)
         xdo('windowsize', window, 560, 600); time.sleep(.3); capture('narrow')
         key('ctrl+l'); capture('narrow-editor'); key('Escape')
-        click(470, 26); capture('narrow-actions'); key('Escape')
+        menu_action(xdo, window, "File"); capture('narrow-actions'); key('Escape')
         xdo('windowsize', window, 440, 600); time.sleep(.2); capture('small-embedded-width')
         key('ctrl+l'); capture('small-editor'); key('Escape')
         # Retained peer disappearance must reject re-enabling without falling back to root.

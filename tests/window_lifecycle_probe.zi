@@ -1,0 +1,17 @@
+Windows :: #import "native_windows";
+Bytes :: #import "std/byte_text_linux";
+libc :: #system_library "c";
+Pause :: (micros: u32)->s32 #foreign libc "usleep";
+#program_export
+main :: (argc: s32, argv: **u8)->s32 {
+    if !Windows.Initialize() { return 1 }
+    if argc>1 && Bytes.TextFromCString(argv[1])=="close" {
+        if !Windows.CloseAll() { return 2 }
+    } else if argc>1 && Bytes.TextFromCString(argv[1])=="delay" { unused Pause(600000) }
+    for attempt:0..999 {
+        if Windows.PollClose() { return 0 }
+        if Windows.TakeFailure() { return 3 }
+        unused Pause(10000)
+    }
+    return 4
+}

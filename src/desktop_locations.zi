@@ -1,0 +1,563 @@
+// Native desktop identities. Strings in DesktopLocationEntry and Error borrow State storage
+// until the next successful open (or Release). Failed opens only replace Error.
+// GObject/GList/GError ownership stays here; callers never release native refs.
+#scope_module
+using Vectors :: #import "std/vec";
+using Bytes :: #import "std/byte_text_linux";
+CString :: #import "std/c_string";
+Files :: #import "std/file_tree_linux";
+gio :: #system_library "gio-2.0";
+glib :: #system_library "glib-2.0";
+gtk :: #system_library "gtk-3";
+gobject :: #system_library "gobject-2.0";
+GError :: struct { domain: u32; code: s32; message: *u8; }
+List :: struct { data: *void; next: *List; previous: *List; }
+FileUri :: (uri: *u8) -> *void #foreign gio "g_file_new_for_uri";
+FilePath :: (path: *u8) -> *void #foreign gio "g_file_new_for_path";
+GetUri :: (file: *void) -> *u8 #foreign gio "g_file_get_uri";
+GetPath :: (file: *void) -> *u8 #foreign gio "g_file_get_path";
+GetParent :: (file: *void) -> *void #foreign gio "g_file_get_parent";
+ResolveRelative :: (file: *void, relative: *u8) -> *void #foreign gio "g_file_resolve_relative_path";
+FilenameFromUri :: (uri: *u8, hostname: **u8, error: **GError) -> *u8 #foreign glib "g_filename_from_uri";
+HostName :: () -> *u8 #foreign glib "g_get_host_name";
+GetChild :: (file: *void, name: *u8) -> *void #foreign gio "g_file_get_child";
+EnumerateAsync :: (file: *void, attrs: *u8, flags: s32, priority: s32, cancel: *void, callback: *void, data: *void) #foreign gio "g_file_enumerate_children_async";
+EnumerateFinish :: (file: *void, result: *void, error: **GError) -> *void #foreign gio "g_file_enumerate_children_finish";
+MountAsync :: (file: *void, flags: s32, operation: *void, cancel: *void, callback: *void, data: *void) #foreign gio "g_file_mount_enclosing_volume";
+MountFinish :: (file: *void, result: *void, error: **GError) -> s32 #foreign gio "g_file_mount_enclosing_volume_finish";
+NextAsync :: (enumerator: *void, count: s32, priority: s32, cancel: *void, callback: *void, data: *void) #foreign gio "g_file_enumerator_next_files_async";
+NextFinish :: (enumerator: *void, result: *void, error: **GError) -> *List #foreign gio "g_file_enumerator_next_files_finish";
+QueryAsync :: (file: *void, attrs: *u8, flags: s32, priority: s32, cancel: *void, callback: *void, data: *void) #foreign gio "g_file_query_info_async";
+QueryFinish :: (file: *void, result: *void, error: **GError) -> *void #foreign gio "g_file_query_info_finish";
+InfoName :: (info: *void) -> *u8 #foreign gio "g_file_info_get_name";
+InfoDisplay :: (info: *void) -> *u8 #foreign gio "g_file_info_get_display_name";
+InfoType :: (info: *void) -> s32 #foreign gio "g_file_info_get_file_type";
+InfoHidden :: (info: *void) -> s32 #foreign gio "g_file_info_get_is_hidden";
+InfoLink :: (info: *void) -> s32 #foreign gio "g_file_info_get_is_symlink";
+InfoSize :: (info: *void) -> s64 #foreign gio "g_file_info_get_size";
+InfoContent :: (info: *void) -> *u8 #foreign gio "g_file_info_get_content_type";
+InfoIcon :: (info: *void) -> *void #foreign gio "g_file_info_get_icon";
+InfoString :: (info: *void, attr: *u8) -> *u8 #foreign gio "g_file_info_get_attribute_string";
+InfoU64 :: (info: *void, attr: *u8) -> u64 #foreign gio "g_file_info_get_attribute_uint64";
+InfoHas :: (info: *void, attr: *u8) -> s32 #foreign gio "g_file_info_has_attribute";
+IconString :: (icon: *void) -> *u8 #foreign gio "g_icon_to_string";
+ContentIcon :: (content_type: *u8) -> *void #foreign gio "g_content_type_get_icon";
+ThemedType :: () -> usize #foreign gio "g_themed_icon_get_type";
+IsType :: (object: *void, type: usize) -> s32 #foreign gobject "g_type_check_instance_is_a";
+IconNames :: (icon: *void) -> **u8 #foreign gio "g_themed_icon_get_names";
+MonitorNew :: () -> *void #foreign gio "g_volume_monitor_get";
+MonitorMounts :: (monitor: *void) -> *List #foreign gio "g_volume_monitor_get_mounts";
+MountRoot :: (mount: *void) -> *void #foreign gio "g_mount_get_root";
+MountName :: (mount: *void) -> *u8 #foreign gio "g_mount_get_name";
+MountIcon :: (mount: *void) -> *void #foreign gio "g_mount_get_icon";
+MountShadowed :: (mount: *void) -> s32 #foreign gio "g_mount_is_shadowed";
+RecentNew :: () -> *void #foreign gtk "gtk_recent_manager_new";
+RecentItems :: (manager: *void) -> *List #foreign gtk "gtk_recent_manager_get_items";
+RecentUri :: (info: *void) -> *u8 #foreign gtk "gtk_recent_info_get_uri";
+RecentDisplay :: (info: *void) -> *u8 #foreign gtk "gtk_recent_info_get_display_name";
+RecentMime :: (info: *void) -> *u8 #foreign gtk "gtk_recent_info_get_mime_type";
+RecentModified :: (info: *void) -> s64 #foreign gtk "gtk_recent_info_get_modified";
+RecentUnref :: (info: *void) #foreign gtk "gtk_recent_info_unref";
+BookmarkNew :: () -> *void #foreign glib "g_bookmark_file_new";
+BookmarkLoad :: (bookmarks: *void, path: *u8, error: **GError) -> s32 #foreign glib "g_bookmark_file_load_from_file";
+BookmarkFree :: (bookmarks: *void) #foreign glib "g_bookmark_file_free";
+DataDir :: () -> *u8 #foreign glib "g_get_user_data_dir";
+Unref :: (object: *void) #foreign gobject "g_object_unref";
+Free :: (memory: *u8) #foreign glib "g_free";
+ListFree :: (list: *List) #foreign glib "g_list_free";
+ErrorFree :: (error: *GError) #foreign glib "g_error_free";
+CancelNew :: () -> *void #foreign gio "g_cancellable_new";
+Cancel :: (cancel: *void) #foreign gio "g_cancellable_cancel";
+ContextNew :: () -> *void #foreign glib "g_main_context_new";
+ContextPush :: (context: *void) #foreign glib "g_main_context_push_thread_default";
+ContextPop :: (context: *void) #foreign glib "g_main_context_pop_thread_default";
+ContextUnref :: (context: *void) #foreign glib "g_main_context_unref";
+Iterate :: (context: *void, block: s32) -> s32 #foreign glib "g_main_context_iteration";
+Monotonic :: () -> s64 #foreign glib "g_get_monotonic_time";
+Pause :: (microseconds: usize) #foreign glib "g_usleep";
+
+#scope_export
+ResolveUri :: (base: string, relative: string) -> Text {
+    if !ValidUri(base) { return .{} }
+    for byte: relative { if byte==cast(u8)0 { return .{} } }
+    base_buffer: [65536]u8; relative_buffer: [65536]u8
+    if !CString.CopyCString(base,base_buffer[:]) || !CString.CopyCString(relative,relative_buffer[:]) { return .{} }
+    file:=FileUri(*base_buffer[0]); if file==null { return .{} }; defer Unref(file)
+    child:=ResolveRelative(file,*relative_buffer[0]); if child==null { return .{} }; defer Unref(child)
+    value:=GetUri(child); if value==null { return .{} }; defer Free(value)
+    return TextCopy(Bytes.TextFromCString(value))
+}
+Kind :: enum { Unknown :: 0; File :: 1; Directory :: 2; Link :: 3; Special :: 4; Shortcut :: 5; Mountable :: 6; Mount :: 7; }
+DesktopLocationEntry :: struct {
+    key: u64
+    uri: string
+    target_uri: string
+    local_path: string
+    name: string
+    caption: string
+    icon_name: string
+    icon_serialized: string
+    content_type: string
+    kind: Kind
+    is_directory: bool
+    is_navigable: bool
+    is_hidden: bool
+    is_symlink: bool
+    size: s64
+    modified: s64
+}
+Error :: struct { domain: u32; code: s32; message: string; }
+State :: struct {
+    entries: Vec(DesktopLocationEntry)
+    current_uri: string
+    error: Error
+    storage: Vec(Text)
+    current_text: Text
+    error_text: Text
+    bytes: s64
+    // Limits fail the entire read; a partial listing is never published.
+    max_entries: s64
+    max_bytes: s64
+    timeout_ms: s64
+}
+Init :: (state: *State) { state.max_entries = 4096; state.max_bytes = 16777216; state.timeout_ms = 10000 }
+Release :: (state: *State) {
+    VecFree(state.entries); VecFree(state.storage)
+    VecFree(state.current_text.bytes); VecFree(state.error_text.bytes)
+    state.current_uri = ""; state.error = .{}; state.bytes = 0
+}
+Key :: (uri: string) -> u64 {
+    value: u64 = 14695981039346656037
+    for byte: uri { value = (value ^ cast(u64)byte) * cast(u64)1099511628211 }
+    return ifx value == cast(u64)0 then cast(u64)1 else value
+}
+// Returned Text is owned by the caller. Empty means invalid input/OOM, or
+// (PathForUri only) a native GFile with no local path. No UTF-8 filename coercion.
+UriForPath :: (path: string) -> Text {
+    buffer: [65536]u8
+    if path == "" || path[0] != #char "/" || !CString.CopyCString(path, buffer[:]) { return .{} }
+    file := FilePath(*buffer[0]); if file == null { return .{} }
+    native := GetUri(file); result: Text = TextCopy(Bytes.TextFromCString(native))
+    Free(native); Unref(file); return result
+}
+PathForUri :: (uri: string) -> Text {
+    buffer: [65536]u8
+    if !ValidUri(uri) || !CString.CopyCString(uri, buffer[:]) { return .{} }
+    if IsFileUri(uri) { return LocalFileUri(*buffer[0]) }
+    file := FileUri(*buffer[0]); if file == null { return .{} }
+    native := GetPath(file); result: Text = TextCopy(Bytes.TextFromCString(native))
+    Free(native); Unref(file); return result
+}
+// Owned canonical parent identity, or empty at native roots/invalid inputs.
+// Resolving a parent neither contacts a remote server nor mounts anything.
+ParentUri :: (uri: string) -> Text {
+    buffer: [65536]u8
+    if !ValidUri(uri) || !CString.CopyCString(uri, buffer[:]) { return .{} }
+    if IsFileUri(uri) {
+        path: Text = LocalFileUri(*buffer[0])
+        if path.bytes.count == 0 { return .{} }
+    }
+    file := FileUri(*buffer[0]); if file == null { return .{} }
+    parent := GetParent(file); Unref(file)
+    if parent == null { return .{} }
+    native := GetUri(parent); result: Text = TextCopy(Bytes.TextFromCString(native))
+    Free(native); Unref(parent); return result
+}
+OpenComputer :: (state: *State) -> bool { return OpenUri(state, "computer:///") }
+OpenNetwork :: (state: *State) -> bool { return OpenUri(state, "network:///") }
+
+#scope_module
+ATTRS :: "standard::name,standard::display-name,standard::type,standard::icon,standard::content-type,standard::is-hidden,standard::is-symlink,standard::size,standard::target-uri,time::modified";
+EqualASCII :: (left: string, right: string) -> bool {
+    if left.count != right.count { return false }
+    for i: cast(s64)0..left.count - 1 {
+        a := left[i]; b := right[i]
+        if a >= #char "A" && a <= #char "Z" { a += cast(u8)32 }
+        if b >= #char "A" && b <= #char "Z" { b += cast(u8)32 }
+        if a != b { return false }
+    }
+    return true
+}
+IsFileUri :: (uri: string) -> bool { return uri.count >= 5 && EqualASCII(uri[0:5], "file:") }
+LocalFileUri :: (uri: *u8) -> Text {
+    hostname: *u8; error: *GError
+    path := FilenameFromUri(uri, *hostname, *error)
+    defer Free(path); defer Free(hostname)
+    if error != null { ErrorFree(error); return .{} }
+    host := Bytes.TextFromCString(hostname)
+    // GLocalFile discards arbitrary file:// authorities. Never let that turn
+    // someone else's file URI into a local file operation on this machine.
+    if host != "" && !EqualASCII(host, "localhost") && !EqualASCII(host, Bytes.TextFromCString(HostName())) { return .{} }
+    return TextCopy(Bytes.TextFromCString(path))
+}
+Hex :: (byte: u8) -> bool {
+    return (byte >= #char "0" && byte <= #char "9") || (byte >= #char "A" && byte <= #char "F") || (byte >= #char "a" && byte <= #char "f")
+}
+ValidUri :: (uri: string) -> bool {
+    if uri.count == 0 || uri.count >= 65536 { return false }
+    first := uri[0]
+    if !((first >= #char "A" && first <= #char "Z") || (first >= #char "a" && first <= #char "z")) { return false }
+    for i: cast(s64)0..uri.count - 1 {
+        if uri[i] == #char "%" {
+            if i + 2 >= uri.count || !Hex(uri[i + 1]) || !Hex(uri[i + 2]) ||
+                (uri[i + 1] == #char "0" && uri[i + 2] == #char "0") { return false }
+        }
+    }
+    colon := false
+    for byte: uri {
+        if byte == cast(u8)0 || byte <= cast(u8)32 { return false }
+        if !colon {
+            if byte == #char ":" { colon = true }
+            else if !((byte >= #char "a" && byte <= #char "z") || (byte >= #char "A" && byte <= #char "Z") ||
+                (byte >= #char "0" && byte <= #char "9") || byte == #char "+" || byte == #char "-" || byte == #char ".") { return false }
+        }
+    }
+    return colon
+}
+Fail :: (state: *State, code: s32, message: string, domain: u32 = 0) -> bool {
+    text: Text = TextCopy(message); VecSwap(state.error_text.bytes, text.bytes)
+    state.error = .{domain, code, TextView(state.error_text)}; return false
+}
+NativeFail :: (state: *State, error: *GError) -> bool {
+    if error == null { return Fail(state, -1, "Native location read failed without error details") }
+    unused Fail(state, error.code, Bytes.TextFromCString(error.message), error.domain)
+    ErrorFree(error); return false
+}
+Own :: (state: *State, value: string, output: *string) -> bool {
+    if value.count >= state.max_bytes - state.bytes { return false }
+    text: Text = TextCopy(value)
+    if text.bytes.count != value.count { return false }
+    if !VecPush(text.bytes, cast(u8)0) { return false }
+    if !VecPush(state.storage, text) { return false }
+    // Public records borrow this State-owned byte allocation. Vec reallocation
+    // moves Text descriptors, never the byte allocations backing these views.
+    owned := *state.storage[state.storage.count - 1]
+    output.* = Bytes.TextFromCString(*owned.bytes[0]); state.bytes += value.count + 1
+    return true
+}
+Icon :: (state: *State, icon: *void, entry: *DesktopLocationEntry) -> bool {
+    if icon == null { return true }
+    serialized := IconString(icon)
+    ok := Own(state, Bytes.TextFromCString(serialized), *entry.icon_serialized)
+    Free(serialized)
+    if ok && IsType(icon, ThemedType()) != 0 {
+        names := IconNames(icon)
+        if names != null && names[0] != null { ok = Own(state, Bytes.TextFromCString(names[0]), *entry.icon_name) }
+    }
+    return ok
+}
+Identity :: (state: *State, file: *void, entry: *DesktopLocationEntry) -> bool {
+    uri := GetUri(file); path := GetPath(file)
+    ok := uri != null && Own(state, Bytes.TextFromCString(uri), *entry.uri) && Own(state, Bytes.TextFromCString(path), *entry.local_path)
+    Free(uri); Free(path)
+    entry.key = Key(entry.uri); return ok
+}
+Has :: (info: *void, name: string) -> bool {
+    attr: [64]u8
+    return CString.CopyCString(name, attr[:]) && InfoHas(info, *attr[0]) != 0
+}
+Fill :: (state: *State, file: *void, info: *void, entry: *DesktopLocationEntry) -> bool {
+    if !Has(info, "standard::name") || !Identity(state, file, entry) ||
+        !Own(state, Bytes.TextFromCString(InfoName(info)), *entry.name) { return false }
+    if Has(info, "standard::display-name") && !Own(state, Bytes.TextFromCString(InfoDisplay(info)), *entry.caption) { return false }
+    if Has(info, "standard::content-type") && !Own(state, Bytes.TextFromCString(InfoContent(info)), *entry.content_type) { return false }
+    if Has(info, "standard::icon") && !Icon(state, InfoIcon(info), entry) { return false }
+    if Has(info, "standard::type") { entry.kind = cast(Kind)InfoType(info) }
+    entry.is_directory = entry.kind == .Directory
+    entry.is_navigable = entry.is_directory || entry.kind == .Shortcut || entry.kind == .Mountable
+    attr: [32]u8
+    unused CString.CopyCString("standard::is-hidden", attr[:])
+    if InfoHas(info, *attr[0]) != 0 { entry.is_hidden = InfoHidden(info) != 0 }
+    unused CString.CopyCString("standard::is-symlink", attr[:])
+    if InfoHas(info, *attr[0]) != 0 { entry.is_symlink = InfoLink(info) != 0 }
+    unused CString.CopyCString("standard::size", attr[:])
+    if InfoHas(info, *attr[0]) != 0 { entry.size = InfoSize(info) }
+    unused CString.CopyCString("time::modified", attr[:])
+    if InfoHas(info, *attr[0]) != 0 { entry.modified = cast(s64)InfoU64(info, *attr[0]) }
+    unused CString.CopyCString("standard::target-uri", attr[:])
+    target := ""
+    if InfoHas(info, *attr[0]) != 0 { target = Bytes.TextFromCString(InfoString(info, *attr[0])) }
+    if target != "" {
+        if !ValidUri(target) || !Own(state, target, *entry.target_uri) { return false }
+        path: Text = PathForUri(target)
+        if !Own(state, TextView(path), *entry.local_path) { return false }
+    }
+    return true
+}
+Pending :: (state: *State) -> State {
+    next: State
+    next.max_entries = ifx state.max_entries > 0 then state.max_entries else 4096
+    next.max_bytes = ifx state.max_bytes > 0 then state.max_bytes else 16777216
+    next.timeout_ms = ifx state.timeout_ms > 0 then state.timeout_ms else 10000
+    return next
+}
+Commit :: (state: *State, next: *State, uri: string) -> bool {
+    text: Text = TextCopy(uri)
+    if text.bytes.count != uri.count { return Fail(state, -2, "Location read exceeds available memory") }
+    VecSwap(state.entries, next.entries); VecSwap(state.storage, next.storage)
+    VecSwap(state.current_text.bytes, text.bytes); state.current_uri = TextView(state.current_text)
+    state.bytes = next.bytes
+    VecFree(state.error_text.bytes); state.error = .{}
+    return true
+}
+Request :: struct { done: bool; mode: s32; object: *void; list: *List; error: *GError; success: bool; }
+Callback :: #type (*void, *void, *void) -> void #c_call;
+Ready :: (source: *void, result: *void, data: *void) {
+    request := cast(*Request)data
+    if request.mode == 0 { request.object = EnumerateFinish(source, result, *request.error) }
+    else if request.mode == 1 { request.list = NextFinish(source, result, *request.error) }
+    else if request.mode==2 { request.object = QueryFinish(source, result, *request.error) }
+    else { request.success=MountFinish(source,result,*request.error)!=0 }
+    request.done = true
+}
+Wait :: (request: *Request, context: *void, cancel: *void, deadline: s64) {
+    cancelled := false
+    while !request.done {
+        unused Iterate(context, 0)
+        // GVfs keeps process-wide D-Bus proxies on the global context even
+        // when the individual GTask callback uses a thread-default context.
+        // Dispatch those service signals too; Shelf's retained input/render
+        // loop is separate and is never entered from GLib callbacks.
+        unused Iterate(null, 0)
+        if !cancelled && Monotonic() >= deadline { Cancel(cancel); cancelled = true }
+        if !request.done { Pause(1000) }
+    }
+}
+FreeObjects :: (list: *List, recent: bool = false) {
+    cursor := list
+    while cursor != null {
+        if recent { RecentUnref(cursor.data) } else { Unref(cursor.data) }
+        cursor = cursor.next
+    }
+    ListFree(list)
+}
+StartQuery :: (file: *void, context: *void, cancel: *void, deadline: s64, request: *Request) {
+    request.* = .{mode = 2}
+    attrs: [256]u8; unused CString.CopyCString(ATTRS, attrs[:])
+    callback: Callback = Ready; raw := cast(**void)*callback
+    ContextPush(context)
+    QueryAsync(file, *attrs[0], 0, 0, cancel, raw[0], cast(*void)request)
+    ContextPop(context)
+    Wait(request, context, cancel, deadline)
+}
+NotMounted :: (error: *GError) -> bool { return error!=null && error.domain==IoErrorQuark() && error.code==16 }
+StartMount :: (file: *void, context: *void, cancel: *void, deadline: s64, request: *Request) {
+    request.* = .{mode=3}
+    callback: Callback=Ready; raw:=cast(**void)*callback
+    ContextPush(context)
+    // A missing native virtual backend can be activated without credentials.
+    // Backends requiring authentication return their genuine GIO error.
+    MountAsync(file,0,null,cancel,raw[0],cast(*void)request)
+    ContextPop(context)
+    Wait(request,context,cancel,deadline)
+    if request.error!=null && request.error.domain==IoErrorQuark() && request.error.code==17 {
+        ErrorFree(request.error); request.error=null;request.success=true
+    }
+}
+StartEnumeration :: (file: *void, context: *void, cancel: *void, deadline: s64, request: *Request) {
+    request.* = .{}
+    attrs: [256]u8; unused CString.CopyCString(ATTRS,attrs[:])
+    callback: Callback=Ready; raw:=cast(**void)*callback
+    ContextPush(context)
+    EnumerateAsync(file,*attrs[0],0,0,cancel,raw[0],cast(*void)request)
+    ContextPop(context)
+    Wait(request,context,cancel,deadline)
+}
+
+#scope_export
+IconForUri :: (uri: string) -> Text {
+    buffer: [65536]u8
+    if !ValidUri(uri) || !CString.CopyCString(uri,buffer[:]) { return .{} }
+    file:=FileUri(*buffer[0]); if file==null { return .{} }; defer Unref(file)
+    context:=ContextNew(); cancel:=CancelNew()
+    defer ContextUnref(context); defer Unref(cancel)
+    request: Request
+    deadline:=Monotonic()+1000000
+    StartQuery(file,context,cancel,deadline,*request)
+    if NotMounted(request.error) {
+        ErrorFree(request.error); StartMount(file,context,cancel,deadline,*request)
+        if request.error==null && request.success { StartQuery(file,context,cancel,deadline,*request) }
+    }
+    if request.error!=null { ErrorFree(request.error); return .{} }
+    if request.object==null { return .{} }; defer Unref(request.object)
+    unused CString.CopyCString("standard::icon",buffer[:])
+    if InfoHas(request.object,*buffer[0])==0 { return .{} }
+    icon:=InfoIcon(request.object); if icon==null { return .{} }
+    value:=IconString(icon); if value==null { return .{} }; defer Free(value)
+    return TextCopy(Bytes.TextFromCString(value))
+}
+// GIO async requests run on a private thread-default context; cancellation
+// follows one deadline for the whole read. Drain callbacks before freeing
+// request storage. The global context also dispatches GVfs service signals;
+// callers use this adapter on the native UI thread.
+OpenUri :: (state: *State, uri: string) -> bool {
+    if uri == "recent:///" || uri == "recent:/" { return OpenRecent(state) }
+    buffer: [65536]u8
+    if !ValidUri(uri) || !CString.CopyCString(uri, buffer[:]) { return Fail(state, -1, "Invalid native location URI") }
+    if IsFileUri(uri) {
+        path: Text = LocalFileUri(*buffer[0])
+        if path.bytes.count == 0 { return Fail(state, -1, "File URI has no valid local filesystem identity") }
+    }
+    file := FileUri(*buffer[0]); if file == null { return Fail(state, -1, "Cannot create native location") }
+    defer Unref(file)
+    context := ContextNew(); cancel := CancelNew()
+    defer ContextUnref(context); defer Unref(cancel)
+    next: State = Pending(state)
+    deadline := Monotonic() + next.timeout_ms * 1000
+    callback: Callback = Ready; raw := cast(**void)*callback
+    request: Request
+    StartEnumeration(file,context,cancel,deadline,*request)
+    if NotMounted(request.error) {
+        ErrorFree(request.error); StartMount(file,context,cancel,deadline,*request)
+        if request.error==null && request.success { StartEnumeration(file,context,cancel,deadline,*request) }
+    }
+    if request.error != null { return NativeFail(state, request.error) }
+    enumerator := request.object
+    if enumerator == null { return Fail(state, -1, "Native directory enumeration returned no reader") }
+    defer Unref(enumerator)
+    while true {
+        request = .{mode = 1}
+        ContextPush(context)
+        NextAsync(enumerator, 64, 0, cancel, raw[0], cast(*void)*request)
+        ContextPop(context)
+        Wait(*request, context, cancel, deadline)
+        list := request.list
+        if request.error != null { FreeObjects(list); return NativeFail(state, request.error) }
+        if list == null { break }
+        cursor := list; ok := true
+        while cursor != null && ok {
+            name := InfoName(cursor.data)
+            if name == null { ok = false; break }
+            child := GetChild(file, name)
+            entry: DesktopLocationEntry
+            ok = child != null && next.entries.count < next.max_entries && Fill(*next, child, cursor.data, *entry) && VecPush(next.entries, entry)
+            if child != null { Unref(child) }
+            cursor = cursor.next
+        }
+        FreeObjects(list)
+        if !ok { return Fail(state, -2, "Native directory exceeds entry/text limits or available memory") }
+    }
+    native := GetUri(file); defer Free(native)
+    return Commit(state, *next, Bytes.TextFromCString(native))
+}
+
+// Actual mounted roots only. Never mounts/unmounts, invents a destination or
+// converts a volume without a root into a local path. Native monitor is fresh
+// per read; callers refresh this state when their sidebar refreshes.
+OpenMounts :: (state: *State) -> bool {
+    monitor := MonitorNew()
+    if monitor == null { return Fail(state, -1, "Native volume monitor is unavailable") }
+    defer Unref(monitor)
+    list := MonitorMounts(monitor); defer FreeObjects(list)
+    next: State = Pending(state)
+    cursor := list
+    while cursor != null {
+        mount := cursor.data; cursor = cursor.next
+        if MountShadowed(mount) != 0 { continue }
+        root := MountRoot(mount)
+        if root == null { return Fail(state, -1, "Mounted volume has no native root") }
+        entry: DesktopLocationEntry
+        name := MountName(mount); icon := MountIcon(mount)
+        ok := next.entries.count < next.max_entries && Identity(*next, root, *entry) &&
+            Own(*next, Bytes.TextFromCString(name), *entry.caption) && Icon(*next, icon, *entry)
+        Free(name); if icon != null { Unref(icon) }; Unref(root)
+        entry.kind = .Mount; entry.is_directory = true; entry.is_navigable = true
+        if !ok || !VecPush(next.entries, entry) { return Fail(state, -2, "Mounted volumes exceed entry/text limits or available memory") }
+    }
+    // This is a collection of native mounted roots, not a browsable URI.
+    return Commit(state, *next, "")
+}
+
+OpenRecent :: (state: *State) -> bool {
+    // GTK's manager API cannot report load failures. Validate the same XDG
+    // history with GLib first, preserving genuine parse/permission errors.
+    path: Text = Files.JoinPath(Bytes.TextFromCString(DataDir()), "recently-used.xbel")
+    buffer: [65536]u8
+    if !CString.CopyCString(TextView(path), buffer[:]) { return Fail(state, -1, "Recent history path is too long") }
+    status := Files.FileSnapshot(TextView(path))
+    if status.size > 16777216 { return Fail(state, -2, "Recent history exceeds native read limit") }
+    bookmarks := BookmarkNew(); error: *GError
+    valid := BookmarkLoad(bookmarks, *buffer[0], *error) != 0
+    BookmarkFree(bookmarks)
+    if !valid {
+        // G_FILE_ERROR_NOENT = 4. Other file or parse errors are real failures.
+        if error != null && error.code == 4 {
+            // Domain distinguishes missing files from unrelated parse codes.
+            domain: [32]u8; unused CString.CopyCString("g-file-error-quark", domain[:])
+            if error.domain == Quark(*domain[0]) {
+                ErrorFree(error); next: State = Pending(state); return Commit(state, *next, "recent:///")
+            }
+        }
+        return NativeFail(state, error)
+    }
+    manager := RecentNew(); if manager == null { return Fail(state, -1, "GTK recent manager is unavailable") }
+    defer Unref(manager)
+    list := RecentItems(manager); defer FreeObjects(list, true)
+    after := Files.FileSnapshot(TextView(path))
+    if !Files.SameFileSnapshot(status, after) { return Fail(state, -3, "Recent history changed during native read; current location retained") }
+    next: State = Pending(state)
+    context := ContextNew(); cancel := CancelNew()
+    defer ContextUnref(context); defer Unref(cancel)
+    deadline := Monotonic() + next.timeout_ms * 1000
+    cursor := list
+    while cursor != null {
+        recent := cursor.data; cursor = cursor.next
+        uri := Bytes.TextFromCString(RecentUri(recent))
+        if !ValidUri(uri) || !CString.CopyCString(uri, buffer[:]) { return Fail(state, -1, "Recent history contains an invalid URI") }
+        entry: DesktopLocationEntry
+        if IsFileUri(uri) {
+            local: Text = LocalFileUri(*buffer[0])
+            if local.bytes.count == 0 {
+                // Preserve nonlocal file:// authorities as original recent
+                // identities. GLocalFile would silently discard that host.
+                ok := next.entries.count < next.max_entries && Own(*next, uri, *entry.uri) &&
+                    Own(*next, Bytes.TextFromCString(RecentDisplay(recent)), *entry.caption) &&
+                    Own(*next, Bytes.TextFromCString(RecentMime(recent)), *entry.content_type)
+                entry.key = Key(uri); entry.modified = RecentModified(recent)
+                if ok { ok=RecentIcon(*next,*entry) }
+                if !ok || !VecPush(next.entries, entry) { return Fail(state, -2, "Recent locations exceed entry/text limits or available memory") }
+                continue
+            }
+        }
+        file := FileUri(*buffer[0]); if file == null { return Fail(state, -1, "Cannot resolve recent native identity") }
+        ok := next.entries.count < next.max_entries && Identity(*next, file, *entry)
+        if ok && entry.local_path != "" {
+            request: Request; StartQuery(file, context, cancel, deadline, *request)
+            if request.error != null {
+                Unref(file)
+                // G_IO_ERROR_NOT_FOUND = 1. Match native recent views, omitting
+                // vanished local resources without discarding valid history.
+                if request.error.domain == IoErrorQuark() && request.error.code == 1 { ErrorFree(request.error); continue }
+                return NativeFail(state, request.error)
+            }
+            ok = request.object != null && Fill(*next, file, request.object, *entry)
+            if request.object != null { Unref(request.object) }
+        } else if ok {
+            // Do not contact every remote host just to display recent history.
+            ok = Own(*next, Bytes.TextFromCString(RecentMime(recent)), *entry.content_type)
+            if ok { ok=RecentIcon(*next,*entry) }
+        }
+        Unref(file)
+        if ok { ok = Own(*next, Bytes.TextFromCString(RecentDisplay(recent)), *entry.caption) }
+        if ok { ok = Own(*next, uri, *entry.uri); entry.key = Key(uri) }
+        entry.modified = RecentModified(recent)
+        if !ok || !VecPush(next.entries, entry) { return Fail(state, -2, "Recent locations exceed entry/text limits or available memory") }
+    }
+    // GTK does not promise order. Newest recent resource first.
+    for i: cast(s64)1..next.entries.count - 1 {
+        j := i
+        while j > 0 && next.entries[j].modified > next.entries[j - 1].modified {
+            entry := next.entries[j]; next.entries[j] = next.entries[j - 1]; next.entries[j - 1] = entry; j -= 1
+        }
+    }
+    return Commit(state, *next, "recent:///")
+}
+#scope_module
+RecentIcon :: (state: *State, entry: *DesktopLocationEntry) -> bool {
+    bytes: [1024]u8
+    if !CString.CopyCString(entry.content_type,bytes[:]) { return false }
+    icon:=ContentIcon(*bytes[0]); if icon==null { return true }; defer Unref(icon)
+    return Icon(state,icon,entry)
+}
+Quark :: (text: *u8) -> u32 #foreign glib "g_quark_from_string";
+IoErrorQuark :: () -> u32 #foreign gio "g_io_error_quark";

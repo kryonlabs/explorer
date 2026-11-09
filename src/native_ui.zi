@@ -1,0 +1,517 @@
+#scope_module
+using Gtk :: #import "kryon/GtkStyleLinux";
+using Paint :: #import "kryon/GtkPainterLinux";
+using UI :: #import "kryon/Widgets";
+Input :: #import "kryon/tree_input";
+Kinds :: #import "kryon/widget_kind";
+Cursors :: #import "kryon/cursor";
+
+// GTK file rows and ordinary controls use the arrow. Editing widgets keep
+// their native text cursor, and paned handles retain their resize cursor.
+#scope_export
+ApplyPointerCursors :: (session: Session, first: s32) {
+    for index: first..TreeSubmittedCount(session)-1 {
+        node:=TreeSubmittedNodeAt(session,index)
+        if node.disabled || node.kind==cast(s32)Kinds.WidgetKind.WidgetKindButton || node.kind==cast(s32)Kinds.WidgetKind.WidgetKindSelectable {
+            TreeSetCursor(session,index,cast(s32)Cursors.CursorShape.CursorArrow)
+        }
+    }
+}
+#scope_module
+root_classes: [2]string = .["background","thunar"];
+view_classes: [1]string = .["view"];
+sidebar_classes: [2]string = .["sidebar","shortcuts-pane"];
+flat_classes: [1]string = .["flat"];
+image_classes: [2]string=.["flat","image-button"];
+horizontal_classes: [1]string=.["horizontal"];
+vertical_classes: [1]string=.["vertical"];
+scroll_classes: [2]string=.["frame","standard-view"];
+metrics_generation: u64;
+header_height: float32 = 24.0;
+entry_height: float32 = 28.0;
+menu_height: float32 = 28.0;
+toolbar_height: float32 = 37.0;
+toolbar_item_x: float32 = 3.0;
+toolbar_item_y: float32 = 2.0;
+toolbar_right: float32 = 3.0;
+toolbar_item_width: float32 = 35.0;
+toolbar_item_height: float32 = 32.0;
+pane_separator_width: float32;
+menu_widths: [6]float32=.[38.0,38.0,44.0,34.0,86.0,44.0];
+toolbar_icon: float32 = 16.0;
+toolbar_control: Rectangle;
+toolbar_image: Rectangle;
+places_heading_height: float32 = 32.0;
+places_row_height: float32 = 30.0;
+places_icon_offset: float32 = 24.0;
+places_text_offset: float32 = 54.0;
+HeaderLayout :: struct {
+    width: s32; height: s32; sorted: bool; generation: u64; text_key: u64; metrics: GtkWidgetMetrics;
+}
+header_layouts: [4]HeaderLayout;
+entry_layout: HeaderLayout;
+status_layout: HeaderLayout;
+status_height: float32 = 27.0;
+details_icon_size: float32=48.0;
+details_row_height: s32=52;
+details_icon_x: float32=3.0;
+details_icon_y: float32=2.0;
+details_text_x: float32=54.0;
+details_cell_padding: float32=4.0;
+application_style: u64;
+// Thunar 4.20's application-level structural CSS, layered over the native
+// theme at GTK_PRIORITY_APPLICATION; no theme colors or asset paths.
+// https://github.com/xfce-mirror/thunar/blob/thunar-4.20.2/thunar/thunar-application.c
+EnsureApplicationStyle :: () {
+    if application_style!=0 { return }
+    provider:=GtkStyleProviderCreate(".location-button { margin-right: 0; } .sidebar { border-top-style: solid; } .preview-pane { border-left-width: 0; border-right-width: 0; border-bottom-width: 0; } .standard-view { border-left-width: 0; border-right-width: 0; } .standard-view:drop(active) { border-width: 2px; } headerbar toolbar { background: none; }")
+    if provider==0 { return }
+    if !GtkStyleProviderInstall(provider,600) { unused GtkStyleProviderRelease(provider); return }
+    application_style=provider
+}
+#scope_export
+
+// CSS nodes match the GTK3 widgets used by Thunar. All pixels, font metrics,
+// icon inheritance and state colors come from GTK, never theme file paths.
+Nodes :: (element: string, state: u32 = 0) -> [3]GtkStyleNode {
+    EnsureApplicationStyle()
+    nodes: [3]GtkStyleNode
+    nodes[0] = .{.widget_type="GtkWindow",.element="window",.classes=root_classes[:]}
+    nodes[1] = .{.widget_type="GtkGrid",.element="grid",.classes=horizontal_classes[:]}
+    nodes[2] = .{.element=element,.state=state}
+    if element == "treeview" || element == "sidebar" { nodes[2].widget_type="GtkTreeView"; nodes[2].element="treeview" }
+    else if element == "button" { nodes[2].widget_type="GtkButton" }
+    else if element == "entry" { nodes[2].widget_type="GtkEntry" }
+    else if element == "toolbar" { nodes[2].widget_type="GtkToolbar" }
+    else if element == "menubar" { nodes[2].widget_type="GtkMenuBar" }
+    else if element == "statusbar" { nodes[2].widget_type="GtkStatusbar"; nodes[2].classes=horizontal_classes[:] }
+    else if element == "menu" { nodes[2].widget_type="GtkMenu" }
+    else { nodes[2].widget_type="GtkLabel" }
+    if element == "treeview" || element == "sidebar" { nodes[2].classes=view_classes[:] }
+    if element == "sidebar" { nodes[1]=.{.widget_type="GtkScrolledWindow",.element="scrolledwindow",.classes=sidebar_classes[:]} }
+    if element == "entry" { nodes[1]=.{.widget_type="GtkToolbar",.element="toolbar"} }
+    if element == "toolbar" { nodes[2].classes=horizontal_classes[:] }
+    return nodes
+}
+MenuNodes :: () -> [4]GtkStyleNode {
+    base:=Nodes("menubar")
+    nodes: [4]GtkStyleNode
+    for i: 0..2 { nodes[i]=base[i] }
+    nodes[3]=.{.widget_type="GtkMenuItem",.element="menuitem"}
+    return nodes
+}
+EntryNodes :: () -> [7]GtkStyleNode {
+    base:=Nodes("toolbar")
+    nodes: [7]GtkStyleNode
+    for i: 0..2 { nodes[i]=base[i] }
+    nodes[3]=.{.widget_type="GtkToolItem",.element="toolitem"}
+    nodes[4]=.{.widget_type="GtkBin",.element="widget"}
+    nodes[5]=.{.widget_type="GtkBox",.element="box",.classes=horizontal_classes[:]}
+    nodes[6]=.{.widget_type="GtkEntry",.element="entry"}
+    return nodes
+}
+PaneSeparatorNodes :: () -> [4]GtkStyleNode {
+    base:=Nodes("button")
+    nodes: [4]GtkStyleNode
+    nodes[0]=base[0]; nodes[1]=base[1]
+    nodes[2]=.{.widget_type="GtkPaned",.element="paned",.classes=horizontal_classes[:]}
+    nodes[3]=.{.widget_type="GtkWidget",.element="separator",.classes=vertical_classes[:]}
+    return nodes
+}
+Surface :: (p: *GtkPainter, bounds: Rectangle, element: string, state: u32 = 0) {
+    if element=="entry" {
+        nodes:=EntryNodes(); nodes[6].state=state
+        margin:=GtkStyleQuery(nodes[:],1).margin
+        bounds.x+=cast(float32)margin.left; bounds.y+=cast(float32)margin.top
+        bounds.width-=cast(float32)(margin.left+margin.right); bounds.height-=cast(float32)(margin.top+margin.bottom)
+        if !GtkPainterStyleOver(p,nodes[:],bounds) { GtkPainterPaint(p,nodes[:],bounds) }; return
+    }
+    nodes := Nodes(element,state)
+    GtkPainterPaint(p,nodes[:],bounds)
+}
+Label :: (p: *GtkPainter, bounds: Rectangle, text: string, element: string = "label", state: u32 = 0, align: s32 = 0) {
+    if element=="entry" { nodes:=EntryNodes(); nodes[6].state=state; GtkPainterPaint(p,nodes[:],bounds,text,1,align); return }
+    nodes := Nodes(element,state)
+    GtkPainterPaint(p,nodes[:],bounds,text,1,align)
+}
+Heading :: (p: *GtkPainter, bounds: Rectangle, markup: string) {
+    nodes:=Nodes("sidebar")
+    GtkPainterPaint(p,nodes[:],bounds,markup,5)
+}
+Icon :: (p: *GtkPainter, bounds: Rectangle, name: string, state: u32 = 0) {
+    nodes := Nodes("image",state)
+    GtkPainterPaint(p,nodes[:],bounds,name,2)
+}
+FileIcon :: (p: *GtkPainter, bounds: Rectangle, path: string, link: bool = false, revision: u64 = 0) {
+    nodes := Nodes("image")
+    GtkPainterPaint(p,nodes[:],bounds,path,3,0,revision)
+    if link { Icon(p,.{bounds.x+bounds.width*0.5,bounds.y+bounds.height*0.5,bounds.width*0.5,bounds.height*0.5},"emblem-symbolic-link") }
+}
+SerializedIcon :: (p: *GtkPainter, bounds: Rectangle, identity: string, revision: u64 = 0) {
+    nodes:=Nodes("image")
+    GtkPainterPaint(p,nodes[:],bounds,identity,6,0,revision)
+}
+FileEmblems :: (p: *GtkPainter, cell: Rectangle, icon: Rectangle, link: bool, broken: bool) {
+    if !link { return }
+    size:=icon.width*0.5; if size>32.0 { size=32.0 }
+    right:=icon.x+icon.width-size*0.5
+    if right>cell.x+cell.width-size { right=cell.x+cell.width-size }
+    bottom:=icon.y+icon.height-size*0.5
+    if bottom>cell.y+cell.height-size { bottom=cell.y+cell.height-size }
+    left:=icon.x-size*0.5; if left<cell.x { left=cell.x }
+    if broken {
+        Icon(p,.{right,bottom,size,size},"emblem-noread")
+        Icon(p,.{left,bottom,size,size},"emblem-symbolic-link")
+    } else { Icon(p,.{right,bottom,size,size},"emblem-symbolic-link") }
+}
+// The standard-view scroller owns the border outside the tree allocations.
+DetailsFrame :: (p: *GtkPainter, bounds: Rectangle) -> Rectangle {
+    nodes:=ScrollNodes()
+    GtkPainterPaint(p,nodes[:],bounds)
+    style:=GtkStyleQuery(nodes[:],1)
+    left:=cast(float32)style.border.left; right:=cast(float32)style.border.right
+    top:=cast(float32)style.border.top; bottom:=cast(float32)style.border.bottom
+    return .{bounds.x+left,bounds.y+top,bounds.width-left-right,bounds.height-top-bottom}
+}
+ScrollNodes :: () -> [3]GtkStyleNode {
+    nodes:=Nodes("treeview")
+    nodes[2]=.{.widget_type="GtkScrolledWindow",.element="scrolledwindow",.classes=scroll_classes[:]}
+    return nodes
+}
+// GTK 3.24 gtkscrolledwindow.c draws each undershoot in a 40px strip.
+// Native CSS determines all pixels within it (not a theme-dependent size).
+// https://github.com/GNOME/gtk/blob/3.24.49/gtk/gtkscrolledwindow.c#L1899
+DetailsUndershoot :: (p: *GtkPainter, bounds: Rectangle, offset: s32, content_height: s32, horizontal: bool=false) {
+    base:=Nodes("treeview")
+    classes: [2]string=.["frame","standard-view"]
+    nodes: [4]GtkStyleNode
+    nodes[0]=base[0]; nodes[1]=base[1]
+    nodes[2]=.{.widget_type="GtkScrolledWindow",.element="scrolledwindow",.classes=classes[:]}
+    top_classes: [1]string=.[ifx horizontal then "left" else "top"]
+    bottom_classes: [1]string=.[ifx horizontal then "right" else "bottom"]
+    previous:=p.clip
+    p.clip=RectangleIntersection(previous,bounds)
+    if offset<content_height-cast(s32)(ifx horizontal then bounds.width else bounds.height) {
+        nodes[3]=.{.widget_type="GtkWidget",.element="undershoot",.classes=bottom_classes[:]}
+        edge:=ifx horizontal then Rectangle.{bounds.x+bounds.width-40.0,bounds.y,40.0,bounds.height} else Rectangle.{bounds.x,bounds.y+bounds.height-40.0,bounds.width,40.0}; GtkPainterPaint(p,nodes[:],edge)
+    }
+    if offset>0 {
+        nodes[3]=.{.widget_type="GtkWidget",.element="undershoot",.classes=top_classes[:]}
+        edge:=ifx horizontal then Rectangle.{bounds.x,bounds.y,40.0,bounds.height} else Rectangle.{bounds.x,bounds.y,bounds.width,40.0}; GtkPainterPaint(p,nodes[:],edge)
+    }
+    p.clip=previous
+}
+HeaderNodes :: () -> [5]GtkStyleNode {
+    base:=Nodes("treeview")
+    nodes: [5]GtkStyleNode
+    for i: 0..2 { nodes[i]=base[i] }
+    nodes[3]=.{.widget_type="GtkWidget",.element="header"}
+    nodes[4]=.{.widget_type="GtkButton",.element="button"}
+    return nodes
+}
+RefreshMetrics :: () {
+    EnsureApplicationStyle()
+    generation:=GtkStyleGeneration()
+    if metrics_generation==generation { return }
+    nodes:=HeaderNodes()
+    header:=GtkWidgetMeasure(nodes[:],"Name",true)
+    if header.available { header_height=cast(float32)header.minimum_height }
+    entry_nodes:=EntryNodes()
+    entry:=GtkWidgetMeasure(entry_nodes[:])
+    if entry.available { entry_height=cast(float32)entry.natural_height }
+    menu_nodes:=MenuNodes()
+    menu:=GtkWidgetMeasure(menu_nodes[:3],"File")
+    if menu.available { menu_height=cast(float32)menu.natural_height }
+    labels: [6]string=.["File","Edit","View","Go","Bookmarks","Help"]
+    for i: 0..5 {
+        item:=GtkWidgetMeasure(menu_nodes[:],labels[i])
+        if item.available { menu_widths[i]=cast(float32)item.natural_width }
+    }
+    toolbar_nodes:=Nodes("toolbar")
+    toolbar:=GtkWidgetMeasure(toolbar_nodes[:],"go-previous-symbolic")
+    if toolbar.available && toolbar.item_width>0 && toolbar.item_height>0 {
+        toolbar_height=cast(float32)toolbar.natural_height
+        toolbar_item_x=cast(float32)toolbar.item_x; toolbar_item_y=cast(float32)toolbar.item_y
+        toolbar_item_width=cast(float32)toolbar.item_width; toolbar_item_height=cast(float32)toolbar.item_height
+        toolbar_right=cast(float32)(toolbar.natural_width-toolbar.item_x-toolbar.item_width)
+        if entry_height>toolbar_item_height { toolbar_height+=entry_height-toolbar_item_height; toolbar_item_height=entry_height }
+        allocated:=GtkWidgetMeasure(toolbar_nodes[:],"go-previous-symbolic",false,0,cast(s32)toolbar_height)
+        if allocated.control_width>0 && allocated.control_height>0 {
+            toolbar_control=.{cast(float32)(allocated.control_x-allocated.item_x),cast(float32)(allocated.control_y-allocated.item_y),cast(float32)allocated.control_width,cast(float32)allocated.control_height}
+            toolbar_image=.{cast(float32)(allocated.arrow_x-allocated.item_x),cast(float32)(allocated.arrow_y-allocated.item_y),cast(float32)allocated.arrow_width,cast(float32)allocated.arrow_height}
+        }
+    }
+    separator_nodes:=PaneSeparatorNodes()
+    separator:=GtkWidgetMeasure(separator_nodes[:3])
+    if separator.available { pane_separator_width=cast(float32)separator.natural_width }
+    icon:=GtkIconSize(3)
+    if icon.available { toolbar_icon=cast(float32)icon.height }
+    sidebar:=Nodes("sidebar")
+    style:=GtkStyleQuery(sidebar[:],1)
+    heading:=GtkTextMeasure(sidebar[:],"<b>Places</b>",0,1,"",true)
+    text:=GtkTextMeasure(sidebar[:],"Places",0,1)
+    if style.available && heading.available && text.available {
+        vertical:=style.padding.top+style.padding.bottom+style.vertical_separator
+        places_heading_height=cast(float32)(heading.height+8+vertical)
+        cell_height:=text.height+4; if cell_height<24 { cell_height=24 }
+        places_row_height=cast(float32)(cell_height+vertical)
+        // The shortcuts column has an empty indent renderer (xpad6),
+        // 2px renderer spacing and normal text xpad2, as in Thunar.
+        places_icon_offset=cast(float32)(style.horizontal_separator/2+12+style.padding.left+style.padding.right+2+style.padding.left)
+        places_text_offset=places_icon_offset+24.0+cast(float32)(style.padding.right+2+2+style.padding.left)
+    }
+    tree:=Nodes("treeview")
+    tree_style:=GtkStyleQuery(tree[:],1)
+    dialog_icon:=GtkIconSize(6)
+    if tree_style.available && dialog_icon.available {
+        details_icon_size=cast(float32)dialog_icon.height
+        // GtkCellRendererPixbuf x/ypad1 and text xpad2, with the tree's
+        // native inter-cell separators split between neighbouring cells.
+        details_row_height=dialog_icon.height+2+tree_style.vertical_separator
+        details_icon_x=cast(float32)(tree_style.horizontal_separator/2+1)
+        details_icon_y=cast(float32)(tree_style.vertical_separator/2+1)
+        details_text_x=cast(float32)(tree_style.horizontal_separator/2+dialog_icon.width+2+2)
+        details_cell_padding=cast(float32)(tree_style.horizontal_separator/2+2)
+    }
+    status_nodes:=Nodes("statusbar")
+    status:=GtkWidgetMeasure(status_nodes[:]," ",false,0,0,.{.margin_edges=GtkWidgetMarginVertical})
+    if status.available { status_height=cast(float32)status.natural_height }
+    metrics_generation=generation
+}
+HeaderHeight :: () -> float32 { RefreshMetrics(); return header_height }
+EntryHeight :: () -> float32 { RefreshMetrics(); return entry_height }
+MenuHeight :: () -> float32 { RefreshMetrics(); return menu_height }
+ToolbarHeight :: () -> float32 { RefreshMetrics(); return toolbar_height }
+ChromeHeight :: () -> float32 { RefreshMetrics(); return menu_height+toolbar_height }
+PaneSeparatorWidth :: () -> float32 { RefreshMetrics(); return pane_separator_width }
+PaneSeparator :: (p: *GtkPainter, bounds: Rectangle) { nodes:=PaneSeparatorNodes(); GtkPainterPaint(p,nodes[:],bounds) }
+MenuWidth :: (index: s32) -> float32 { RefreshMetrics(); if index<0 || index>=6 { return 0 }; return menu_widths[index] }
+MenuOffset :: (index: s32) -> float32 {
+    RefreshMetrics(); value: float32
+    for i: cast(s32)0..index-1 { if i<6 { value+=menu_widths[i] } }
+    return value
+}
+ToolbarItem :: (viewport: Rectangle, index: s32, trailing: bool=false) -> Rectangle {
+    RefreshMetrics()
+    x:=viewport.x+toolbar_item_x+cast(float32)index*toolbar_item_width
+    if trailing { x=viewport.x+viewport.width-toolbar_right-toolbar_item_width }
+    return .{x,viewport.y+menu_height+toolbar_item_y,toolbar_item_width,toolbar_item_height}
+}
+LocationBounds :: (viewport: Rectangle) -> Rectangle {
+    RefreshMetrics()
+    left:=toolbar_item_x+4.0*toolbar_item_width+5.0
+    right:=toolbar_right+toolbar_item_width+5.0
+    return .{viewport.x+left,viewport.y+menu_height+toolbar_item_y,viewport.width-left-right,entry_height}
+}
+DetailsIconSize :: () -> float32 { RefreshMetrics(); return details_icon_size }
+DetailsRowHeight :: () -> s32 { RefreshMetrics(); return details_row_height }
+DetailsIconX :: () -> float32 { RefreshMetrics(); return details_icon_x }
+DetailsIconY :: () -> float32 { RefreshMetrics(); return details_icon_y }
+DetailsTextX :: () -> float32 { RefreshMetrics(); return details_text_x }
+DetailsCellPadding :: () -> float32 { RefreshMetrics(); return details_cell_padding }
+StatusHeight :: () -> float32 { RefreshMetrics(); return status_height }
+LocationLayout :: (bounds: Rectangle) -> GtkWidgetMetrics {
+    RefreshMetrics()
+    width:=cast(s32)bounds.width; height:=cast(s32)bounds.height
+    if entry_layout.generation!=metrics_generation || entry_layout.width!=width || entry_layout.height!=height {
+        nodes:=EntryNodes()
+        entry_layout.metrics=GtkWidgetMeasure(nodes[:],"folder",false,width,height)
+        entry_layout.width=width; entry_layout.height=height; entry_layout.generation=metrics_generation
+    }
+    return entry_layout.metrics
+}
+LocationText :: (bounds: Rectangle) -> Rectangle {
+    geometry:=LocationLayout(bounds)
+    return .{bounds.x+cast(float32)geometry.item_x,bounds.y+cast(float32)geometry.item_y,
+        cast(float32)geometry.item_width,cast(float32)geometry.item_height}
+}
+LocationIcon :: (bounds: Rectangle) -> Rectangle {
+    geometry:=LocationLayout(bounds)
+    icon:=GtkIconSize(1)
+    size:=cast(float32)icon.height
+    base:=EntryNodes()
+    nodes: [8]GtkStyleNode
+    for i: cast(s32)0..6 { nodes[i]=base[i] }
+    left: [1]string=.["left"]
+    nodes[7]=.{.widget_type="GtkImage",.element="image",.classes=left[:]}
+    style:=GtkStyleQuery(nodes[:],1)
+    width:=geometry.arrow_width-style.padding.left-style.padding.right-style.border.left-style.border.right
+    height:=geometry.arrow_height-style.padding.top-style.padding.bottom-style.border.top-style.border.bottom
+    return .{bounds.x+cast(float32)(geometry.arrow_x+style.padding.left+style.border.left+(width-icon.width)/2),
+        bounds.y+cast(float32)(geometry.arrow_y+style.padding.top+style.border.top+(height-icon.height)/2),size,size}
+}
+StatusLabel :: (p: *GtkPainter, bounds: Rectangle, text: string, wrap: bool) {
+    RefreshMetrics()
+    width:=cast(s32)bounds.width; height:=cast(s32)bounds.height
+    text_key: u64=14695981039346656037
+    for byte: text { text_key=(text_key ^ cast(u64)byte)*cast(u64)1099511628211 }
+    if status_layout.generation!=metrics_generation || status_layout.width!=width || status_layout.height!=height || status_layout.text_key!=text_key {
+        nodes:=Nodes("statusbar")
+        status_layout.metrics=GtkWidgetMeasure(nodes[:],text,false,width,height,.{.margin_edges=GtkWidgetMarginVertical})
+        status_layout.text_key=text_key; status_layout.width=width; status_layout.height=height; status_layout.generation=metrics_generation
+    }
+    geometry:=status_layout.metrics
+    base:=Nodes("statusbar")
+    nodes: [6]GtkStyleNode
+    for i: 0..2 { nodes[i]=base[i] }
+    nodes[3]=.{.widget_type="GtkFrame",.element="frame"}
+    nodes[4]=.{.widget_type="GtkBox",.element="box",.classes=horizontal_classes[:]}
+    nodes[5]=.{.widget_type="GtkLabel",.element="label"}
+    GtkPainterPaint(p,nodes[:],.{bounds.x+cast(float32)geometry.item_x,bounds.y+cast(float32)geometry.item_y,
+        cast(float32)geometry.item_width,ifx wrap then bounds.height-cast(float32)geometry.item_y*2.0 else cast(float32)geometry.item_height},text,ifx wrap then 8 else 1)
+}
+PlacesHeadingHeight :: () -> float32 { RefreshMetrics(); return places_heading_height }
+PlacesRowHeight :: () -> float32 { RefreshMetrics(); return places_row_height }
+Header :: (p: *GtkPainter, key: u64, bounds: Rectangle, label: string, sorted: bool, reverse: bool, enabled: bool) -> bool {
+    clicked := UI.Button(p.session,ButtonProps.{.key=key,.bounds=bounds,.label=label,.invisible=true,.disabled= !enabled})==1
+    nodes:=HeaderNodes()
+    slot:=cast(s32)(key % 4)
+    nodes[4].sibling_count=4; nodes[4].sibling_index=slot
+    GtkPainterPaint(p,nodes[:],bounds)
+    RefreshMetrics()
+    cached:=*header_layouts[slot]
+    width:=cast(s32)bounds.width; height:=cast(s32)bounds.height
+    if cached.generation!=metrics_generation || cached.width!=width || cached.height!=height || cached.sorted!=sorted {
+        cached.metrics=GtkWidgetMeasure(nodes[:],label,sorted,width,height)
+        cached.width=width; cached.height=height; cached.sorted=sorted; cached.generation=metrics_generation
+    }
+    geometry:=cached.metrics
+    if geometry.available {
+        text_nodes: [8]GtkStyleNode
+        for i: 0..4 { text_nodes[i]=nodes[i] }
+        text_nodes[5]=.{.widget_type="GtkBox",.element="box",.classes=horizontal_classes[:]}
+        text_nodes[6]=.{.widget_type="GtkAlignment",.element="widget"}
+        text_nodes[7]=.{.widget_type="GtkLabel",.element="label"}
+        GtkPainterPaint(p,text_nodes[:],.{bounds.x+cast(float32)geometry.item_x,bounds.y+cast(float32)geometry.item_y,
+            cast(float32)geometry.item_width,cast(float32)geometry.item_height},label,1)
+        if sorted {
+            arrow: [7]GtkStyleNode
+            for i: 0..4 { arrow[i]=nodes[i] }
+            arrow[5]=text_nodes[5]
+            arrow[6]=.{.widget_type="GtkImage",.element="image"}
+            GtkPainterPaint(p,arrow[:],.{bounds.x+cast(float32)geometry.arrow_x,bounds.y+cast(float32)geometry.arrow_y,
+                cast(float32)geometry.arrow_width,cast(float32)geometry.arrow_height},ifx reverse then "pan-up-symbolic" else "pan-down-symbolic",7)
+        }
+    }
+    return clicked
+}
+Control :: (p: *GtkPainter, key: u64, bounds: Rectangle, label: string, icon: string = "",
+    enabled: bool = true, selected: bool = false, row: bool = false, flat: bool = false,
+    native_icon: string = "", file_icon: bool = false) -> bool {
+    item_bounds:=bounds
+    if flat && icon!="" {
+        RefreshMetrics()
+        if toolbar_control.width>0 { bounds=.{bounds.x+toolbar_control.x,bounds.y+toolbar_control.y,toolbar_control.width,toolbar_control.height} }
+    }
+    kind:=ifx row then cast(s32)Kinds.WidgetKind.WidgetKindSelectable else cast(s32)Kinds.WidgetKind.WidgetKindButton
+    previous := TreePrevious(p.session,TreeCurrentParent(p.session),key,kind)
+    state: u32
+    if !enabled { state |= cast(u32)GtkStyleDisabled }
+    if selected { state |= cast(u32)(ifx flat then GtkStylePrelight else GtkStyleSelected) }
+    if enabled && Input.TreeHoveredAt(p.session,previous) { state |= cast(u32)GtkStylePrelight }
+    if enabled && Input.TreePressedAt(p.session,previous) { state |= cast(u32)GtkStyleActive }
+    if enabled && Input.TreeFocusVisibleAt(p.session,previous) { state |= cast(u32)GtkStyleFocused }
+    clicked: bool
+    if row {
+        clicked=enabled && Input.TreeTakeActivationAt(p.session,previous)
+        node:=TreeSubmitCurrent(p.session,key,kind,bounds)
+        TreeSetInteractive(p.session,node,!enabled,false,cast(s32)key)
+        TreeSetSelected(p.session,node,selected)
+        TreeSetLabel(p.session,node,label)
+    } else {
+        clicked=UI.Button(p.session,ButtonProps.{.key=key,.id=cast(s32)key,.bounds=bounds,.label=label,
+            .invisible=true,.disabled= !enabled,.selected=selected})==1
+    }
+    element := ifx row then "treeview" else "button"
+    nodes := Nodes(element,state)
+    if flat { nodes[2].classes=flat_classes[:] }
+    if row { nodes=Nodes("sidebar",state) }
+    if flat && icon != "" { nodes[1]=.{.widget_type="GtkToolbar",.element="toolbar"} }
+    if flat && icon == "" { nodes[1]=.{.widget_type="GtkMenuBar",.element="menubar"}; nodes[2]=.{.widget_type="GtkMenuItem",.element="menuitem",.state=state} }
+    if flat && icon != "" {
+        RefreshMetrics()
+        toolbar: [5]GtkStyleNode
+        toolbar[0]=nodes[0]
+        base:=Nodes("toolbar"); toolbar[1]=base[1]
+        toolbar[2]=base[2]
+        toolbar[3]=.{.widget_type="GtkToolButton",.element="toolbutton"}
+        toolbar[4]=.{.widget_type="GtkButton",.element="button",.classes=image_classes[:],.state=state}
+        margin:=GtkStyleQuery(toolbar[:],1).margin
+        paint_bounds:=Rectangle.{bounds.x+cast(float32)margin.left,bounds.y+cast(float32)margin.top,
+            bounds.width-cast(float32)(margin.left+margin.right),bounds.height-cast(float32)(margin.top+margin.bottom)}
+        if !GtkPainterStyleOver(p,toolbar[:],paint_bounds) { GtkPainterPaint(p,toolbar[:],paint_bounds) }
+        image_nodes: [6]GtkStyleNode
+        for i: 0..4 { image_nodes[i]=toolbar[i] }
+        image_nodes[5]=.{.widget_type="GtkImage",.element="image",.state=state}
+        image_bounds:=Rectangle.{item_bounds.x+cast(float32)cast(s32)((item_bounds.width-toolbar_icon)*0.5),item_bounds.y+cast(float32)cast(s32)((item_bounds.height-toolbar_icon)*0.5),toolbar_icon,toolbar_icon}
+        if toolbar_image.width>0 { image_bounds=.{item_bounds.x+toolbar_image.x,item_bounds.y+toolbar_image.y,toolbar_image.width,toolbar_image.height} }
+        GtkPainterPaint(p,image_nodes[:],image_bounds,icon,7)
+        return clicked
+    }
+    if flat && icon=="" {
+        menu:=MenuNodes(); menu[3].state=state
+        GtkPainterPaint(p,menu[:],bounds)
+        style:=GtkStyleQuery(menu[:],1)
+        left:=cast(float32)(style.padding.left+style.border.left)
+        // GTK lets label ink overhang its logical advance into menu padding.
+        GtkPainterPaint(p,menu[:],.{bounds.x+left,bounds.y,bounds.width-left,bounds.height},label,1)
+        return clicked
+    }
+    GtkPainterPaint(p,nodes[:],bounds)
+    text_bounds := bounds
+    text_bounds.x += 4.0; text_bounds.width -= 8.0
+    if icon != "" {
+        if row { RefreshMetrics() }
+        size: float32 = ifx row then 24.0 else 16.0
+        icon_bounds:=Rectangle.{bounds.x+ifx row then places_icon_offset else 8.0,bounds.y+(bounds.height-size)*0.5,size,size}
+        if native_icon!="" {
+            if file_icon { FileIcon(p,icon_bounds,native_icon) } else { SerializedIcon(p,icon_bounds,native_icon) }
+        } else { Icon(p,icon_bounds,icon,state) }
+        text_bounds.x += size+10.0; text_bounds.width -= size+10.0
+        if row { text_bounds.x=bounds.x+places_text_offset; text_bounds.width=bounds.width-places_text_offset-4.0 }
+    }
+    if label != "" {
+        GtkPainterPaint(p,nodes[:],text_bounds,label,1,ifx row || icon != "" then 0 else 1)
+    }
+    return clicked
+}
+
+MenuItem :: (p: *GtkPainter, key: u64, bounds: Rectangle, label: string, enabled: bool, selected: bool, shortcut: string="") -> bool {
+    previous:=TreePrevious(p.session,TreeCurrentParent(p.session),key,cast(s32)Kinds.WidgetKind.WidgetKindButton)
+    state: u32
+    if !enabled { state=cast(u32)GtkStyleDisabled }
+    else if selected || Input.TreeHoveredAt(p.session,previous) { state=cast(u32)GtkStylePrelight }
+    clicked:=UI.Button(p.session,ButtonProps.{.key=key,.bounds=bounds,.label=label,.invisible=true,.disabled= !enabled})==1
+    nodes:=Nodes("menu")
+    nodes[1]=nodes[2]
+    nodes[2]=.{.widget_type="GtkMenuItem",.element="menuitem",.state=state}
+    GtkPainterPaint(p,nodes[:],bounds)
+    GtkPainterPaint(p,nodes[:],.{bounds.x+8.0,bounds.y,bounds.width-16.0,bounds.height},label,1)
+    if shortcut!="" { GtkPainterPaint(p,nodes[:],.{bounds.x+8.0,bounds.y,bounds.width-16.0,bounds.height},shortcut,1,2) }
+    return clicked
+}
+
+// Paint the standard breadcrumb's retained controls after its layout/input pass.
+RetainedControls :: (p: *GtkPainter, first: s32, last: s32, bounds: Rectangle, overlay: bool) {
+    saved_clip:=p.clip
+    for i: first..last-1 {
+        node:=TreeSubmittedNodeAt(p.session,i)
+        if node.bounds.width<=0.0 || node.bounds.height<=0.0 { continue }
+        is_menu:=node.bounds.y>=bounds.y+bounds.height
+        if is_menu!=overlay { continue }
+        p.clip=ifx node.clipped then RectangleIntersection(saved_clip,node.clip) else saved_clip
+        if overlay && node.kind==cast(s32)Kinds.WidgetKind.WidgetKindCustom { Surface(p,node.bounds,"menu") }
+        state: u32=ifx node.selected then cast(u32)GtkStyleSelected else cast(u32)0
+        if node.disabled { state|=cast(u32)GtkStyleDisabled }
+        if node.kind==cast(s32)Kinds.WidgetKind.WidgetKindButton {
+            Surface(p,node.bounds,"button",state)
+            Label(p,node.bounds,node.semantic_label,"button",state,1)
+        } else if node.kind==cast(s32)Kinds.WidgetKind.WidgetKindSelectable {
+            nodes:=Nodes("menu")
+            nodes[1]=nodes[2];nodes[2]=.{.widget_type="GtkMenuItem",.element="menuitem",.state=state}
+            GtkPainterPaint(p,nodes[:],node.bounds)
+            GtkPainterPaint(p,nodes[:],node.bounds,node.semantic_label,1)
+        }
+    }
+    p.clip=saved_clip
+}

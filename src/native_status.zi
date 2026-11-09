@@ -1,0 +1,181 @@
+// Thunar 4.20 default status-bar policy. Formatting and descriptions come from
+// the installed GLib/GIO and Thunar gettext catalogs, including plural rules.
+// https://github.com/xfce-mirror/thunar/blob/thunar-4.20.2/thunar/thunar-util.c
+#scope_module
+using Model :: #import "model";
+Files :: #import "std/file_tree_linux";
+CString :: #import "std/c_string";
+Bytes :: #import "std/byte_text_linux";
+Display :: #import "file_display";
+Gtk :: #import "kryon/GtkStyleLinux";
+using Vectors :: #import "std/vec";
+glib :: #system_library "glib-2.0";
+libc :: #system_library "c";
+Translate :: (domain: *u8, message: *u8) -> *u8 #foreign libc "dgettext";
+Plural :: (domain: *u8, one: *u8, many: *u8, count: usize) -> *u8 #foreign libc "dngettext";
+Print :: (format: *u8, args: ..any) -> *u8 #foreign glib "g_strdup_printf";
+Size :: (bytes: u64, flags: s32) -> *u8 #foreign glib "g_format_size_full";
+Free :: (value: *void) #foreign glib "g_free";
+Monotonic :: () -> s64 #foreign glib "g_get_monotonic_time";
+
+Totals :: struct { folders: s32; files: s32; bytes: u64; }
+FolderCache :: struct { path: Text; snapshot: Files.PathInfo; deadline: s64; hidden: Vec(Text); totals: Totals; }
+folder_cache: [2]FolderCache;
+next_cache: s32;
+
+Localized :: (message: string) -> Text {
+    domain: [7]u8; bytes: [128]u8
+    if !CString.CopyCString("thunar",domain[:]) || !CString.CopyCString(message,bytes[:]) { return .{} }
+    value:=Translate(*domain[0],*bytes[0])
+    if value==null { return .{} }
+    return TextCopy(Bytes.TextFromCString(value))
+}
+AppendOwned :: (output: *Vec(u8), value: *u8) -> bool {
+    if value==null { return false }
+    defer Free(cast(*void)value)
+    return BuilderAppend(output.*,Bytes.TextFromCString(value))
+}
+Formatted :: (output: *Vec(u8), message: string, first: string, second: string="") -> bool {
+    format: Text=Localized(message)
+    f: [1024]u8; a: [32768]u8; b: [32768]u8
+    if format.bytes.count==0 || !CString.CopyCString(TextView(format),f[:]) ||
+        !CString.CopyCString(first,a[:]) || !CString.CopyCString(second,b[:]) { return false }
+    return AppendOwned(output,Print(*f[0],*a[0],*b[0]))
+}
+Count :: (output: *Vec(u8), count: s32, one: string, many: string) -> bool {
+    domain: [7]u8; a: [32]u8; b: [32]u8
+    if !CString.CopyCString("thunar",domain[:]) || !CString.CopyCString(one,a[:]) || !CString.CopyCString(many,b[:]) { return false }
+    format:=Plural(*domain[0],*a[0],*b[0],cast(usize)count)
+    return format!=null && AppendOwned(output,Print(format,count))
+}
+Add :: (totals: *Totals, info: Files.PathInfo) {
+    if info.kind==.Missing { return }
+    if info.kind==.Directory { totals.folders+=1 }
+    else { totals.files+=1; if info.size>0 { totals.bytes+=cast(u64)info.size } }
+}
+DirectoryTotals :: (manager: *Model.Manager, result: *Totals) -> bool {
+    // Thunar's folder total includes hidden files even while they are hidden.
+    // Visible metadata comes from the existing refreshed model. Only hidden
+    // paths need additional metadata; scan their names only on directory change.
+    totals: Totals
+    for entry: manager.entries {
+        if manager.search_active || entry.name=="" || entry.name[0]!=#char "." { Add(*totals,entry.info) }
+    }
+    if !manager.search_active && manager.cwd.count>0 && manager.cwd[0]==#char "/" {
+        snapshot:=Files.PathStatus(manager.cwd)
+        now:=Monotonic()
+        cache_index: s32
+        cached: *FolderCache
+        while cache_index<2 {
+            candidate:=*folder_cache[cache_index]
+            if TextView(candidate.path)==manager.cwd && Files.SameFileSnapshot(candidate.snapshot,snapshot) { cached=candidate; break }
+            cache_index+=1
+        }
+        if cached==null {
+            names: Vec(string)
+            defer Files.FreeDirectoryNames(*names)
+            if !Files.ListDirectory(manager.cwd,*names) { return false }
+            path: Text=TextCopy(manager.cwd)
+            if path.bytes.count!=manager.cwd.count { return false }
+            hidden_paths: Vec(Text)
+            at: s64
+            while at<names.count {
+                if names[at]!="" && names[at][0]==#char "." {
+                    hidden: Text=Files.JoinPath(manager.cwd,names[at])
+                    if hidden.bytes.count==0 { return false }
+                    if !VecPush(hidden_paths,hidden) { return false }
+                }
+                at+=1
+            }
+            index:=next_cache; next_cache=(next_cache+1)%2
+            cached=*folder_cache[index]
+            VecSwap(cached.path.bytes,path.bytes)
+            VecSwap(cached.hidden,hidden_paths)
+            cached.snapshot=snapshot; cached.deadline=0
+        }
+        if now>=cached.deadline {
+            hidden_totals: Totals
+            at: s64
+            while at<cached.hidden.count {
+                path:=TextView(cached.hidden[at])
+                info:=Files.PathStatus(path)
+                if info.kind==.Missing { info=Files.PathStatus(path,false) }
+                Add(*hidden_totals,info); at+=1
+            }
+            cached.totals=hidden_totals; cached.deadline=now+1000000
+        }
+        totals.folders+=cached.totals.folders; totals.files+=cached.totals.files; totals.bytes+=cached.totals.bytes
+        result.folders=totals.folders; result.files=totals.files; result.bytes=totals.bytes; return true
+    }
+    if !manager.search_active { for entry: manager.entries { if entry.name!="" && entry.name[0]==#char "." { Add(*totals,entry.info) } } }
+    result.folders=totals.folders; result.files=totals.files; result.bytes=totals.bytes; return true
+}
+Summary :: (output: *Vec(u8), totals: Totals) -> bool {
+    if totals.folders==0 && totals.files==0 {
+        text: Text=Localized("0 items")
+        return text.bytes.count>0 && BuilderAppend(output.*,TextView(text))
+    }
+    if totals.folders>0 && !Count(output,totals.folders,"%d folder","%d folders") { return false }
+    if totals.files>0 {
+        if totals.folders>0 && !BuilderAppend(output.*,"  |  ") { return false }
+        label: Vec(u8); size: Vec(u8)
+        if !Count(*label,totals.files,"%d file","%d files") || !AppendOwned(*size,Size(totals.bytes,3)) { return false }
+        return Formatted(output,"%s: %s",TextView(label[:]),TextView(size[:]))
+    }
+    return true
+}
+Single :: (manager: *Model.Manager, index: s32, output: *Vec(u8)) -> bool {
+    entry:=*manager.entries[index]
+    if !Formatted(output,"\"%s\"",Model.EntryCaption(manager,index)) { return false }
+    raw:=Files.PathStatus(entry.path,false)
+    link:=raw.kind==.Link
+    if entry.info.kind==.File || link {
+        if !BuilderAppend(output.*,"  |  ") || !AppendOwned(output,Size(cast(u64)ifx entry.info.size>0 then entry.info.size else 0,3)) { return false }
+    }
+    description: [8192]u8
+    length: s32= -1
+    if link {
+        target: [4096]u8
+        target_length:=Gtk.GtkFileLinkTarget(entry.path,target[:])
+        if Files.PathStatus(entry.path).kind==.Missing {
+            text: Text=Localized("broken link")
+            return text.bytes.count>0 && BuilderAppend(output.*,"  |  ") && BuilderAppend(output.*,TextView(text))
+        }
+        if target_length>0 {
+            caption: Text=Display.Caption(TextView(target[:target_length]))
+            return BuilderAppend(output.*,"  |  ") && Formatted(output,"link to %s",TextView(caption))
+        }
+    }
+    if entry.path!="" { length=Gtk.GtkFileDescription(entry.path,description[:]) }
+    if length<0 && entry.content_type!="" { length=Gtk.GtkContentDescription(entry.content_type,description[:]) }
+    if length>0 { return BuilderAppend(output.*,"  |  ") && BuilderAppend(output.*,TextView(description[:length])) }
+    return true
+}
+
+#scope_export
+// Append atomically: allocation/formatting failure preserves the caller's text.
+// free_bytes < 0 omits unavailable volume information, as Thunar does.
+Append :: (manager: *Model.Manager, free_bytes: s64, output: *Vec(u8)) -> bool {
+    if manager==null || output==null { return false }
+    text: Vec(u8)
+    selected:=Model.SelectedCount(manager)
+    if selected==1 {
+        for index: cast(s32)0..cast(s32)manager.entries.count-1 {
+            if manager.selected[index] && !Single(manager,index,*text) { return false }
+        }
+    } else if selected>1 {
+        totals: Totals
+        for index: cast(s32)0..cast(s32)manager.entries.count-1 { if manager.selected[index] { Add(*totals,manager.entries[index].info) } }
+        summary: Vec(u8)
+        if !Summary(*summary,totals) || !Formatted(*text,"Selection: %s",TextView(summary[:])) { return false }
+    } else {
+        totals: Totals
+        if !DirectoryTotals(manager,*totals) || !Summary(*text,totals) { return false }
+        if free_bytes>=0 {
+            size: Vec(u8)
+            if !AppendOwned(*size,Size(cast(u64)free_bytes,2)) || !BuilderAppend(text,"  |  ") ||
+                !Formatted(*text,"Free space: %s",TextView(size[:])) { return false }
+        }
+    }
+    return BuilderAppend(output.*,TextView(text[:]))
+}

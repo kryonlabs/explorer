@@ -3,6 +3,7 @@
 Files :: #import "std/file_tree_linux";
 Display :: #import "file_display";
 Model :: #import "model";
+DesktopLocations :: #import "desktop_locations";
 Sort :: #import "std/sort";
 Utf8 :: #import "std/utf8";
 using Bytes :: #import "std/byte_text_linux";
@@ -81,6 +82,7 @@ Absolute :: (raw: string, base: string, home: string) -> Value {
         else { result.text = Files.JoinPath(home, raw[2:]) }
     } else if raw[0] == #char "/" { result.text = TextCopy(raw) }
     else if base.count > 0 && base[0] == #char "/" { result.text = Files.JoinPath(base, raw) }
+    else if Model.IsUri(base) { result.text = DesktopLocations.ResolveUri(base,raw) }
     result.valid = result.text.bytes.count > 0 && result.text.bytes.count < 4096
     return result
 }
@@ -107,6 +109,14 @@ Query :: (state: *State, input: string, escaped: bool) -> bool {
     decoded: Value = Decode(input, escaped)
     if !decoded.valid { return Fail(state, "Invalid location byte escape or NUL") }
     raw := TextView(decoded.text)
+    // URI transport is handled by GIO when submitted. Local completion must
+    // never interpret a URI as a relative filesystem path.
+    if Model.IsUri(raw) || (Model.IsUri(TextView(state.base)) && raw!="" && raw[0]!=#char "/" && raw[0]!=#char "~") {
+        VecFree(state.candidates); VecFree(state.order); VecFree(state.prefix.bytes)
+        Store(*state.input,input); Store(*state.preview,input); Store(*state.error,"")
+        state.valid=true; state.selected=-1; state.escaped=escaped; state.preview_escaped=escaped
+        return true
+    }
     cut: s64 = 0
     for index: cast(s64)0..raw.count - 1 { if raw[index] == #char "/" { cut = index + 1 } }
     parent_input := ifx cut == 0 then "." else raw[0:cut]
@@ -250,6 +260,7 @@ Submit :: (state: *State, manager: *Model.Manager, input: string, escaped: bool)
     if manager.cwd != TextView(state.base) { Model.SetError(manager, "Location changed while editing; cancel and reopen the location bar"); return false }
     decoded: Value = Decode(input, escaped)
     if !decoded.valid { Model.SetError(manager, "Invalid location byte escape or NUL"); return false }
+    if Model.IsUri(TextView(decoded.text)) { return Model.OpenLocationTracked(manager,TextView(decoded.text)) }
     absolute: Value = Absolute(TextView(decoded.text), TextView(state.base), TextView(state.home))
     if !absolute.valid { Model.SetError(manager, "Enter a local relative, absolute or ~/ path up to 4095 bytes"); return false }
     return Model.OpenLocationTracked(manager, TextView(absolute.text))

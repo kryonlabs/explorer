@@ -3,6 +3,7 @@ using Model :: #import "model";
 using Bytes :: #import "std/byte_text_linux";
 using Vectors :: #import "std/vec";
 Files :: #import "std/file_tree_linux";
+WholeFiles :: #import "std/file";
 Number :: #import "std/number_text";
 Utf8 :: #import "std/utf8";
 
@@ -131,6 +132,11 @@ RejectedNavigation :: (initial: string, target: string, mode: string) -> bool {
     key := manager.entries[0].key
     count := manager.entries.count
     before := manager.back.count
+    if mode=="--oom" {
+        if manager.tabs.count!=1 || !Files.ReplaceFile(Files.JoinPath(initial,"oom-ready"),"READY") { return false }
+        gate: [1]u8; input:=WholeFiles.FileHandle.{.fd=0,.valid=true}
+        if WholeFiles.Read(input,gate[:])!=1 { return false }
+    }
     if mode == "--race" && !Files.ReplaceFile(Files.JoinPath(initial, "race-ready"), "READY") { return false }
     if Model.OpenPathTracked(*manager, target) { print("Rejected navigation probe unexpectedly opened target\n"); return false }
     if manager.cwd != initial || manager.entries.count != count || manager.entries[0].key != key ||

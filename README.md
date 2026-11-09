@@ -5,7 +5,7 @@ interface. Its goal is full Thunar parity; the current implementation covers
 basic navigation and file operations. It runs standalone and embeds directly
 in Rill through its native Ziran host module.
 
-Use the Icon, List and Compact buttons, or Ctrl+1, Ctrl+2 and Ctrl+3, to change
+Use View → Icons, Detailed List or Compact List, or Ctrl+1, Ctrl+2 and Ctrl+3, to change
 views. All views share selection, focus and sorting. Ctrl-click toggles a file;
 Shift extends a range; Ctrl+Shift adds a range. Arrows follow the layout,
 Home/End reach its ends, Ctrl moves focus without changing selection, Space
@@ -14,7 +14,7 @@ toggles selection and Enter opens the focused item. Double-click opens an item.
 Images open in a large built-in preview. Use Fit, 100%, +/−, arrows and the
 wheel to zoom or pan; Shift+wheel pans horizontally. Previous/Next or PgUp/PgDn
 browse images. Open delegates to the desktop's default application; Esc closes
-the preview. The Preview button or Ctrl+P also previews the focused file.
+the preview. File → Preview or Ctrl+P also previews the focused file.
 UTF-8 text previews read at most 64 KiB and scroll with arrows, Home/End,
 PgUp/PgDn or the wheel. Other files show metadata and an Open action.
 
@@ -23,10 +23,38 @@ BMP, TIFF and SVG previews are tested with the native desktop backend; other
 image formats depend on the installed Kryon codecs. Animated images show a
 still frame. Missing, unreadable or undecodable files show an explicit message.
 
-Shelf follows the configured desktop GTK palette, including light and dark
-themes. Palette changes apply while Shelf is running. Views, icons, prompts
-and previews share these colors; photographs keep their original colors.
+Shelf's Linux chrome uses GTK3 CSS, Pango text and the active icon theme through
+Kryon's native GTK bridge. Theme inheritance, SVG/PNG/symbolic icons and file
+MIME descriptions use GTK/GIO discovery. No theme assets or machine-specific
+theme paths are bundled. Native theme changes invalidate cached artwork.
+The menubar exposes file actions, view settings, navigation and bookmarks; the
+compact toolbar provides Back, Forward, Up, Home and the editable location.
+GTK measures menu items, toolbar allocations, the location entry and pane
+separator; their dimensions follow the active font and theme.
 Embedded drawing restores the caller's palette after each Shelf viewport.
+
+Open menus switch on hover. F10 or Alt+F/E/V/G/B/H opens a menu; arrows, Home,
+End, Enter and Escape navigate it. Menu labels show their shortcuts. Delete
+(including keypad Delete with NumLock off) moves selected files to Trash;
+Shift+Delete requires permanent-deletion confirmation. Editors retain Delete,
+selection and clipboard keys. Mouse wheels apply GTK's page-based distance
+immediately, retaining fractional offsets between notches.
+
+F1 opens Shelf Help; Alt+Enter shows read-only file properties. F2 renames,
+Ctrl+Shift+N creates a folder, Ctrl+H toggles hidden files, F5/Ctrl+R reloads,
+Ctrl+S selects by pattern and Ctrl+Shift+I inverts selection. Alt+Left/Right
+and Backspace use history; Alt+Up goes to the parent and Alt+Home goes home.
+Ctrl+L/Alt+D edits the location. F9 toggles the sidebar; Ctrl+M toggles the
+menubar. Ctrl++/=/−/0 (and keypad variants) changes or resets the active view's
+icon size; Ctrl+wheel zooms the view. Ctrl+N opens a window, Ctrl+Shift+P/O opens the selected directory
+in a tab/window. Ctrl+Q closes the current window; Ctrl+Shift+W closes all Shelf
+windows from the same executable on the current display.
+
+Ctrl+Z and Ctrl+Shift+Z undo and redo file operations as batches, including
+creation, rename, copy, cut, links, Trash and restore. Undo keeps created or
+copied objects intact in private recovery storage, including later content
+changes. Replacement objects and occupied destinations are preserved with an
+error. Permanent deletion clears operation history and cannot be undone.
 
 Linux filenames retain their original bytes. Views, current paths, errors and
 preview headings display invalid UTF-8 bytes and control bytes as `\xNN`;
@@ -39,14 +67,16 @@ in that mode are rejected without changing the filesystem; an escaped path
 that exceeds the editor's capacity reports an error instead of being truncated.
 Desktop clipboard publication still rejects paths that cannot be UTF-8 URIs.
 
-The path bar uses clickable local breadcrumbs. Its Ancestors menu retains
+The default location bar shows the current path. View → Pathbar switches to
+clickable local breadcrumbs. Its Ancestors menu retains
 hidden parents when the bar is narrow; clicking the current folder refreshes it.
-The … button or Ctrl+L opens an inline location editor with the current path
+Clicking the path or Ctrl+L opens an inline location editor with the current path
 selected. Enter opens a folder, or selects a regular file in its parent without
 executing it. Escape cancels without changing the route, selection or history.
 Relative paths resolve against the folder where editing started; `~` and `~/`
-use Home. Input is literal: no shell evaluation, named-user expansion or remote
-URI navigation; the editor accepts local path syntax. These local file/directory semantics follow
+use Home. Input is literal, with no shell evaluation or named-user expansion.
+URI locations use GIO, including relative paths from a URI location; local
+completion is available for local paths. These local file/directory semantics follow
 [current upstream Thunar's location entry](https://raw.githubusercontent.com/xfce-mirror/thunar/master/thunar/thunar-location-entry.c).
 The installed Thunar 4.20.2 uses file launch instead; private native comparison
 there covers completion keys and cancellation, while Shelf tests verify safe
@@ -69,7 +99,7 @@ bytes, editor text to 4096 bytes and breadcrumbs to 2048 ancestors.
 Tabs show lossless folder-name labels with a distinct active state and stable
 identities, including duplicate names. Ctrl+L reveals the full active path.
 Use + or Ctrl+T to duplicate the current folder into a new tab; close buttons
-or Ctrl+W close a tab while keeping the final tab open. Ctrl+Tab and
+or Ctrl+W close a tab; Ctrl+W closes the window when only one tab remains. Ctrl+Tab and
 Ctrl+Shift+Tab cycle; Ctrl+PageUp/PageDown switch adjacent tabs and
 Ctrl+Shift+PageUp/PageDown move the active tab. When the strip has keyboard
 focus, Left/Right and Home/End select tabs and Delete closes one.
@@ -85,14 +115,14 @@ or allocation-failed target leaves the previous usable tab active, including
 when closing the active tab. Search results remain cached until refresh.
 Detached windows and persistent sessions are not implemented.
 
-F3 or the Split button opens two local panes with a draggable divider. Each
+F3 or View → Split view opens two local panes with a draggable divider. Each
 pane keeps its own tabs, history, selection, scrolling, view settings, search
-and Tree state. Click a pane or use Other pane to make it active; the shared
+and Tree state. Click a pane or use View → Other pane to make it active; the shared
 location bar, sidebar and file actions follow that pane. Tab traversal,
 Ctrl+Tab tab cycling and location completion keep their existing shortcuts.
 Editors, previews and open menus retain their original pane until dismissed.
 
-Single shows the active pane across the full file area. Shelf keeps the other
+Disabling Split view shows the active pane across the full file area. Shelf keeps the other
 pane and its tabs in memory; F3 restores it after a checked refresh. An unreadable
 or allocation-failed pane stays hidden with an error, while the usable pane
 remains available. This retention lasts only for the current Host lifetime.
@@ -103,7 +133,8 @@ of the other pane cannot undo an already completed file operation.
 The Places sidebar loads local shortcuts from `$XDG_CONFIG_HOME/gtk-3.0/bookmarks`
 (or `$HOME/.config/gtk-3.0/bookmarks`). If that file is absent, it reads
 `$HOME/.gtk-bookmarks`; the first edit writes the GTK3 location and leaves the
-legacy file intact. Add current, Rename, Remove, Up and Down edit the selected
+legacy file intact. The Bookmarks menu actions Add current folder, Rename bookmark, Remove bookmark,
+Move bookmark up and Move bookmark down edit the selected
 local bookmark and preserve its folder identity. The scrolling list opens a
 bookmark on each click. Existing duplicate records are preserved; adding an
 already-bookmarked folder selects its first record.
@@ -119,10 +150,24 @@ Independent applications can still race between the final recheck and replacemen
 Symbolic-link bookmark files are readable but are not replaced. Files above 1 MiB,
 more than 4096 local rows, or captions above 1024 bytes report a load/save error
 instead of being truncated. Embedded NUL also rejects the whole file because
-GTK would stop reading there. Remote navigation and device shortcuts remain pending.
+GTK would stop reading there.
+
+Places also exposes Computer, the native XDG Desktop when present, Recent and
+Trash, followed by Devices and Network. Only the activated sidebar row is
+selected, including when a bookmark points to Home.
+Mounted devices use GVolumeMonitor names, native root identities and GIcons.
+Computer and Browse Network enumerate their actual GIO backends; Recent reads
+GTK history while retaining each resource's original URI. Native virtual backends
+activate on demand. Failed reads keep the previous route, listing and history;
+missing services and authentication requirements report the native error.
+URI locations participate in tabs, history and split panes. File operations and
+clipboard exchange require actual local paths; they never treat a remote URI
+as a local filename. URI completion, authenticated mounts and remote writes are
+not implemented.
 
 Places remains the default side pane. Tree opens the local Home/File System
-tree; Ctrl+E switches between Tree and Places, and Ctrl+B returns to Places
+tree; Ctrl+E toggles Tree visibility, and Ctrl+B toggles Places visibility.
+Either shortcut switches to its pane when the other pane is visible
 ([Thunar bindings](https://raw.githubusercontent.com/xfce-mirror/thunar/master/thunar/thunar-window.c)).
 Expand markers load one directory at a time. Folder labels open that folder,
 including repeated clicks on the selected folder. Navigation reveals cwd's
@@ -168,9 +213,17 @@ a changed selection to reset it. Partial local cuts keep the original desktop
 offer until completion; other applications may encounter already moved paths.
 Native Wayland clipboard access and drag/drop are not implemented here.
 
-List shows resizable Name, Size (bytes), Type and Modified columns. Click a
-header or the shared sort buttons to sort; click again to reverse. Folders
-stay first in either direction. Type describes the filesystem kind, not MIME.
+List shows resizable Name, Size, Type and Date Modified columns. GTK measures
+the headers and actual cell text; columns grow with their contents and Name
+uses the remaining space. Manual widths remain caller-owned. Click a
+header to sort; click again to reverse. Folders stay first in either direction.
+Type displays GIO's localized MIME description, including native link metadata.
+Size uses GLib's locale formatting. Dates follow Thunar's default: Today,
+Yesterday, recent weekday names, then the locale date. Relative labels use the
+installed Thunar translation catalog, and refresh when the local date changes.
+The status bar follows Thunar's default directory and selection summaries,
+including hidden-file totals, native plural translations, long byte sizes,
+MIME descriptions and symbolic-link targets.
 Equal metadata uses name and full-path ties so search results sort consistently.
 Sorting and changing views preserve selected paths and reveal the focused item.
 The declared `assets/` directory ships the canonical Kryon icon atlas. Native
@@ -189,15 +242,36 @@ make test-tree      # source/saved lazy tree, host integration and private GUI
 make test-location  # source/saved paths, failure rollback, private Shelf/Thunar keys
 make test-tabs      # dynamic state/real allocation failure and private native tabs
 make test-split     # independent panes, real failures, native focus/drag and Thunar
+make test-locations # fresh private GVfs/local backend, source/saved URI model tests
+make test-thunar    # exact-pixel private comparison; writes differences and fails on mismatch
+make test-native-theme # GTK bars/gestures, all views/split, full 4K/resize, source/saved
+make test-native-status # installed Thunar footer oracle, locales and live metadata
+make test-native-window # actual native cursors, themed window icon and scrollbar gestures
+make test-window-lifecycle # source/saved close-all authentication and private window shortcuts
+make test-interactions # real menu-hover, Delete/keypad, editor and window shortcuts
 make install
 make test-installed
 ```
 
-The desktop profile produces `build/shelf-desktop`. The standalone entry is
+`scripts/ziran.sh` selects the compiler recorded in `ziran.lock`. If the
+installed launcher predates this package format, select a current launcher
+without replacing the installed one: `ZIRAN_LAUNCHER=/path/to/ziran make build`.
+Use that setting for the other build and test commands as well. Local stack
+development can instead use the ignored `ziran.local.toml` overrides described
+in Ziran's package documentation; committed builds use the lock without them.
+
+The desktop profile produces `build/shelf-desktop`. Its window and desktop entry
+use GTK’s discovered `system-file-manager` icon. Native file chrome uses the
+system arrow cursor; location editing retains the text cursor. File views use
+GTK scrollbar geometry, input, overlay fading, theme assets, fonts and selection
+metrics. Rounded native surfaces draw over their current background so Cairo
+uses the same curve coverage as a GTK window. The standalone entry is
 the Kryon `Frame` export in `src/app.zi`. Rill imports `shelf/app_host` and calls
 `Prepare`, `Draw` and `Close` with its session, viewport and focus state.
 Keep each prepared `Host` at a stable address until `Close`.
-Native embedding hosts using this clipboard adapter link libxcb (`-lxcb`).
+Native embedding hosts link the libraries declared in `ziran.toml`, including
+libxcb, GTK3, GIO, GObject, GLib, Pango, Cairo and GdkPixbuf. Package builds and
+saved-IR executable builds propagate these native link requirements.
 Filesystem access uses native Linux APIs. A portable ZX build needs a filesystem
 host capability that is not currently available.
 Current feature status and the remaining Thunar work are tracked in

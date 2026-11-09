@@ -1,5 +1,25 @@
+Desktop :: #import "kryon/Desktop";
+Window :: #import "kryon/Window";
+Gtk :: #import "kryon/GtkStyleLinux";
+Native :: #import "native_ui";
+Windows :: #import "native_windows";
+window_icon_generation: u64;
 AppHost :: #import "app_host";
 using UI :: #import "kryon/Widgets";
+using CString :: #import "std/c_string";
+using Bytes :: #import "std/byte_text_linux";
+glib :: #system_library "glib-2.0";
+SpawnWindow :: (directory: *u8, argv: **u8, environment: **u8, flags: s32,
+    setup: *void, data: *void, child: *s32, error: **void) -> s32 #foreign glib "g_spawn_async";
+
+OpenWindow :: (path: string) -> bool {
+    directory: [4096]u8
+    executable: [32]u8
+    if !CopyCString(path,directory[:]) || !CopyCString("/proc/self/exe",executable[:]) { return false }
+    arguments: [2]*u8
+    arguments[0]=*executable[0]
+    return SpawnWindow(*directory[0],*arguments[0],null,0,null,null,null,null)!=0
+}
 
 host: AppHost.Host;
 
@@ -14,5 +34,27 @@ Frame :: (session: Session, viewport: Rectangle) -> s32 {
     host_viewport.y = viewport.y
     host_viewport.width = viewport.width
     host_viewport.height = viewport.height
-    return AppHost.Draw(*host, host_session, host_viewport)
+    result:=AppHost.Draw(*host, host_session, host_viewport,Window.WindowFocused())
+    if host.window_requested {
+        host.window_requested=false
+        if !OpenWindow(TextView(host.window_path)) { AppHost.ActiveManager(*host).error="The new window could not be started." }
+    }
+    if host.quit_all_requested {
+        host.quit_all_requested=false
+        if !Windows.CloseAll() { AppHost.ActiveManager(*host).error="The windows could not all be closed." }
+    }
+    if host.quit_requested || Windows.PollClose() { Window.WindowQuit() }
+    if Windows.TakeFailure() { AppHost.ActiveManager(*host).error="The windows could not all be closed." }
+    // Only the standalone application owns the desktop window. Embedding
+    // Shelf in another host must not change that application's window icon.
+    generation:=Gtk.GtkStyleGeneration()
+    if generation!=0 && generation!=window_icon_generation {
+        nodes:=Native.Nodes("image")
+        icon:=Gtk.GtkIconRaster("system-file-manager",48,1,nodes[:])
+        if icon.rgba.count>0 && Desktop.DesktopSetIcon(icon.width,icon.height,icon.rgba) {
+            window_icon_generation=Gtk.GtkStyleGeneration()
+        }
+        Gtk.GtkStyleBitmapRelease(*icon)
+    }
+    return result
 }

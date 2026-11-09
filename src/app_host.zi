@@ -3,6 +3,7 @@ using Model :: #import "model";
 using UI :: #import "kryon/Widgets";
 using TextBuffer :: #import "std/text_buffer";
 Input :: #import "kryon/tree_input";
+ScrollDevice :: #import "kryon/scroll_device";
 Opener :: #import "kryon/open_uri";
 Keys :: #import "kryon/key_input";
 Number :: #import "std/number_text";
@@ -11,15 +12,22 @@ DateTime :: #import "std/date_time_linux";
 Calendar :: #import "std/calendar";
 Preview :: #import "preview";
 using FormatText :: #import "std/format";
+using Native :: #import "native_ui";
+using Status :: #import "native_status";
+using GtkPaint :: #import "kryon/GtkPainterLinux";
+Gtk :: #import "kryon/GtkStyleLinux";
+NativeScroll :: #import "kryon/GtkScrollLinux";
 SystemTheme :: #import "kryon/SystemThemeLinux";
 Palettes :: #import "kryon/widget_palette";
 FileClipboard :: #import "desktop_file_clipboard";
 FileDisplay :: #import "file_display";
+using DesktopLocations :: #import "desktop_locations";
 using Bookmarks :: #import "bookmarks";
 using LocalTree :: #import "tree_sidebar";
 Trees :: #import "data_views/TreeView";
 using Location :: #import "location";
 TabPaths :: #import "std/file_tree_linux";
+GridLayout :: #import "kryon/grid_multi";
 using Kinds :: #import "kryon/widget_kind";
 using WidgetKind;
 
@@ -49,10 +57,29 @@ DetailsCells :: struct {
     cells: [4]string
     size: [32]u8
     modified: [32]u8
+    description: [8192]u8
+    description_length: s32
+    link: bool
+    broken: bool
+    path_key: u64
+    stamp: s64
+    stamp_ns: s64
+    size_value: s64
 }
 
 PaneView :: struct {
+    zoom: [3]s32
+    native_scroll: u64
+    native_scroll_props: NativeScroll.GtkScrollProps
+    native_scroll_metrics: NativeScroll.GtkScrollMetrics
+    native_scroll_origin: Vector2
+    details_scroll_x: s32
     column_widths: [4]s32
+    columns_resized: bool
+    columns_signature: u64
+    columns_generation: u64
+    name_minimum: s32
+    column_values: Vec(string)
     last_click_path: Text
     last_click_ms: s64
     last_click_view: Model.ViewMode
@@ -95,12 +122,17 @@ Host :: struct {
     split: bool
     divider: s32
     divider_set: bool
+    places_key: u64
+    places_route: u64
+    location_without_slash: bool
     pane_press: s32
     modal_pane: s32
     modal_tab: u64
     modal_path: Text
     modal_target: Text
     modal_identity: TabPaths.PathInfo
+    delete_keys: Vec(u64)
+    delete_identities: Vec(TabPaths.PathInfo)
     popup_pane: s32
     popup_tab: u64
     popup_path: Text
@@ -130,8 +162,32 @@ Host :: struct {
     completion_flags: Vec(bool)
     completion_scroll: s32
     breadcrumb_items: Vec(BreadcrumbItem)
+    breadcrumb_first: s32
+    breadcrumb_last: s32
+    breadcrumb_bounds: Rectangle
     breadcrumb_open: bool
     actions_open: bool
+    menu_index: s32
+    paint: GtkPainter
+    paint_active: bool
+    free_path: u64
+    free_ms: s64
+    free_bytes: s64
+    pathbar: bool
+    sidebar_hidden: bool
+    menubar_hidden: bool
+    quit_requested: bool
+    quit_all_requested: bool
+    window_requested: bool
+    window_path: Text
+    menu_cursor: s32
+    menu_pointer: Vector2
+    info_open: bool
+    info_title: string
+    info_body: Vec(u8)
+    mounts: DesktopLocations.State
+    mounts_ms: s64
+    trash_icon: Text
 }
 
 PaneManager :: (host: *Host, index: s32 = -1) -> *Model.Manager {
@@ -151,11 +207,16 @@ PaneViewAt :: (host: *Host, index: s32 = -1) -> *PaneView {
 ActiveView :: (host: *Host) -> *PaneView { return PaneViewAt(host) }
 
 InitPaneView :: (view: *PaneView) {
-    view.column_widths = s32.[300, 110, 140, 190]
+    view.zoom=s32.[3,3,3]
+    view.column_widths = s32.[50, 50, 50, 50]
+    view.columns_resized=false
+    view.columns_signature=0; view.columns_generation=0
+    view.name_minimum=50
     view.tab_drag_from = -1
 }
 
 ReleasePaneView :: (view: *PaneView) {
+    if view.native_scroll!=0 { unused NativeScroll.GtkScrollRelease(view.native_scroll); view.native_scroll=0 }
     for index: cast(s32)0..cast(s32)view.tab_labels.count - 1 {
         VecFree(view.tab_labels[index].bytes); VecFree(view.tab_paths[index].bytes)
     }
@@ -163,6 +224,7 @@ ReleasePaneView :: (view: *PaneView) {
     LocalTree.Release(*view.directory_tree)
     VecFree(view.tree_items); VecFree(view.tree_rows); VecFree(view.tree_attempt.bytes)
     VecFree(view.last_click_path.bytes); VecFree(view.details_cells)
+    VecFree(view.column_values)
     VecFree(view.details_rows); VecFree(view.grid_items)
     view.tree_mode = false; view.tree_initialized = false; view.tree_focused = false
     view.tree_reveal = false; view.tree_scroll = 0; view.tree_press = 0
@@ -236,7 +298,7 @@ PopupOwnerValid :: (host: *Host) -> bool {
 }
 
 PaneLocked :: (host: *Host) -> bool {
-    return ActiveManager(host).prompt != .PromptNone || host.preview.opened ||
+    return ActiveManager(host).prompt != .PromptNone || host.preview.opened || host.info_open ||
         host.breadcrumb_open || host.actions_open
 }
 
@@ -347,8 +409,9 @@ ResolvePaneInput :: (host: *Host, session: Session, viewport: Rectangle, focused
     press := Input.TreeLastPress(session)
     if press.serial != host.pane_press {
         host.pane_press = press.serial
-        body := Rectangle.{viewport.x + 166.0, viewport.y + 136.0 + ifx viewport.width < 720.0 then 40.0 else 0.0,
-            viewport.width - 174.0, viewport.height - 168.0}
+        chrome: float32=Native.ChromeHeight()-ifx host.menubar_hidden then Native.MenuHeight() else 0.0
+        left: float32=ifx host.sidebar_hidden then 0.0 else 170.0+Native.PaneSeparatorWidth()
+        body := Rectangle.{viewport.x + left, viewport.y + chrome, viewport.width - left, viewport.height - chrome - 28.0}
         if press.x >= body.x && press.x < body.x + body.width && press.y >= body.y && press.y < viewport.y + viewport.height - 32.0 {
             cut := body.x + cast(float32)host.divider
             if press.x < cut - 4.0 { unused ActivatePane(host, 0) }
@@ -418,7 +481,7 @@ DrawTabsInPane :: (host: *Host, view: *PaneView, session: Session, bounds: Recta
     active := Model.TabKey(manager, manager.active_tab)
     reveal := view.tab_active_key != active || reordered
     if reveal { view.tab_dragging = false; view.tab_drag_from = -1 }
-    enabled := focused && manager.prompt == .PromptNone
+    enabled := focused && !PaneLocked(host)
     bar_focused := false
     if enabled {
         for index: cast(s32)0..TreeCount(session) - 1 {
@@ -468,14 +531,26 @@ Prepare :: (host: *Host, start_path: string = "") -> bool {
     Model.Init(*host.manager, start_path)
     if host.manager.tabs.count == 0 { Model.Dispose(*host.manager); return false }
     host.bookmark_selected = -1; host.bookmark_scroll = 0
+    host.places_key=0; host.places_route=0; host.location_without_slash=false
+    host.sidebar_hidden=false; host.quit_requested=false; host.quit_all_requested=false; host.window_requested=false
+    host.menubar_hidden=false; host.info_open=false
     host.bookmarks_ms = DateTime.UnixMilliseconds()
     if !Bookmarks.Init(*host.bookmarks) { Model.SetError(*host.manager, TextView(host.bookmarks.error)) }
+    DesktopLocations.Init(*host.mounts)
+    unused DesktopLocations.OpenMounts(*host.mounts)
+    host.mounts_ms=DateTime.UnixMilliseconds()
+    initial_trash_icon: Text=DesktopLocations.IconForUri("trash:///")
+    VecSwap(host.trash_icon.bytes,initial_trash_icon.bytes)
+    VecFree(initial_trash_icon.bytes)
     host.started = true
     return true
 }
 
 Close :: (host: *Host) {
     if host == null { return }
+    GtkPainterRelease(*host.paint)
+    DesktopLocations.Release(*host.mounts)
+    VecFree(host.trash_icon.bytes)
     ReleasePaneView(*host.view)
     if host.started { Model.Dispose(*host.manager) }
     if host.secondary.count > 0 {
@@ -487,6 +562,9 @@ Close :: (host: *Host) {
     VecFree(host.completion_items); VecFree(host.completion_flags); VecFree(host.breadcrumb_items)
     host.breadcrumb_open = false; host.actions_open = false; host.completion_scroll = 0
     VecFree(host.modal_path.bytes); VecFree(host.modal_target.bytes); VecFree(host.popup_path.bytes)
+    VecFree(host.delete_keys); VecFree(host.delete_identities)
+    VecFree(host.window_path.bytes)
+    VecFree(host.info_body)
     host.modal_tab = 0; host.popup_tab = 0
     FileClipboard.Close(*host.file_clipboard)
     Bookmarks.Release(*host.bookmarks); VecFree(host.bookmark_items); VecFree(host.bookmark_flags)
@@ -506,12 +584,14 @@ PromptTitle :: (host: *Host) -> string {
     if manager.prompt == .PromptRename {
         return ifx host.escaped_editor then "New name (\\xNN bytes; \\\\ backslash)" else "New name"
     }
+    if manager.prompt == .PromptDelete { return "Permanently delete the selected files? This cannot be undone." }
     if manager.prompt == .PromptFolder { return "Folder name" }
     if manager.prompt == .PromptFile { return "File name" }
     if manager.prompt == .PromptLocation {
         return ifx host.escaped_editor then "Location (\\xNN bytes; \\\\ backslash)" else "Location"
     }
     if manager.prompt == .PromptSearch { return "Search" }
+    if manager.prompt == .PromptSelectPattern { return "Select by pattern (* and ?)" }
     return ""
 }
 
@@ -546,6 +626,18 @@ OpenPrompt :: (host: *Host, prompt: Model.PromptKind) {
     }
     host.field.length = CopyInto(host.field.bytes, TextView(caption))
     unused CopyInto(host.field_value[:], TextView(host.field.bytes[:host.field.length]))
+    if prompt == .PromptRename || prompt == .PromptBookmarkRename {
+        host.field.cursor=host.field.length
+        if prompt==.PromptRename && !Model.EntryIsDirectory(manager,manager.cursor) {
+            // Select the editable stem, preserving the final extension.
+            i:=host.field.length
+            while i>0 {
+                i-=1
+                if host.field.bytes[i]==46 { if i>0 { host.field.cursor=i }; break }
+            }
+        }
+        host.field.anchor=0
+    }
     if prompt == .PromptLocation {
         if !Location.Begin(*host.location, manager.cwd, Model.HomePath()) {
             Model.SetError(manager, "Cannot prepare location editor")
@@ -578,7 +670,7 @@ FinishPromptInPane :: (host: *Host, view: *PaneView) {
             !Location.Validate(*host.location, host.location.order[host.location.selected]) {
             LocationError(host); return
         }
-        if Location.Submit(*host.location, manager, value, host.escaped_editor) { CancelLocation(host) }
+        if Location.Submit(*host.location, manager, value, host.escaped_editor) { host.location_without_slash=false; CancelLocation(host) }
         return
     }
     decoded: FileDisplay.EditorValue = FileDisplay.ParseEditor(
@@ -598,6 +690,7 @@ FinishPromptInPane :: (host: *Host, view: *PaneView) {
     else if prompt == .PromptFolder { unused Model.CreateFolder(manager, value, *changed) }
     else if prompt == .PromptFile { unused Model.CreateFile(manager, value, *changed) }
     else if prompt == .PromptSearch { unused Model.Search(manager, value) }
+    else if prompt == .PromptSelectPattern { unused Model.SelectPattern(manager,value) }
     // The filesystem step may succeed even when the active listing refresh
     // fails. Sync the peer after that step, without touching this pane's error.
     if changed { RefreshOtherPane(host) }
@@ -716,7 +809,10 @@ LocationBreadcrumbWidget :: (host: *Host, session: UI.Session, bounds: Rectangle
 DrawLocationBreadcrumb :: (host: *Host, session: UI.Session, bounds: Rectangle, focused: bool, key: s32) {
     manager := ActiveManager(host)
 
+    first:=TreeSubmittedCount(session)
     row := LocationBreadcrumbWidget(host, session, bounds, focused, key)
+    host.breadcrumb_first=first;host.breadcrumb_last=TreeSubmittedCount(session);host.breadcrumb_bounds=bounds
+    Native.RetainedControls(*host.paint,first,host.breadcrumb_last,bounds,false)
     if row >= 0 && row < host.ancestors.rows.count {
         unused Model.OpenPathTracked(manager, TextView(host.ancestors.rows[row].path))
     }
@@ -847,15 +943,9 @@ ApplyFieldEdit :: (state: *FieldState, edit: UI.TextFieldEdit) -> bool {
     return true
 }
 
-Button :: (session: UI.Session, key: s32, label: string, bounds: UI.Rectangle, enabled: bool = true) -> bool {
-    props: ButtonProps
-    props.key = cast(u64)key
-    props.id = key
-    props.bounds = bounds
-    props.label = label
-    props.fit_content = true
-    props.disabled = !enabled
-    return UI.Button(session, props) == 1
+Button :: (host: *Host, session: UI.Session, key: s32, label: string, bounds: UI.Rectangle, enabled: bool = true) -> bool {
+    if host.paint_active { return Native.Control(*host.paint,cast(u64)key,bounds,label,"",enabled) }
+    return UI.Button(session,ButtonProps.{.key=cast(u64)key,.id=key,.bounds=bounds,.label=label,.disabled= !enabled,.fit_content=true})==1
 }
 
 BookmarkResult :: (host: *Host, ok: bool) {
@@ -915,7 +1005,7 @@ SyncTreeInPane :: (host: *Host, view: *PaneView) -> bool {
         view.tree_initialized = true
     }
     view.directory_tree.show_hidden = manager.show_hidden
-    if TextView(view.tree_attempt) != manager.cwd {
+    if !Model.IsUri(manager.cwd) && TextView(view.tree_attempt) != manager.cwd {
         LocalTree.Store(*view.tree_attempt, manager.cwd)
         if !LocalTree.Reveal(*view.directory_tree, manager.cwd) { TreeResult(host, false) }
         view.tree_reveal = true
@@ -972,6 +1062,27 @@ DirectoryTreeWidgetInPane :: (host: *Host, view: *PaneView, session: UI.Session,
     // Disabled embedded draws cannot consume an explicit reveal request.
     if enabled { view.tree_reveal = false }
     result := Trees.TreeView(session, props, view.tree_items[:])
+    panel:=Trees.TreeViewFace(StyleKindTreeView(),0,0,cast(s32)ButtonState.ButtonStateNormal)
+    item_face:=Trees.TreeViewFace(StyleKindTreeViewItem(),0,0,cast(s32)ButtonState.ButtonStateNormal)
+    metrics:=Trees.TreeViewMetricsFor(1.0,panel,item_face)
+    p:=*host.paint
+    p.clip=bounds
+    Native.Surface(p,bounds,"sidebar")
+    for i: cast(s32)0..cast(s32)view.tree_items.count-1 {
+        yy:=bounds.y+cast(float32)(i*32-result.scroll_offset)
+        if yy+32.0 <= bounds.y || yy >= bounds.y+bounds.height { continue }
+        item:=view.tree_items[i]
+        row:=Rectangle.{bounds.x,yy,bounds.width,32.0}
+        state: u32=ifx item.id==result.selected_id then cast(u32)Gtk.GtkStyleSelected else cast(u32)0
+        Native.Surface(p,row,"sidebar",state)
+        content:=row; content.x-=cast(float32)result.horizontal_offset
+        content.width+=cast(float32)result.horizontal_max_scroll
+        marker:=Trees.TreeViewMarkerBounds(content,item.depth,metrics)
+        label:=Trees.TreeViewTextBounds(content,item.depth,metrics)
+        if !item.leaf { Native.Icon(p,.{marker.x,yy+8.0,16.0,16.0},ifx item.expanded then "pan-down-symbolic" else "pan-end-symbolic",state) }
+        Native.Label(p,label,item.label,"sidebar",state)
+    }
+    p.clip=p.bounds
     view.tree_scroll = result.scroll_offset
     view.tree_horizontal = result.horizontal_offset
     view.tree_horizontal_max = result.horizontal_max_scroll
@@ -996,19 +1107,19 @@ DrawDirectoryTreeInPane :: (host: *Host, view: *PaneView, session: UI.Session, s
     manager := ActiveManager(host)
 
     if !SyncTree(host) { return false }
-    enabled := focused && manager.prompt == .PromptNone
-    if Button(session, 211, "Refresh branch", .{sidebar.x, sidebar.y + 30.0, sidebar.width, 32.0}, enabled) {
+    enabled := focused && !PaneLocked(host)
+    if Button(host, session, 211, "Refresh branch", .{sidebar.x, sidebar.y + 30.0, sidebar.width, 32.0}, enabled) {
         TreeResult(host, LocalTree.Expand(*view.directory_tree, view.directory_tree.selected))
         view.tree_reveal = true
     }
     if view.tree_horizontal_max > 0 {
         y := sidebar.y + sidebar.height - 30.0
-        if Button(session, 213, "Left", .{sidebar.x, y, 74.0, 30.0}, enabled && view.tree_horizontal > 0) {
+        if Button(host, session, 213, "Left", .{sidebar.x, y, 74.0, 30.0}, enabled && view.tree_horizontal > 0) {
             view.tree_horizontal -= 64
             if view.tree_horizontal < 0 { view.tree_horizontal = 0 }
             view.tree_focused = false
         }
-        if Button(session, 214, "Right", .{sidebar.x + 78.0, y, 72.0, 30.0}, enabled && view.tree_horizontal < view.tree_horizontal_max) {
+        if Button(host, session, 214, "Right", .{sidebar.x + 78.0, y, 72.0, 30.0}, enabled && view.tree_horizontal < view.tree_horizontal_max) {
             if view.tree_horizontal < view.tree_horizontal_max - 64 { view.tree_horizontal += 64 }
             else { view.tree_horizontal = view.tree_horizontal_max }
             view.tree_focused = false
@@ -1045,23 +1156,23 @@ DrawBookmarks :: (host: *Host, session: UI.Session, sidebar: Rectangle, focused:
     enabled := focused && manager.prompt == .PromptNone
     Text(session, TextProps.{.key = cast(u64)200, .bounds = .{sidebar.x, y, sidebar.width, 24.0},
         .text = "Bookmarks", .font = 16})
-    if Button(session, 201, "Add current", .{sidebar.x, y + 28.0, sidebar.width, 30.0}, enabled) {
+    if Button(host, session, 201, "Add current", .{sidebar.x, y + 28.0, sidebar.width, 30.0}, enabled) {
         ok := Bookmarks.Add(*host.bookmarks, manager.cwd)
         BookmarkResult(host, ok)
         if ok { host.bookmark_selected = Bookmarks.Find(*host.bookmarks, manager.cwd) }
     }
-    if Button(session, 202, "Rename", .{sidebar.x, y + 62.0, 74.0, 30.0}, enabled) {
+    if Button(host, session, 202, "Rename", .{sidebar.x, y + 62.0, 74.0, 30.0}, enabled) {
         if host.bookmark_selected >= 0 && host.bookmark_selected < host.bookmarks.document.rows.count {
             OpenPrompt(host, .PromptBookmarkRename)
         } else { Model.SetError(manager, "Select a local bookmark first") }
     }
-    if Button(session, 203, "Remove", .{sidebar.x + 78.0, y + 62.0, 72.0, 30.0}, enabled) {
+    if Button(host, session, 203, "Remove", .{sidebar.x + 78.0, y + 62.0, 72.0, 30.0}, enabled) {
         ok := Bookmarks.Edit(*host.bookmarks, host.bookmark_selected, 1)
         BookmarkResult(host, ok)
         if ok { host.bookmark_selected = -1 }
     }
     for direction: cast(s32)0..1 {
-        if Button(session, 204 + direction, ifx direction == 0 then "Up" else "Down",
+        if Button(host, session, 204 + direction, ifx direction == 0 then "Up" else "Down",
             .{sidebar.x + cast(float32)(direction * 78), y + 96.0, 72.0, 30.0}, enabled) {
             previous := host.bookmark_selected
             target := previous + ifx direction == 0 then -1 else 1
@@ -1105,6 +1216,8 @@ ActivateEntryInPane :: (host: *Host, view: *PaneView, row: s32) {
     if row < 0 || row >= manager.entries.count { return }
     if Model.EntryIsDirectory(manager, row) {
         unused Model.OpenPathTracked(manager, Model.EntryPath(manager, row))
+    } else if Model.IsUri(Model.EntryPath(manager,row)) {
+        if !Opener.OpenUri(Model.EntryPath(manager,row)) { Model.SetError(manager,"The default application could not be started.") }
     } else {
         OpenPreview(host, Model.EntryPath(manager, row))
         if host.preview.kind != .Image && !Preview.ImagePath(Model.EntryPath(manager, row)) {
@@ -1178,7 +1291,12 @@ SortForColumn :: (column: s32) -> Model.SortMode {
     return .SortName
 }
 
-FileGridProps :: (manager: *Model.Manager, session: UI.Session, bounds: Rectangle) -> GridMultiProps {
+ZoomIcon :: (view: *PaneView, mode: Model.ViewMode) -> s32 {
+    sizes: [12]s32=.[16,24,32,48,64,96,128,160,192,256,512,1024]
+    return sizes[view.zoom[cast(s32)mode]]
+}
+
+FileGridProps :: (manager: *Model.Manager, session: UI.Session, bounds: Rectangle, view: *PaneView) -> GridMultiProps {
     props: GridMultiProps
     // ScrollDevice ownership uses raw keys, so include this retained Host
     // scope's identity when several Hosts share one UI session.
@@ -1189,12 +1307,90 @@ FileGridProps :: (manager: *Model.Manager, session: UI.Session, bounds: Rectangl
     props.cell_width = ifx manager.view_mode == .ViewCompact then 192 else 128
     props.cell_height = ifx manager.view_mode == .ViewCompact then 32 else 104
     props.image_size = ifx manager.view_mode == .ViewCompact then 18 else 48
+    if view.zoom[cast(s32)manager.view_mode]!=3 {
+        props.image_size=ZoomIcon(view,manager.view_mode)
+        props.cell_height=props.image_size+ifx manager.view_mode==.ViewCompact then 14 else 56
+        props.cell_width=props.image_size+ifx manager.view_mode==.ViewCompact then 174 else 80
+    }
     props.gap = 4
     props.padding = 6
     props.cursor = manager.cursor
     props.anchor = manager.anchor
     props.scroll_offset = manager.scroll
     return props
+}
+
+// The native scroller owns its border and bar allocations. Callers supply the
+// already inset content box, so restore only the queried CSS border here.
+PrepareNativeScroll :: (view: *PaneView, session: Session, bounds: Rectangle,
+    width: s32, height: s32, offset_x: s32, offset_y: s32,
+    horizontal: bool, vertical: bool, focused: bool, dispatch: bool=true) -> Rectangle {
+    nodes:=Native.ScrollNodes()
+    if view.native_scroll==0 { view.native_scroll=NativeScroll.GtkScrollCreate(nodes[:]) }
+    // Native motion belongs to this pane. A retained drag keeps its outside
+    // coordinates; footer or sidebar motion must let GTK conceal the bar.
+    captured:=view.native_scroll_metrics.dragging
+    view.native_scroll_metrics=.{}
+    if view.native_scroll==0 { return bounds }
+    if !focused { unused NativeScroll.GtkScrollCancel(view.native_scroll) }
+    border:=Gtk.GtkStyleQuery(nodes[:],1).border
+    view.native_scroll_origin=.{bounds.x-cast(float32)border.left,bounds.y-cast(float32)border.top}
+    pointer:=Input.PointerSample(session)
+    view.native_scroll_props=.{.width=cast(s32)bounds.width+border.left+border.right,
+        .height=cast(s32)bounds.height+border.top+border.bottom,
+        .content_width=width,.content_height=height,.offset_x=offset_x,.offset_y=offset_y,
+        .horizontal=horizontal,.vertical=vertical,.overlay=true,
+        .pointer_present=focused && (captured || (pointer.x>=view.native_scroll_origin.x &&
+            pointer.y>=view.native_scroll_origin.y &&
+            pointer.x<view.native_scroll_origin.x+bounds.width+cast(float32)(border.left+border.right) &&
+            pointer.y<view.native_scroll_origin.y+bounds.height+cast(float32)(border.top+border.bottom))),
+        .pointer_x=cast(float64)(pointer.x-view.native_scroll_origin.x),
+        .pointer_y=cast(float64)(pointer.y-view.native_scroll_origin.y),.down=focused && pointer.down,
+        .pressed=dispatch && focused && pointer.pressed,.released=dispatch && pointer.released}
+    view.native_scroll_metrics=NativeScroll.GtkScrollUpdate(view.native_scroll,view.native_scroll_props)
+    metrics:=view.native_scroll_metrics
+    if !metrics.available { return bounds }
+    return .{view.native_scroll_origin.x+cast(float32)metrics.viewport.x,
+        view.native_scroll_origin.y+cast(float32)metrics.viewport.y,
+        cast(float32)metrics.viewport.width,cast(float32)metrics.viewport.height}
+}
+
+ApplyNativeWheel :: (host: *Host, view: *PaneView, session: Session, key: u64, body: Rectangle, horizontal: bool, focused: bool) -> bool {
+    if !focused || !view.native_scroll_metrics.available || view.native_scroll_metrics.dragging { return false }
+    zoom:=Input.KeyboardModifiers(session)==KeyModifierControl
+    bar:=ifx horizontal then view.native_scroll_metrics.horizontal else view.native_scroll_metrics.vertical
+    delta:=ScrollDevice.ScrollWheelTake(session,key,body,zoom || bar.upper>bar.page_size,horizontal)
+    if delta==0.0 { return false }
+    ScrollDevice.ScrollDeviceStopMotion(session,key)
+    if zoom { ChangeZoom(host,ifx delta>0 then 1 else -1); return true }
+    view.native_scroll_metrics=NativeScroll.GtkScrollWheel(view.native_scroll,cast(float64)delta,horizontal)
+    return view.native_scroll_metrics.available
+}
+
+FinishNativeScroll :: (view: *PaneView, session: Session, offset_x: s32, offset_y: s32, focused: bool) {
+    if !view.native_scroll_metrics.available { return }
+    // Pointer motion and edges were dispatched once in the geometry pass.
+    // This pass synchronizes wheel/navigation offsets without another event.
+    view.native_scroll_props.offset_x=offset_x; view.native_scroll_props.offset_y=offset_y
+    view.native_scroll_props.pressed=false
+    view.native_scroll_props.released=false
+    view.native_scroll_metrics=NativeScroll.GtkScrollUpdate(view.native_scroll,view.native_scroll_props)
+}
+
+PaintNativeScroll :: (view: *PaneView, session: Session, p: *GtkPainter, focused: bool) {
+    if !view.native_scroll_metrics.available { return }
+    for axis: cast(s32)0..1 {
+        horizontal:=axis==0
+        bar:=ifx horizontal then view.native_scroll_metrics.horizontal else view.native_scroll_metrics.vertical
+        if !bar.visible || bar.bounds.width<1 || bar.bounds.height<1 { continue }
+        bounds:=Rectangle.{view.native_scroll_origin.x+cast(float32)bar.bounds.x,
+            view.native_scroll_origin.y+cast(float32)bar.bounds.y,cast(float32)bar.bounds.width,cast(float32)bar.bounds.height}
+        unused GtkPainterScrollOver(p,view.native_scroll,bounds,horizontal)
+        node:=TreeSubmitCurrent(session,cast(u64)0xfff7000000000000+cast(u64)axis,cast(s32)WidgetKindSlider,bounds)
+        TreeSetInteractive(session,node,!focused,false,0)
+        TreeSetDragCapture(session,node,true)
+        TreeSetCursor(session,node,1)
+    }
 }
 
 DrawFileGrid :: (host: *Host, session: UI.Session, bounds: Rectangle,
@@ -1215,19 +1411,37 @@ DrawFileGridInPane :: (host: *Host, view: *PaneView, session: UI.Session, bounds
     for index: cast(s32)0..cast(s32)manager.entries.count - 1 {
         view.grid_items[index].key = manager.entries[index].key
         view.grid_items[index].label = Model.EntryCaption(manager, index)
-        icon := cast(s32)IconType.IconManual
-        if Model.EntryIsDirectory(manager, index) { icon = cast(s32)IconType.IconHome }
-        else if manager.entries[index].info.kind == .Link { icon = cast(s32)IconType.IconLink }
-        view.grid_items[index].image = ImageForIcon(icon, .{}, Model.EntryType(*manager.entries[index]))
-        view.grid_items[index].image.tint = host.palette.text
-        if !Model.EntryIsDirectory(manager, index) && Preview.ImagePath(Model.EntryPath(manager, index)) {
-            view.grid_items[index].image = ImageProps.{.asset_path = Model.EntryPath(manager, index),
-                .alt_text = Model.EntryCaption(manager, index), .fit = .ImageFitContain,
-                .tint = cast(u32)0xffffffff, .smooth = true}
+
+    }
+    bounds=Native.DetailsFrame(*host.paint,bounds)
+    props := FileGridProps(manager, session, bounds,view)
+    // GTK determines the viewport and whether bars consume allocation. Repeat
+    // layout for a non-overlay bar, dispatching native input only on pass zero.
+    original:=bounds
+    for pass: cast(s32)0..1 {
+        layout:=GridLayout.GridMultiMeasure(props,cast(s32)manager.entries.count)
+        width:=ifx layout.compact then layout.content_extent else cast(s32)props.bounds.width
+        height:=ifx layout.compact then cast(s32)props.bounds.height else layout.content_extent
+        bounds=PrepareNativeScroll(view,session,original,width,height,
+            ifx layout.compact then manager.scroll else 0,ifx layout.compact then 0 else manager.scroll,
+            layout.compact,!layout.compact,focused,pass==0)
+        props.bounds=bounds
+        if view.native_scroll_metrics.available {
+            manager.scroll=cast(s32)(ifx layout.compact then view.native_scroll_metrics.horizontal.value else view.native_scroll_metrics.vertical.value)
         }
     }
-    props := FileGridProps(manager, session, bounds)
+    if ApplyNativeWheel(host,view,session,props.key,bounds,manager.view_mode==.ViewCompact,focused) {
+        manager.scroll=cast(s32)(ifx manager.view_mode==.ViewCompact then view.native_scroll_metrics.horizontal.value else view.native_scroll_metrics.vertical.value)
+    }
+    props.scroll_offset=manager.scroll
+    props.external_scrollbar=view.native_scroll_metrics.available
+    props.preserve_scroll_on_focus=true
+    props.immediate_wheel=true
+    props.invisible=true
     props.focused = focused
+    // Keep the grid active during native capture: toggling disabled would
+    // re-reveal the selected item on release and undo the dragged offset.
+    // The native bar's retained slider node owns pointer hit testing.
     props.disabled = !focused
     props.control = (modifiers & KeyModifierControl) != 0
     props.shift = (modifiers & KeyModifierShift) != 0
@@ -1249,8 +1463,49 @@ DrawFileGridInPane :: (host: *Host, view: *PaneView, session: UI.Session, bounds
     manager.cursor = result.cursor
     manager.anchor = result.anchor
     manager.scroll = result.scroll_offset
+    compact:=manager.view_mode==.ViewCompact
+    FinishNativeScroll(view,session,ifx compact then manager.scroll else 0,ifx compact then 0 else manager.scroll,focused)
+    if view.native_scroll_metrics.available {
+        manager.scroll=cast(s32)(ifx compact then view.native_scroll_metrics.horizontal.value else view.native_scroll_metrics.vertical.value)
+        result.scroll_offset=manager.scroll
+    }
+    DrawNativeGrid(host,manager,bounds,props,result)
+    PaintNativeScroll(view,session,*host.paint,focused)
     if result.activated_index >= 0 { ActivateEntry(host, result.activated_index) }
     else if result.clicked_index >= 0 { EntryClick(host, result.clicked_index, modifiers) }
+}
+
+DrawNativeGrid :: (host: *Host, manager: *Model.Manager, bounds: Rectangle, props: GridMultiProps, result: GridMultiResult) {
+    p:=*host.paint
+    nodes:=Native.Nodes("treeview")
+    nodes[2].widget_type="GtkIconView"; nodes[2].element="iconview"
+    GtkPainterPaint(p,nodes[:],bounds)
+    metrics:=GridLayout.GridMultiMeasure(props,cast(s32)manager.entries.count)
+    previous_clip:=p.clip; p.clip=RectangleIntersection(previous_clip,bounds)
+    for i: cast(s32)0..cast(s32)manager.entries.count-1 {
+        cell:=GridLayout.GridMultiCellBounds(metrics,i,result.scroll_offset)
+        if cell.x+cell.width<bounds.x || cell.y+cell.height<bounds.y || cell.x>bounds.x+bounds.width || cell.y>bounds.y+bounds.height { continue }
+        state: u32=ifx manager.selected[i] then cast(u32)Gtk.GtkStyleSelected else cast(u32)0
+        nodes[2].state=state
+        GtkPainterPaint(p,nodes[:],cell)
+        size:=cast(float32)props.image_size
+        icon:=Rectangle.{cell.x+(cell.width-size)*0.5,cell.y+4.0,size,size}
+        label:=Rectangle.{cell.x+4.0,cell.y+size+8.0,cell.width-8.0,cell.height-size-12.0}
+        if metrics.compact { icon=.{cell.x+4.0,cell.y+(cell.height-size)*0.5,size,size}; label=.{cell.x+size+8.0,cell.y,cell.width-size-12.0,cell.height} }
+        path:=Model.EntryPath(manager,i)
+        entry:=manager.entries[i]
+        revision:=cast(u64)entry.info.modified ^ cast(u64)entry.info.modified_nanoseconds
+        if entry.icon_serialized!="" { Native.SerializedIcon(p,icon,entry.icon_serialized,revision) }
+        else { Native.FileIcon(p,icon,path,false,revision) }
+        if !Model.IsUri(path) {
+            if !Model.EntryIsDirectory(manager,i) && Preview.ImagePath(path) { GtkPainterPaint(p,nodes[:],icon,path,4,0,revision) }
+            link:=TabPaths.PathQuery(path,false).info.kind==.Link
+            Native.FileEmblems(p,.{icon.x-1.0,icon.y-1.0,icon.width+2.0,icon.height+2.0},icon,link,link && !TabPaths.PathQuery(path).valid)
+        }
+        GtkPainterPaint(p,nodes[:],label,Model.EntryCaption(manager,i),1,ifx metrics.compact then 0 else 1)
+    }
+    p.clip=previous_clip
+    Native.DetailsUndershoot(p,bounds,result.scroll_offset,metrics.content_extent,metrics.compact)
 }
 
 DrawDetails :: (host: *Host, session: UI.Session, bounds: Rectangle,
@@ -1263,89 +1518,230 @@ DrawDetails :: (host: *Host, session: UI.Session, bounds: Rectangle,
     DrawDetailsInPane(host, *host.view, session, bounds, key, modifiers, focused, pane_index)
 }
 
+DetailsData :: (manager: *Model.Manager, index: s32, data: *DetailsCells) {
+    entry:=*manager.entries[index]
+    data.cells[0]=entry.caption
+    size_length:=Gtk.GtkFormatFileSize(cast(u64)entry.info.size,data.size[:])
+    data.cells[1]=ifx size_length>0 && !Model.EntryIsDirectory(manager,index) then TextView(data.size[:size_length]) else ""
+    if data.path_key!=entry.key || data.stamp!=entry.info.modified || data.stamp_ns!=entry.info.modified_nanoseconds || data.size_value!=entry.info.size {
+        type_buffer: [512]u8
+        length:=ifx entry.content_type!="" then Gtk.GtkContentDescription(entry.content_type,type_buffer[:]) else ifx Model.IsUri(entry.path) then 0 else Gtk.GtkFileDescription(entry.path,type_buffer[:])
+        description:=ifx length>0 then TextView(type_buffer[:length]) else Model.EntryType(entry)
+        target: [4096]u8
+        target_length:=ifx Model.IsUri(entry.path) then -1 else Gtk.GtkFileLinkTarget(entry.path,target[:])
+        data.link=target_length>=0
+        data.broken=data.link && !TabPaths.PathQuery(entry.path).valid
+        b: Vec(u8)
+        if data.broken { description="broken link" }
+        unused BuilderAppend(b,description)
+        if data.link && !data.broken {
+            caption: Text=FileDisplay.Caption(TextView(target[:target_length]))
+            BuilderPrint(*b," (link to %)",TextView(caption))
+        }
+        data.description_length=CopyInto(data.description[:],TextView(b[:]))
+        VecFree(b)
+        data.path_key=entry.key; data.stamp=entry.info.modified
+        data.stamp_ns=entry.info.modified_nanoseconds; data.size_value=entry.info.size
+    }
+    data.cells[2]=TextView(data.description[:data.description_length])
+    date_length:=Gtk.GtkFormatFileDate(entry.info.modified,data.modified[:],.RelativeDate,-1,"thunar")
+    data.cells[3]=ifx date_length>0 then TextView(data.modified[:date_length]) else ""
+}
+
+MeasureDetailsColumns :: (manager: *Model.Manager, view: *PaneView, bounds: Rectangle) {
+    if view.columns_resized { return }
+    today:=DateTime.LocalNow()
+    signature:=cast(u64)manager.entries.count+1
+    signature=signature ^ cast(u64)(today.year*512+today.month*32+today.day)
+    for entry: manager.entries {
+        signature=(signature ^ entry.key ^ cast(u64)entry.info.modified ^ cast(u64)entry.info.modified_nanoseconds ^ cast(u64)entry.info.size)*cast(u64)1099511628211
+    }
+    generation:=Gtk.GtkStyleGeneration()
+    count:=cast(s32)manager.entries.count
+    if signature!=view.columns_signature || generation!=view.columns_generation {
+        if !VecResize(view.column_values,cast(s64)count) { return }
+        for index: cast(s32)0..count-1 { DetailsData(manager,index,*view.details_cells[index]) }
+        headers: [4]string=.["Name","Size","Type","Date Modified"]
+        tree:=Native.Nodes("treeview"); header:=Native.HeaderNodes()
+        style:=Gtk.GtkStyleQuery(tree[:],1)
+        for column: cast(s32)0..3 {
+            header[4].sibling_count=4; header[4].sibling_index=column
+            preferred:=Gtk.GtkWidgetMeasure(header[:],headers[column],true)
+            if column==0 {
+                if preferred.available { view.name_minimum=preferred.minimum_width }
+            } else if preferred.available && preferred.minimum_width>view.column_widths[column] { view.column_widths[column]=preferred.minimum_width }
+            for index: cast(s32)0..count-1 { view.column_values[index]=view.details_cells[index].cells[column] }
+            cell:=Gtk.GtkCellTextMeasureMany(tree[:],view.column_values[:],ifx column==0 then 60 else -1,column==0)
+            if column==0 {
+                icon:=ifx view.zoom[cast(s32)manager.view_mode]==3 then cast(s32)Native.DetailsIconSize() else ZoomIcon(view,.ViewList)
+                width:=cell.minimum_width+icon+style.horizontal_separator+2
+                if cell.available && width>view.name_minimum { view.name_minimum=width }
+                if view.name_minimum<50 { view.name_minimum=50 }
+                continue
+            }
+            width:=cell.natural_width+style.horizontal_separator
+            if cell.available && width>view.column_widths[column] { view.column_widths[column]=width }
+        }
+        view.columns_signature=signature; view.columns_generation=generation
+    }
+    name_width:=cast(s32)bounds.width-view.column_widths[1]-view.column_widths[2]-view.column_widths[3]
+    if name_width<view.name_minimum { name_width=view.name_minimum }
+    view.column_widths[0]=name_width
+}
+
 DrawDetailsInPane :: (host: *Host, view: *PaneView, session: UI.Session, bounds: Rectangle,
     key: s32, modifiers: s32, focused: bool, pane_index: s32 = -1) {
     manager := PaneManager(host, pane_index)
 
-    columns: [4]string = .["Name", "Size (bytes)", "Type", "Modified"]
+    p := *host.paint
+    bounds=Native.DetailsFrame(p,bounds)
+    columns: [4]string = .["Name","Size","Type","Date Modified"]
     count := cast(s32)manager.entries.count
-    // Resize before borrowing any cell buffers: large directories must not
-    // overflow a fixed stack array or lose selection flags offscreen.
-    if !VecResize(view.details_cells, cast(s64)count) ||
-        !VecResize(view.details_rows, cast(s64)count) { return }
-    for index: cast(s32)0..count - 1 {
-        entry: *Model.Entry = *manager.entries[index]
-        data := *view.details_cells[index]
-        data.cells[0] = entry.caption
-        data.cells[1] = Number.FormatInteger(entry.info.size, data.size[:])
-        if Model.EntryIsDirectory(manager, index) { data.cells[1] = "—" }
-        data.cells[2] = Model.EntryType(entry)
-        data.cells[3] = Calendar.FormatDateTime(DateTime.LocalAt(entry.info.modified),
-            "%Y-%m-%d %H:%M:%S", data.modified[:])
-        view.details_rows[index].cells = data.cells[:]
+    if !VecResize(view.details_cells,cast(s64)count) { return }
+    MeasureDetailsColumns(manager,view,bounds)
+    Native.Surface(p,bounds,"treeview")
+    header_height:=Native.HeaderHeight()
+    body := Rectangle.{bounds.x,bounds.y+header_height,bounds.width,bounds.height-header_height}
+    icon_size: float32=ifx view.zoom[cast(s32)Model.ViewMode.ViewList]==3 then Native.DetailsIconSize() else cast(float32)ZoomIcon(view,.ViewList)
+    icon_delta:=icon_size-Native.DetailsIconSize()
+    row_height:=Native.DetailsRowHeight()+cast(s32)icon_delta
+    content_width: s32
+    for width: view.column_widths { content_width+=width }
+    body=PrepareNativeScroll(view,session,body,content_width,count*row_height,
+        view.details_scroll_x,manager.scroll,true,true,focused)
+    if view.native_scroll_metrics.available {
+        manager.scroll=cast(s32)view.native_scroll_metrics.vertical.value
+        view.details_scroll_x=cast(s32)view.native_scroll_metrics.horizontal.value
     }
-    props: Tables.TableViewProps
-    props.key = cast(u64)40
-    props.bounds = bounds
-    props.columns = columns[:]
-    props.rows = view.details_rows[:]
-    props.column_widths = view.column_widths[:]
-    props.resizable = true
-    props.min_column_width = 60
-    props.row_height = 32
-    props.header_height = 32
-    props.multi_select = true
-    props.selection = manager.selected[:]
-    props.focused_row = manager.cursor
-    props.anchor = manager.anchor
-    props.selected_row = -1
-    props.selected_column = -1
-    props.sort_column = SortColumn(manager.sort_mode)
-    props.sort_direction = ifx manager.sort_reverse then -1 else 1
-    props.disabled = !focused
-    state := Tables.TableViewResult.{.focused_row = manager.cursor, .anchor = manager.anchor}
-    navigated := false
+    if content_width<cast(s32)body.width { content_width=cast(s32)body.width }
+    header := Rectangle.{body.x,bounds.y,body.width,header_height}
+    Native.Surface(p,header,"toolbar")
+    previous_clip:=p.clip
+    p.clip=RectangleIntersection(previous_clip,header)
+    x := body.x-cast(float32)view.details_scroll_x
+    for column: cast(s32)0..3 {
+        width := cast(float32)view.column_widths[column]
+        if column == 3 { width=body.x-cast(float32)view.details_scroll_x+cast(float32)content_width-x }
+        resize_key:=cast(u64)0xffff000000000000 | cast(u64)column
+        previous:=TreePrevious(session,TreeCurrentParent(session),resize_key,cast(s32)WidgetKindSlider)
+        drag:=Input.TreeTakeDragAt(session,previous)
+        if column<3 && focused && (drag.active || drag.ended) {
+            width=drag.x-drag.grab_x-x+3.0
+            if width<60.0 { width=60.0 }
+            view.column_widths[column]=cast(s32)width
+            view.columns_resized=true
+        }
+        if Native.Header(p,cast(u64)(60+column),.{x,header.y,width,header_height},columns[column],SortColumn(manager.sort_mode)==column,manager.sort_reverse,focused) {
+            mode := SortForColumn(column)
+            Model.SetSort(manager,mode,ifx mode==manager.sort_mode then !manager.sort_reverse else false)
+            view.last_click_ms=0
+        }
+        x+=width
+    }
+    // Dividers are above both neighboring header buttons for hit testing.
+    x=body.x-cast(float32)view.details_scroll_x
+    for column: cast(s32)0..2 {
+        x+=cast(float32)view.column_widths[column]
+        node:=TreeSubmitCurrent(session,cast(u64)0xffff000000000000 | cast(u64)column,cast(s32)WidgetKindSlider,.{x-3.0,header.y,6.0,header.height})
+        TreeSetInteractive(session,node,!focused,false,column+800)
+        TreeSetCursor(session,node,5)
+    }
+    p.clip=previous_clip
+    parent := TreeSubmittedNodeAt(session, TreeCurrentParent(session))
+    scroll_key := TreeIdentityHash(parent.identity_generation, cast(u64)40, 2147483646)
+    state := Tables.TableViewResult.{.focused_row=manager.cursor,.anchor=manager.anchor}
+    navigated := focused && (key==KeyHome || key==KeyEnd || key==KeyUp || key==KeyDown)
     if focused && count > 0 {
         row := manager.cursor
-        if row < 0 { row = 0 }
-        control := (modifiers & KeyModifierControl) != 0
-        shift := (modifiers & KeyModifierShift) != 0
-        navigated = key == KeyHome || key == KeyEnd || key == KeyUp || key == KeyDown
-        if key == KeyHome { row = 0 }
-        if key == KeyEnd { row = count - 1 }
-        if key == KeyUp && row > 0 { row -= 1 }
-        if key == KeyDown && row < count - 1 { row += 1 }
-        if navigated {
-            state = Tables.TableViewMultiSelect(manager.selected[:], count, state,
-                row, control, shift, control && !shift)
-        } else if key == 32 || key == KeyEnter {
-            state = Tables.TableViewMultiSelect(manager.selected[:], count, state,
-                row, key == 32, false)
+        if row < 0 { row=0 }
+        if key==KeyHome { row=0 } else if key==KeyEnd { row=count-1 }
+        else if key==KeyUp && row > 0 { row-=1 } else if key==KeyDown && row<count-1 { row+=1 }
+        control := (modifiers & KeyModifierControl)!=0
+        shift := (modifiers & KeyModifierShift)!=0
+        if navigated { state=Tables.TableViewMultiSelect(manager.selected[:],count,state,row,control,shift,control && !shift) }
+        else if key==32 { state=Tables.TableViewMultiSelect(manager.selected[:],count,state,row,true,false) }
+        manager.cursor=state.focused_row; manager.anchor=state.anchor
+    }
+    if manager.reveal_focus || navigated || key==32 || key==KeyEnter {
+        maximum := count*row_height-cast(s32)body.height
+        if maximum<0 { maximum=0 }
+        manager.scroll=Tables.TableViewSelectionScrollOffset(manager.cursor,0,row_height,cast(s32)body.height,manager.scroll,maximum)
+        manager.reveal_focus=false
+        ScrollDevice.ScrollDeviceStopMotion(session,scroll_key)
+    }
+    if ApplyNativeWheel(host,view,session,scroll_key,body,(modifiers & KeyModifierShift)!=0,focused) {
+        manager.scroll=cast(s32)view.native_scroll_metrics.vertical.value
+        view.details_scroll_x=cast(s32)view.native_scroll_metrics.horizontal.value
+    } else if focused && (modifiers & KeyModifierShift)!=0 && !view.native_scroll_metrics.available {
+        view.details_scroll_x-=cast(s32)(Input.PointerWheelTake(session,body)*48.0)
+    }
+    scroll := Scroll(session,ScrollProps.{.key=scroll_key,.bounds=body,.content_height=count*row_height,
+        .scroll_offset=manager.scroll,.manual_scroll=true,.external_scrollbar=view.native_scroll_metrics.available,.immediate_wheel=true,
+        .input=.{.disabled= !focused || view.native_scroll_metrics.dragging}})
+    manager.scroll=scroll.scroll_offset
+    FinishNativeScroll(view,session,view.details_scroll_x,manager.scroll,focused)
+    if view.native_scroll_metrics.available {
+        manager.scroll=cast(s32)view.native_scroll_metrics.vertical.value
+        view.details_scroll_x=cast(s32)view.native_scroll_metrics.horizontal.value
+    }
+    if scroll.opened {
+        if UI.Button(session,ButtonProps.{.key=cast(u64)649,.bounds=body,.invisible=true,.disabled= !focused})==1 { Model.ClearSelection(manager) }
+        first := manager.scroll/row_height
+        last := (manager.scroll+cast(s32)body.height+row_height-1)/row_height
+        if last>=count { last=count-1 }
+        activated: s32 = -1
+        for index: first..last {
+            yy := body.y+cast(float32)(index*row_height-manager.scroll)
+            // GTK clips partially visible rows through the same viewport.
+            row_bounds := Rectangle.{body.x,yy,body.width,cast(float32)row_height}
+            entry := *manager.entries[index]
+            previous:=TreePrevious(session,TreeCurrentParent(session),entry.key,cast(s32)WidgetKindSelectable)
+            clicked := focused && Input.TreeTakeActivationAt(session,previous)
+            node:=TreeSubmitCurrent(session,entry.key,cast(s32)WidgetKindSelectable,row_bounds)
+            TreeSetInteractive(session,node,!focused,false,index+1)
+            TreeSetSelected(session,node,manager.selected[index])
+            TreeSetLabel(session,node,entry.caption)
+            if clicked {
+                state=Tables.TableViewMultiSelect(manager.selected[:],count,state,index,(modifiers & KeyModifierControl)!=0,(modifiers & KeyModifierShift)!=0)
+                manager.cursor=state.focused_row; manager.anchor=state.anchor
+                activated=index
+            }
+            selected := manager.selected[index]
+            gtk_state: u32 = ifx selected then cast(u32)Gtk.GtkStyleSelected else cast(u32)0
+            if focused && Input.TreeHoveredAt(session,previous) { gtk_state |= cast(u32)Gtk.GtkStylePrelight }
+            // Avoid painting outside the scroll viewport into headers/footer.
+            p.clip=RectangleIntersection(previous_clip,body)
+            Native.Surface(p,row_bounds,"treeview",gtk_state)
+            x=body.x-cast(float32)view.details_scroll_x
+            data := *view.details_cells[index]
+            DetailsData(manager,index,data)
+            revision:=cast(u64)entry.info.modified ^ cast(u64)entry.info.modified_nanoseconds
+            icon_bounds:=Rectangle.{x+Native.DetailsIconX(),yy+Native.DetailsIconY(),icon_size,icon_size}
+            if entry.icon_serialized!="" { Native.SerializedIcon(p,icon_bounds,entry.icon_serialized,revision) }
+            else { Native.FileIcon(p,icon_bounds,entry.path,false,revision) }
+            if !Model.IsUri(entry.path) && !Model.EntryIsDirectory(manager,index) && Preview.ImagePath(entry.path) { nodes:=Native.Nodes("image"); GtkPainterPaint(p,nodes[:],icon_bounds,entry.path,4,0,revision) }
+            Native.FileEmblems(p,.{icon_bounds.x-1.0,yy+1.0,icon_size+2.0,icon_size+2.0},icon_bounds,data.link,data.broken)
+            scoped:=TreePushScope(session,node)
+            for column: cast(s32)0..3 {
+                width := cast(float32)view.column_widths[column]
+                if column==3 { width=body.x-cast(float32)view.details_scroll_x+cast(float32)content_width-x }
+                padding:=ifx column==0 then Native.DetailsTextX()+icon_delta else Native.DetailsCellPadding()
+                cell_bounds:=Rectangle.{x+padding,yy,width-padding-Native.DetailsCellPadding(),cast(float32)row_height}
+                if scoped { cell:=TreeSubmitCurrent(session,cast(u64)(column+1),cast(s32)WidgetKindText,cell_bounds); TreeSetLabel(session,cell,data.cells[column]) }
+                Native.Label(p,cell_bounds,data.cells[column],"treeview",gtk_state,ifx column==1 then 2 else 0)
+                x+=width
+            }
+            if scoped { End(session) }
         }
-        manager.cursor = state.focused_row
-        manager.anchor = state.anchor
-        props.focused_row = manager.cursor
-        props.anchor = manager.anchor
+        p.clip=previous_clip
+        End(session)
+        if activated >= 0 { EntryClick(host,activated,modifiers) }
     }
-    if manager.reveal_focus || navigated || key == 32 || key == KeyEnter {
-        body := cast(s32)bounds.height - 34
-        max_scroll := count * 32 - body
-        if max_scroll < 0 { max_scroll = 0 }
-        manager.scroll = Tables.TableViewSelectionScrollOffset(manager.cursor, 0,
-            32, body, manager.scroll, max_scroll)
-        manager.reveal_focus = false
-    }
-    props.scroll_offset = manager.scroll
-    result := Tables.TableView(session, props)
-    manager.cursor = result.focused_row
-    manager.anchor = result.anchor
-    manager.scroll = result.scroll_offset
-    if result.sort_column != props.sort_column || result.sort_direction != props.sort_direction {
-        Model.SetSort(manager, SortForColumn(result.sort_column), result.sort_direction < 0)
-        view.last_click_ms = 0
-    }
-    if focused && key == KeyEnter { ActivateEntry(host, manager.cursor) }
-    else if result.clicked_row >= 0 { EntryClick(host, result.clicked_row, modifiers) }
+    Native.DetailsUndershoot(p,body,manager.scroll,count*row_height)
+    Native.DetailsUndershoot(p,body,view.details_scroll_x,content_width,true)
+    PaintNativeScroll(view,session,p,focused)
+    if focused && key==KeyEnter { ActivateEntry(host,manager.cursor) }
+
 }
 
 PreviewStep :: (host: *Host, direction: s32) {
@@ -1463,14 +1859,14 @@ DrawPreviewInPane :: (host: *Host, view: *PaneView, session: UI.Session, viewpor
         .text = TextView(preview_caption), .font = 16, .wrap = .TextWrapEllipsis})
     x := viewport.x + 8.0
     y := viewport.y + 40.0
-    if Button(session, 82, "Previous", .{x, y, 76.0, 32.0}) { PreviewStep(host, -1) }
-    if Button(session, 83, "Next", .{x + 82.0, y, 62.0, 32.0}) { PreviewStep(host, 1) }
-    if Button(session, 84, "Open", .{x + 150.0, y, 78.0, 32.0}) || key == KeyEnter {
+    if Button(host, session, 82, "Previous", .{x, y, 76.0, 32.0}) { PreviewStep(host, -1) }
+    if Button(host, session, 83, "Next", .{x + 82.0, y, 62.0, 32.0}) { PreviewStep(host, 1) }
+    if Button(host, session, 84, "Open", .{x + 150.0, y, 78.0, 32.0}) || key == KeyEnter {
         if !Opener.OpenUri(TextView(state.path)) {
             Model.SetError(manager, "The default application could not be started.")
         }
     }
-    if Button(session, 85, "Close", .{viewport.x + viewport.width - 76.0, y, 68.0, 32.0}) {
+    if Button(host, session, 85, "Close", .{viewport.x + viewport.width - 76.0, y, 68.0, 32.0}) {
         Preview.Close(state)
         return
     }
@@ -1478,14 +1874,14 @@ DrawPreviewInPane :: (host: *Host, view: *PaneView, session: UI.Session, viewpor
     content_y := y + 40.0
     if viewport.width < 640.0 { controls_x = x; y += 38.0; content_y += 38.0 }
     if state.kind == .Image {
-        if Button(session, 86, "Fit", .{controls_x, y, 58.0, 32.0}) {
+        if Button(host, session, 86, "Fit", .{controls_x, y, 58.0, 32.0}) {
             state.zoom = 0; state.pan_x = 0.0; state.pan_y = 0.0
         }
-        if Button(session, 87, "100%", .{controls_x + 64.0, y, 62.0, 32.0}) {
+        if Button(host, session, 87, "100%", .{controls_x + 64.0, y, 62.0, 32.0}) {
             state.zoom = 100; state.pan_x = 0.0; state.pan_y = 0.0
         }
-        if Button(session, 88, "−", .{controls_x + 132.0, y, 42.0, 32.0}) { Preview.Zoom(state, -1) }
-        if Button(session, 89, "+", .{controls_x + 180.0, y, 42.0, 32.0}) { Preview.Zoom(state, 1) }
+        if Button(host, session, 88, "−", .{controls_x + 132.0, y, 42.0, 32.0}) { Preview.Zoom(state, -1) }
+        if Button(host, session, 89, "+", .{controls_x + 180.0, y, 42.0, 32.0}) { Preview.Zoom(state, 1) }
     }
     body := Rectangle.{viewport.x + 8.0, content_y, viewport.width - 16.0,
         viewport.y + viewport.height - 62.0 - content_y}
@@ -1591,7 +1987,7 @@ DrawPaneBody :: (host: *Host, session: Session, bounds: Rectangle, pane_index: s
         // Each pane owns its strip; global actions and location stay shared.
         if DrawTabs(host, session, .{bounds.x, bounds.y + 5.0, bounds.width - 36.0, 32.0},
             enabled, ifx active then key else 0, ifx active then modifiers else 0, pane_index) { key = 0 }
-        if Button(session, 15, "+", .{bounds.x + bounds.width - 32.0, bounds.y + 5.0, 32.0, 32.0}, enabled) {
+        if Button(host, session, 15, "+", .{bounds.x + bounds.width - 32.0, bounds.y + 5.0, 32.0, 32.0}, enabled) {
             unused ActivatePane(host, pane_index)
             unused Model.NewTab(manager)
         }
@@ -1603,7 +1999,6 @@ DrawPaneBody :: (host: *Host, session: Session, bounds: Rectangle, pane_index: s
 }
 
 RefreshTheme :: (host: *Host) {
-
     now := DateTime.UnixMilliseconds()
     if host.palette_loaded && now >= host.palette_ms && now - host.palette_ms < 1000 { return }
     colors := SystemTheme.SystemPaletteRead()
@@ -1613,6 +2008,461 @@ RefreshTheme :: (host: *Host) {
         .danger = colors.danger, .warning = colors.warning, .success = colors.success}
     host.palette_ms = now
     host.palette_loaded = true
+}
+
+DrawNativeChrome :: (host: *Host, session: Session, viewport: Rectangle, path: Rectangle, focused: bool, key: s32) {
+    p := *host.paint
+    manager := ActiveManager(host)
+    menu_height:=Native.MenuHeight()
+    if !host.menubar_hidden {
+    Native.Surface(p,.{viewport.x,viewport.y,viewport.width,menu_height},"menubar")
+    labels: [6]string = .["File","Edit","View","Go","Bookmarks","Help"]
+    x := viewport.x
+    for i: 0..5 {
+        width:=Native.MenuWidth(cast(s32)i)
+        pointer:=Input.PointerSample(session)
+        if focused && host.actions_open && (pointer.x!=host.menu_pointer.x || pointer.y!=host.menu_pointer.y) && pointer.x>=x && pointer.x<x+width && pointer.y>=viewport.y && pointer.y<viewport.y+menu_height && host.menu_index!=i+1 {
+            host.menu_index=cast(s32)i+1; host.menu_cursor=0
+            host.menu_pointer=.{pointer.x,pointer.y}
+        }
+        if Native.Control(p,cast(u64)(600+i),.{x,viewport.y,width,menu_height},labels[i],"",focused,host.actions_open && host.menu_index==i+1,false,true) {
+            open := !host.actions_open || host.menu_index != i+1
+            host.actions_open=open; host.menu_index=cast(s32)i+1
+            if open { host.menu_cursor=0; host.menu_pointer=.{pointer.x,pointer.y}; CapturePopupOwner(host) }
+        }
+        x += width
+    }
+    }
+    Native.Surface(p,.{viewport.x,viewport.y+menu_height,viewport.width,Native.ToolbarHeight()},"toolbar")
+    icons: [4]string = .["go-previous-symbolic","go-next-symbolic","go-up-symbolic","go-home-symbolic"]
+    navigation_labels: [4]string=.["Back","Forward","Up","Home"]
+    navigation_keys: [4]u64=.[1,616,2,3]
+    for i: 0..3 {
+        enabled := focused && manager.prompt == .PromptNone
+        if i == 0 { enabled = enabled && manager.back.count > 0 }
+        if i == 1 { enabled = enabled && manager.forward.count > 0 }
+        if Native.Control(p,navigation_keys[i],Native.ToolbarItem(viewport,cast(s32)i),navigation_labels[i],icons[i],enabled,false,false,true) {
+            if i == 0 { unused Model.NavigateBack(manager) }
+            else if i == 1 { unused Model.NavigateForward(manager) }
+            else if i == 2 { unused Model.NavigateUp(manager) }
+            else { unused Model.OpenPathTracked(manager,Model.HomePath()) }
+        }
+    }
+    if manager.prompt != .PromptLocation && host.pathbar && !Model.IsUri(manager.cwd) { DrawLocationBreadcrumb(host,session,path,focused,key) }
+    if manager.prompt != .PromptLocation && (!host.pathbar || Model.IsUri(manager.cwd)) {
+        Native.Surface(p,path,"entry")
+        location_text: Vec(u8)
+        unused BuilderAppend(location_text,manager.cwd)
+        if !host.location_without_slash && manager.cwd!="" && manager.cwd[manager.cwd.count-1]!=#char "/" { unused BuilderAppend(location_text,"/") }
+        caption: Text = FileDisplay.Caption(TextView(location_text[:]))
+        if UI.Button(session,ButtonProps.{.key=cast(u64)226,.bounds=path,.label=TextView(caption),.invisible=true,.disabled= !focused}) == 1 { OpenPrompt(host,.PromptLocation) }
+        location_icon:=Native.LocationIcon(path)
+        if Model.IsUri(manager.cwd) { Native.Icon(p,location_icon,ifx manager.cwd=="computer:///" then "computer" else ifx manager.cwd=="recent:///" then "document-open-recent" else "network-workgroup") }
+        else { Native.FileIcon(p,location_icon,manager.cwd) }
+        Native.Label(p,Native.LocationText(path),TextView(caption),"entry")
+    }
+    if Native.Control(p,cast(u64)614,Native.ToolbarItem(viewport,0,true),"Search","system-search-symbolic",focused,false,false,true) { OpenPrompt(host,.PromptSearch) }
+    status := NativeStatusBounds(host,viewport)
+    Native.Surface(p,status,"statusbar")
+    message: Vec(u8)
+    if manager.error != "" { caption: Text=FileDisplay.Caption(manager.error); unused BuilderAppend(message,TextView(caption)) }
+    else {
+        now:=DateTime.UnixMilliseconds()
+        path_key:=Model.PathKey(manager.cwd)
+        if host.free_path!=path_key || now<host.free_ms || now-host.free_ms>=1000 {
+            host.free_bytes=ifx Model.IsUri(manager.cwd) then -1 else Gtk.GtkFileSystemFree(manager.cwd); host.free_path=path_key; host.free_ms=now
+        }
+        unused Status.Append(manager,host.free_bytes,*message)
+    }
+    Native.StatusLabel(p,status,TextView(message[:]),manager.error!="")
+    node:=TreeSubmitCurrent(session,ifx manager.error!="" then cast(u64)21 else cast(u64)242,cast(s32)WidgetKindText,status)
+    TreeSetLabel(session,node,TextView(message[:]))
+    VecFree(message)
+}
+
+NativeStatusBounds :: (host: *Host, viewport: Rectangle) -> Rectangle {
+    manager:=ActiveManager(host)
+    height: float32=Native.StatusHeight()
+    if manager.prompt==.PromptLocation && viewport.width<520.0 { height=48.0 }
+    else if manager.error!="" {
+        if viewport.width<520.0 { height=44.0 }
+        nodes:=Native.Nodes("label")
+        caption: Text=FileDisplay.Caption(manager.error)
+        metrics:=Gtk.GtkTextMeasure(nodes[:],TextView(caption),cast(s32)(viewport.width-190.0),1)
+        if metrics.available && cast(float32)metrics.height+8.0>height { height=cast(float32)metrics.height+8.0 }
+    }
+    left: float32=ifx host.sidebar_hidden then 0.0 else 170.0+Native.PaneSeparatorWidth()
+    return .{viewport.x+left,viewport.y+viewport.height-height,viewport.width-left,height}
+}
+
+DrawNativePlaces :: (host: *Host, session: Session, sidebar: Rectangle, focused: bool) {
+    p := *host.paint; manager := ActiveManager(host)
+    Native.Surface(p,sidebar,"sidebar")
+    now := DateTime.UnixMilliseconds()
+    if manager.prompt != .PromptBookmarkRename && (now < host.bookmarks_ms || now-host.bookmarks_ms >= 1000) {
+        refreshed := Bookmarks.Refresh(*host.bookmarks)
+        if refreshed > 0 { host.bookmark_selected= -1 }
+        if refreshed < 0 { BookmarkResult(host,false) }
+        host.bookmarks_ms=now
+    }
+    if now<host.mounts_ms || now-host.mounts_ms>=1000 {
+        unused DesktopLocations.OpenMounts(*host.mounts); host.mounts_ms=now
+        icon: Text=DesktopLocations.IconForUri("trash:///")
+        if icon.bytes.count>0 { VecSwap(host.trash_icon.bytes,icon.bytes) }
+        VecFree(icon.bytes)
+    }
+    desktop:=Gtk.GtkUserDirectory(0)
+    has_desktop:=desktop!="" && desktop!=Model.HomePath() && TabPaths.PathQuery(desktop).info.kind==.Directory
+    route_key:=Model.PathKey(manager.cwd)
+    if host.places_route!=route_key {
+        host.places_route=route_key; host.places_key=0; host.location_without_slash=false
+        if manager.cwd==Model.HomePath() { host.places_key=31 }
+        else if has_desktop && manager.cwd==desktop { host.places_key=37 }
+        else if manager.cwd=="/" { host.places_key=32 }
+        else if manager.cwd==Model.TrashDirectory(false) { host.places_key=33 }
+        else if manager.cwd=="computer:///" { host.places_key=34 }
+        else if manager.cwd=="recent:///" { host.places_key=35 }
+        else if manager.cwd=="network:///" { host.places_key=36 }
+        else {
+            for i: cast(s32)0..cast(s32)host.bookmarks.document.rows.count-1 {
+                if manager.cwd==host.bookmarks.document.rows[i].path { host.places_key=cast(u64)(700+i); break }
+            }
+            for mount: host.mounts.entries {
+                if manager.cwd==mount.local_path || manager.cwd==mount.uri { host.places_key=mount.key; break }
+            }
+        }
+    }
+    heading_height:=Native.PlacesHeadingHeight(); row_height:=Native.PlacesRowHeight()
+    total:=cast(s32)(heading_height*3.0+cast(float32)(6+cast(s64)has_desktop+host.bookmarks.document.rows.count+host.mounts.entries.count)*row_height)
+    scroll:=Scroll(session,ScrollProps.{.key=cast(u64)206,.bounds=sidebar,.content_height=total,
+        .scroll_offset=host.bookmark_scroll,.manual_scroll=true})
+    host.bookmark_scroll=scroll.scroll_offset
+    if !scroll.opened { return }
+    saved_clip:=p.clip; p.clip=sidebar
+    y:=sidebar.y-cast(float32)host.bookmark_scroll
+    Native.Heading(p,.{sidebar.x+10.0,y,sidebar.width-20.0,heading_height},"<b>Places</b>")
+    y+=heading_height
+    width:=scroll.content.width
+    if Native.Control(p,cast(u64)34,.{sidebar.x,y,width,row_height},"Computer","computer",focused,host.places_key==34,true) { OpenPlace(host,"computer:///",34) }
+    y+=row_height
+    home: Text = FileDisplay.Caption(TabPaths.PathName(Model.HomePath()))
+    if Native.Control(p,cast(u64)31,.{sidebar.x,y,width,row_height},TextView(home),"go-home",focused,host.places_key==31,true) { OpenPlace(host,Model.HomePath(),31) }
+    VecFree(home.bytes); y+=row_height
+    if has_desktop {
+        if Native.Control(p,cast(u64)37,.{sidebar.x,y,width,row_height},"Desktop","user-desktop",focused,host.places_key==37,true) { OpenPlace(host,desktop,37) }
+        y+=row_height
+    }
+    if Native.Control(p,cast(u64)35,.{sidebar.x,y,width,row_height},"Recent","document-open-recent",focused,host.places_key==35,true) { OpenPlace(host,"recent:///",35) }
+    y+=row_height
+    if Native.Control(p,cast(u64)33,.{sidebar.x,y,width,row_height},"Trash","user-trash",focused,host.places_key==33,true,false,TextView(host.trash_icon)) { OpenPlace(host,Model.TrashDirectory(false),33) }
+    y+=row_height
+    for i: cast(s32)0..cast(s32)host.bookmarks.document.rows.count-1 {
+        row:=host.bookmarks.document.rows[i]
+        if Native.Control(p,cast(u64)(700+i),.{sidebar.x,y,width,row_height},row.caption,"folder",focused,host.places_key==cast(u64)(700+i),true,false,row.path,true) {
+            host.bookmark_selected=i; OpenPlace(host,row.path,cast(u64)(700+i))
+        }
+        y+=row_height
+    }
+    Native.Heading(p,.{sidebar.x+10.0,y,sidebar.width-20.0,heading_height},"<b>Devices</b>")
+    y+=heading_height
+    if Native.Control(p,cast(u64)32,.{sidebar.x,y,width,row_height},"File System","drive-harddisk",focused,host.places_key==32,true) { OpenPlace(host,"/",32) }
+    y+=row_height
+    for mount: host.mounts.entries {
+        route:=ifx mount.local_path!="" then mount.local_path else mount.uri
+        caption: Text=FileDisplay.Caption(mount.caption)
+        if Native.Control(p,mount.key,.{sidebar.x,y,width,row_height},TextView(caption),"drive-removable-media",focused,host.places_key==mount.key,true,false,mount.icon_serialized) { OpenPlace(host,route,mount.key) }
+        y+=row_height
+    }
+    Native.Heading(p,.{sidebar.x+10.0,y,sidebar.width-20.0,heading_height},"<b>Network</b>")
+    y+=heading_height
+    if Native.Control(p,cast(u64)36,.{sidebar.x,y,width,row_height},"Browse Network","network-workgroup",focused,host.places_key==36,true) { OpenPlace(host,"network:///",36) }
+    p.clip=saved_clip
+    End(session)
+}
+
+OpenPlace :: (host: *Host, route: string, key: u64) {
+    manager:=ActiveManager(host)
+    if !Model.OpenPathTracked(manager,route) { return }
+    Model.ClearSelection(manager)
+    host.places_route=Model.PathKey(manager.cwd); host.places_key=key
+    host.location_without_slash=true
+}
+
+ConfirmDelete :: (host: *Host) {
+    manager:=ActiveManager(host)
+    count:=Model.SelectedCount(manager)
+    if count==0 { return }
+    if !VecResize(host.delete_keys,cast(s64)count) || !VecResize(host.delete_identities,cast(s64)count) {
+        Model.SetError(manager,"Cannot retain files for deletion"); return
+    }
+    at: s32
+    for i: cast(s32)0..cast(s32)manager.entries.count-1 {
+        if !manager.selected[i] { continue }
+        host.delete_keys[at]=manager.entries[i].key
+        host.delete_identities[at]=manager.entries[i].info
+        at+=1
+    }
+    OpenPrompt(host,.PromptDelete)
+    host.field.focused=false
+}
+
+FinishDelete :: (host: *Host) {
+    manager:=ActiveManager(host)
+    valid:=ModalOwnerValid(host) && Model.SelectedCount(manager)==host.delete_keys.count
+    at: s32
+    for i: cast(s32)0..cast(s32)manager.entries.count-1 {
+        if !manager.selected[i] { continue }
+        actual:=TabPaths.PathQuery(manager.entries[i].path)
+        if at>=host.delete_keys.count { valid=false; break }
+        if host.delete_keys[at]!=manager.entries[i].key || !actual.valid || !Model.SamePathIdentity(host.delete_identities[at],actual.info) { valid=false }
+        at+=1
+    }
+    manager.prompt=.PromptNone
+    if !valid { Model.SetError(manager,"Selected files changed; deletion canceled"); return }
+    unused Model.DeleteSelection(manager,false)
+    RefreshOtherPane(host)
+}
+
+OpenInfo :: (host: *Host, properties: bool) {
+    if !CaptureModalOwner(host) { return }
+    host.info_open=true; host.info_title=ifx properties then "Properties" else "Shelf Help"
+    VecClear(host.info_body)
+    host.actions_open=false; host.breadcrumb_open=false
+    if !properties {
+        unused BuilderAppend(host.info_body,"Navigate: Alt+Left/Right, Backspace, Alt+Up/Home\nLocation: Ctrl+L / Alt+D   Search: Ctrl+F\nCreate folder: Ctrl+Shift+N   Rename: F2\nTrash: Delete   Delete permanently: Shift+Delete\nUndo / Redo: Ctrl+Z / Ctrl+Shift+Z   Cut / Copy / Paste: Ctrl+X / C / V\nSelect all / pattern / invert: Ctrl+A / S / Shift+I\nViews: Ctrl+1/2/3   Zoom: Ctrl++ / − / 0\nSplit: F3   Sidebar: F9   Menubar: Ctrl+M\nTabs: Ctrl+T / W / Tab   Window: Ctrl+N / Q\nClose all Shelf windows: Ctrl+Shift+W\nProperties: Alt+Return   Menus: F10 / Alt+letter\nEsc closes an editor, menu, preview or this dialog.")
+        return
+    }
+    manager:=ActiveManager(host)
+    row:=Model.FirstSelected(manager)
+    path:=ifx row>=0 then Model.EntryPath(manager,row) else manager.cwd
+    caption: Text=FileDisplay.Caption(path)
+    BuilderPrint(*host.info_body,"Location: %\nSelected: %\n",TextView(caption),Model.SelectedCount(manager))
+    if row>=0 && row<manager.entries.count {
+        data: DetailsCells
+        DetailsData(manager,row,*data)
+        BuilderPrint(*host.info_body,"Name: %\nType: %\nSize: %\nModified: %\nOwner UID: %\n",data.cells[0],data.cells[2],data.cells[1],data.cells[3],manager.entries[row].info.owner_uid)
+    }
+    VecFree(caption.bytes)
+}
+
+ChangeZoom :: (host: *Host, direction: s32) {
+    manager:=ActiveManager(host); view:=ActiveView(host)
+    mode:=cast(s32)manager.view_mode
+    level:=ifx direction==0 then 3 else view.zoom[mode]+direction
+    if level<0 { level=0 }; if level>11 { level=11 }
+    view.zoom[mode]=level; view.columns_signature=0; manager.reveal_focus=true
+}
+
+RequestWindow :: (host: *Host, path: string) {
+    next: Text=TextCopy(path)
+    if next.bytes.count!=path.count { Model.SetError(ActiveManager(host),"Cannot retain new window location"); return }
+    VecSwap(host.window_path.bytes,next.bytes); VecFree(next.bytes)
+    host.window_requested=true
+}
+
+BookmarkSelection :: (host: *Host) {
+    manager:=ActiveManager(host)
+    if Model.SelectedCount(manager)==0 {
+        BookmarkResult(host,Bookmarks.Add(*host.bookmarks,manager.cwd))
+        host.bookmark_selected=Bookmarks.Find(*host.bookmarks,manager.cwd)
+        return
+    }
+    for i: cast(s32)0..cast(s32)manager.entries.count-1 {
+        if manager.selected[i] && Model.EntryIsDirectory(manager,i) {
+            path:=Model.EntryPath(manager,i)
+            if !Bookmarks.Add(*host.bookmarks,path) { BookmarkResult(host,false); return }
+            host.bookmark_selected=Bookmarks.Find(*host.bookmarks,path)
+        }
+    }
+}
+
+MenuShortcut :: (menu: s32, item: s32) -> string {
+    if menu==1 {
+        if item==0 { return "Ctrl+Shift+N" }
+        if item==2 { return "Ctrl+T" }; if item==3 { return "Ctrl+W" }
+        if item==4 { return "F2" }; if item==5 { return "Delete" }; if item==7 { return "Ctrl+P" }
+    } else if menu==2 {
+        if item==0 { return "Ctrl+Z" }; if item==1 { return "Ctrl+Shift+Z" }
+        if item==2 { return "Ctrl+X" }; if item==3 { return "Ctrl+C" }
+        if item==4 { return "Ctrl+V" }; if item==5 { return "Ctrl+A" }
+        if item==8 { return "Ctrl+S" }; if item==9 { return "Ctrl+Shift+I" }
+    } else if menu==3 {
+        if item==0 { return "Ctrl+1" }; if item==1 { return "Ctrl+2" }; if item==2 { return "Ctrl+3" }
+        if item==3 { return "Ctrl+H" }; if item==4 { return "Ctrl+B" }; if item==5 { return "Ctrl+E" }
+        if item==6 { return "F3" }; if item==7 { return "Tab" }; if item==8 { return "F5" }
+    } else if menu==4 {
+        if item==0 { return "Alt+Left" }; if item==1 { return "Alt+Right" }; if item==2 { return "Alt+Up" }
+        if item==3 { return "Alt+Home" }; if item==5 { return "Ctrl+L" }; if item==6 { return "Ctrl+F" }
+    } else if menu==5 && item==0 { return "Ctrl+D" }
+    return ""
+}
+
+// Global actions yield to text editors, previews and popup navigation.
+DispatchShortcut :: (host: *Host, session: Session, key: s32, modifiers: s32) -> bool {
+    manager:=ActiveManager(host); view:=ActiveView(host)
+    if key==0 || manager.prompt!=.PromptNone || host.preview.opened || host.breadcrumb_open || host.info_open { return false }
+    control: s32=KeyModifierControl; shift: s32=KeyModifierShift; alt: s32=KeyModifierAlt
+    if modifiers==alt && (key==70 || key==69 || key==86 || key==71 || key==66 || key==72) {
+        host.menu_index=ifx key==70 then 1 else ifx key==69 then 2 else ifx key==86 then 3 else ifx key==71 then 4 else ifx key==66 then 5 else 6
+        host.menubar_hidden=false; host.actions_open=true; host.menu_cursor=0; CapturePopupOwner(host); return true
+    }
+    if host.actions_open { return false }
+    if key==299 && modifiers==0 { host.menubar_hidden=false; host.actions_open=true; host.menu_index=1; host.menu_cursor=0; CapturePopupOwner(host); return true }
+    if (modifiers==control || modifiers==control+shift) && (key==43 || key==61 || key==334) { ChangeZoom(host,1); return true }
+    if modifiers==control && (key==45 || key==333 || key==48 || key==320) { ChangeZoom(host,ifx key==48 || key==320 then 0 else -1); return true }
+    if modifiers==alt {
+        if key==KeyEnter { OpenInfo(host,true) }
+        else if key==KeyLeft { unused Model.NavigateBack(manager) }
+        else if key==KeyRight { unused Model.NavigateForward(manager) }
+        else if key==KeyUp { unused Model.NavigateUp(manager) }
+        else if key==KeyHome { unused Model.OpenPathTracked(manager,Model.HomePath()) }
+        else if key==68 { view.tree_focused=false; OpenPrompt(host,.PromptLocation) }
+        else { return false }
+        return true
+    }
+    if modifiers==0 {
+        if key==290 { OpenInfo(host,false) }
+        else if key==KeyDelete { unused Model.DeleteSelection(manager,true); RefreshOtherPane(host) }
+        else if key==291 { OpenPrompt(host,.PromptRename) }
+        else if key==294 { unused Model.Refresh(manager) }
+        else if key==298 { host.sidebar_hidden= !host.sidebar_hidden }
+        else if key==KeyBackspace { unused Model.NavigateBack(manager) }
+        else if key==KeyEscape { Model.ClearSelection(manager) }
+        else if key==KeyTab && host.split { RequestPane(host,1-host.active_pane) }
+        else { return false }
+        return true
+    }
+    if modifiers==shift {
+        if key==KeyDelete { ConfirmDelete(host) }
+        else if key==KeyInsert { unused PasteFiles(host) }
+        else { return false }; return true
+    }
+    if modifiers==control+shift {
+        if key==90 { unused Model.Redo(manager); RefreshOtherPane(host) }
+        else if key==78 { OpenPrompt(host,.PromptFolder) }
+        else if key==87 { host.quit_all_requested=true }
+        else if key==79 {
+            row:=Model.FirstSelected(manager)
+            if Model.EntryIsDirectory(manager,row) { RequestWindow(host,Model.EntryPath(manager,row)) }
+        }
+        else if key==73 {
+            for i: cast(s32)0..cast(s32)manager.selected.count-1 { manager.selected[i]= !manager.selected[i] }
+        } else if key==80 {
+            row:=Model.FirstSelected(manager)
+            if Model.EntryIsDirectory(manager,row) { unused Model.NewTab(manager,Model.EntryPath(manager,row)) }
+        } else if key==KeyTab { unused Model.SwitchTab(manager,cast(s32)((manager.active_tab+manager.tabs.count-1)%manager.tabs.count)) }
+        else if key==KeyPageUp || key==KeyPageDown { unused Model.ReorderTab(manager,manager.active_tab,manager.active_tab+ifx key==KeyPageUp then -1 else 1) }
+        else { return false }; return true
+    }
+    if modifiers!=control { return false }
+    if key==90 { unused Model.Undo(manager); RefreshOtherPane(host) }
+    else if key==69 { host.sidebar_hidden= !host.sidebar_hidden && view.tree_mode; TreeMode(host,true) }
+    else if key==66 { host.sidebar_hidden= !host.sidebar_hidden && !view.tree_mode; TreeMode(host,false) }
+    else if key==76 { view.tree_focused=false; OpenPrompt(host,.PromptLocation) }
+    else if key==70 { OpenPrompt(host,.PromptSearch) }
+    else if key==84 { unused Model.NewTab(manager) }
+    else if key==78 { RequestWindow(host,manager.cwd) }
+    else if key==81 { host.quit_requested=true }
+    else if key==87 { if manager.tabs.count==1 { host.quit_requested=true } else { unused Model.CloseTab(manager,manager.active_tab) } }
+    else if key==KeyTab { Model.NextTab(manager) }
+    else if key==KeyPageUp || key==KeyPageDown { unused Model.SwitchTab(manager,cast(s32)((manager.active_tab+manager.tabs.count+ifx key==KeyPageUp then -1 else 1)%manager.tabs.count)) }
+    else if key==65 { Model.SelectAll(manager) }
+    else if key==83 { OpenPrompt(host,.PromptSelectPattern) }
+    else if key==67 || key==KeyInsert { unused FileClipboard.Copy(*host.file_clipboard,manager,false) }
+    else if key==88 { unused FileClipboard.Copy(*host.file_clipboard,manager,true) }
+    else if key==86 { unused PasteFiles(host) }
+    else if key==72 { manager.show_hidden= !manager.show_hidden; unused Model.Refresh(manager) }
+    else if key==77 { host.menubar_hidden= !host.menubar_hidden }
+    else if key==82 { unused Model.Refresh(manager) }
+    else if key==79 { ActivateEntry(host,Model.FirstSelected(manager)) }
+    else if key==68 { BookmarkSelection(host) }
+    else if key>=49 && key<=51 { view.tree_focused=false; Model.SetView(manager,ifx key==49 then .ViewIcon else ifx key==50 then .ViewList else .ViewCompact) }
+    else { return false }
+    return true
+}
+
+DrawNativeMenu :: (host: *Host, session: Session, viewport: Rectangle, focused: bool, key: s32) {
+    if !host.actions_open { return }
+    if !PopupOwnerValid(host) || key == KeyEscape { host.actions_open=false; return }
+    if focused && (key==KeyLeft || key==KeyRight) {
+        host.menu_index=(host.menu_index+ifx key==KeyLeft then 4 else 6)%6+1
+        host.menu_cursor=0
+    }
+    labels: [16]string
+    count: s32
+    if host.menu_index == 1 { labels[0]="New folder"; labels[1]="New file"; labels[2]="New tab"; labels[3]="Close tab"; labels[4]="Rename"; labels[5]="Move to Trash"; labels[6]="Restore"; labels[7]="Preview"; count=8 }
+    else if host.menu_index == 2 { labels[0]="Undo"; labels[1]="Redo"; labels[2]="Cut"; labels[3]="Copy"; labels[4]="Paste"; labels[5]="Select all"; labels[6]="Duplicate"; labels[7]="Make link"; labels[8]="Select by pattern"; labels[9]="Invert selection"; count=10 }
+    else if host.menu_index == 3 { labels[0]="Icons"; labels[1]="Detailed List"; labels[2]="Compact List"; labels[3]="Show hidden files"; labels[4]="Places"; labels[5]="Tree"; labels[6]="Split view"; labels[7]="Other pane"; labels[8]="Reload"; labels[9]="Pathbar"; count=10 }
+    else if host.menu_index == 4 { labels[0]="Back"; labels[1]="Forward"; labels[2]="Parent"; labels[3]="Home"; labels[4]="File System"; labels[5]="Location"; labels[6]="Search"; count=7 }
+    else if host.menu_index == 5 { labels[0]="Add bookmark"; labels[1]="Rename bookmark"; labels[2]="Remove bookmark"; labels[3]="Move bookmark up"; labels[4]="Move bookmark down"; count=5 }
+    else { labels[0]="About Shelf"; count=1 }
+    if focused {
+        if key == KeyUp { host.menu_cursor=(host.menu_cursor+count-1)%count }
+        if key == KeyDown { host.menu_cursor=(host.menu_cursor+1)%count }
+        if key == KeyHome { host.menu_cursor=0 }
+        if key == KeyEnd { host.menu_cursor=count-1 }
+    }
+    x := viewport.x+Native.MenuOffset(host.menu_index-1)
+    menu_nodes:=Native.Nodes("menu")
+    label_width: s32; shortcut_width: s32
+    for i: cast(s32)0..count-1 {
+        label:=Gtk.GtkTextMeasure(menu_nodes[:],labels[i],0,1)
+        accelerator:=Gtk.GtkTextMeasure(menu_nodes[:],MenuShortcut(host.menu_index,i),0,1)
+        if label.width>label_width { label_width=label.width }
+        if accelerator.width>shortcut_width { shortcut_width=accelerator.width }
+    }
+    menu_style:=Gtk.GtkStyleQuery(menu_nodes[:],1)
+    width:=cast(float32)(label_width+shortcut_width+menu_style.padding.left+menu_style.padding.right+40)
+    if x+width > viewport.x+viewport.width { x=viewport.x+viewport.width-width }
+    bounds := Rectangle.{x,viewport.y+Native.MenuHeight(),width,cast(float32)(count*28+8)}
+    popup := Popup(session,PopupProps.{.key=cast(u64)650,.bounds=bounds,.keep_bounds=.{viewport.x,viewport.y,viewport.width,Native.MenuHeight()}})
+    if popup.closed { host.actions_open=false; return }
+    if popup.panel_node < 0 || !TreePushScope(session,popup.panel_node) { return }
+    defer End(session)
+    Native.Surface(*host.paint,bounds,"menu")
+    manager := ActiveManager(host)
+    pointer:=Input.PointerSample(session)
+    if focused && (pointer.x!=host.menu_pointer.x || pointer.y!=host.menu_pointer.y) {
+        if pointer.x>=x && pointer.x<x+width && pointer.y>=bounds.y+4.0 && pointer.y<bounds.y+4.0+cast(float32)(count*28) {
+            host.menu_cursor=cast(s32)(pointer.y-bounds.y-4.0)/28
+        }
+        host.menu_pointer=.{pointer.x,pointer.y}
+    }
+    for i: cast(s32)0..count-1 {
+        clicked := Native.MenuItem(*host.paint,cast(u64)(660+i),.{x+4.0,bounds.y+4.0+cast(float32)i*28.0,width-8.0,28.0},labels[i],focused,i==host.menu_cursor,MenuShortcut(host.menu_index,i))
+        if !clicked && !(focused && key==KeyEnter && i==host.menu_cursor) { continue }
+        host.actions_open=false
+        if host.menu_index == 1 {
+            if i == 0 { OpenPrompt(host,.PromptFolder) } else if i == 1 { OpenPrompt(host,.PromptFile) }
+            else if i == 2 { unused Model.NewTab(manager) } else if i == 3 { unused Model.CloseTab(manager,manager.active_tab) }
+            else if i == 4 { OpenPrompt(host,.PromptRename) } else if i == 5 { unused Model.DeleteSelection(manager,true); RefreshOtherPane(host) }
+            else if i == 6 { unused Model.RestoreSelection(manager); RefreshOtherPane(host) } else if manager.cursor >= 0 { OpenPreview(host,Model.EntryPath(manager,manager.cursor)) }
+        } else if host.menu_index == 2 {
+            if i==0 { unused Model.Undo(manager); RefreshOtherPane(host) }
+            else if i==1 { unused Model.Redo(manager); RefreshOtherPane(host) }
+            else if i==2 || i==3 { unused FileClipboard.Copy(*host.file_clipboard,manager,i==2) } else if i==4 { unused PasteFiles(host) }
+            else if i==5 { Model.SelectAll(manager) } else if i==6 { unused Model.DuplicateSelection(manager); RefreshOtherPane(host) } else if i==7 { unused Model.MakeLinkSelection(manager); RefreshOtherPane(host) } else if i==8 { OpenPrompt(host,.PromptSelectPattern) } else { for n: cast(s32)0..cast(s32)manager.selected.count-1 { manager.selected[n]= !manager.selected[n] } }
+        } else if host.menu_index == 3 {
+            if i == 0 { Model.SetView(manager,.ViewIcon) } else if i == 1 { Model.SetView(manager,.ViewList) } else if i == 2 { Model.SetView(manager,.ViewCompact) }
+            else if i == 3 { manager.show_hidden= !manager.show_hidden; unused Model.Refresh(manager) }
+            else if i == 4 || i == 5 { TreeMode(host,i==5) } else if i == 6 { unused ToggleSplit(host) }
+            else if i == 7 { RequestPane(host,1-host.active_pane) } else if i==8 { unused Model.Refresh(manager) } else { host.pathbar= !host.pathbar }
+        } else if host.menu_index == 4 {
+            if i == 0 { unused Model.NavigateBack(manager) } else if i == 1 { unused Model.NavigateForward(manager) }
+            else if i == 2 { unused Model.NavigateUp(manager) } else if i == 3 { unused Model.OpenPathTracked(manager,Model.HomePath()) }
+            else if i == 4 { unused Model.OpenPathTracked(manager,"/") } else if i == 5 { OpenPrompt(host,.PromptLocation) } else { OpenPrompt(host,.PromptSearch) }
+        } else if host.menu_index == 5 {
+            if i == 0 { BookmarkSelection(host) }
+            else if i == 1 { OpenPrompt(host,.PromptBookmarkRename) }
+            else {
+                previous:=host.bookmark_selected
+                ok:=Bookmarks.Edit(*host.bookmarks,previous,i-1)
+                BookmarkResult(host,ok)
+                target:=previous+ifx i==3 then -1 else 1
+                if ok && i>=3 && target>=0 && target<host.bookmarks.document.rows.count { host.bookmark_selected=target }
+            }
+        } else { Model.SetError(manager,"Shelf · Ziran file manager · Ctrl+1/2/3 views · F3 split · Ctrl+L location") }
+    }
 }
 
 Draw :: (host: *Host, host_session: HostSession, host_viewport: HostViewport,
@@ -1645,15 +2495,23 @@ DrawInPane :: (host: *Host, view: *PaneView, host_session: HostSession, host_vie
     snapshot: Input.InputSnapshot
     if !focused { snapshot = Input.TreeInputSuspend(session) }
     defer { if !focused { unused Input.TreeInputResume(session, snapshot) } }
+    if !focused || PaneLocked(host) {
+        unused NativeScroll.GtkScrollCancel(host.view.native_scroll)
+        if host.secondary.count>0 { unused NativeScroll.GtkScrollCancel(host.secondary[0].view.native_scroll) }
+    } else if !host.split && host.secondary.count>0 {
+        unused NativeScroll.GtkScrollCancel(host.secondary[0].view.native_scroll)
+    }
     RefreshTheme(host)
     if !Palettes.WidgetPaletteUse(session, host.palette) { return 1 }
     defer { unused Palettes.WidgetPaletteRestore(session) }
     manager := ActiveManager(host)
-    stale_modal := (manager.prompt != .PromptNone || host.preview.opened || host.field.focused) && !ModalOwnerValid(host)
+    stale_modal := (manager.prompt != .PromptNone || host.preview.opened || host.field.focused || host.info_open) && !ModalOwnerValid(host)
     if stale_modal { CancelStaleModal(host) }
+    if stale_modal { host.info_open=false }
     root := Box(session, BoxProps.{.key = cast(u64)500, .bounds = viewport,
         .fill = ColorFromPacked(host.palette.background)})
     if root < 0 || !TreePushScope(session, root) { return 1 }
+    defer { Native.ApplyPointerCursors(session,root) }
     TreeSetChildClip(session, root, viewport)
     defer { End(session) }
     defer { ApplyPaneRequest(host) }
@@ -1667,6 +2525,7 @@ DrawInPane :: (host: *Host, view: *PaneView, host_session: HostSession, host_vie
         modifiers = Input.KeyboardModifiers(session)
     }
     if stale_modal { key = 0 }
+    if host.info_open && focused && (key==KeyEscape || key==KeyEnter) { host.info_open=false; key=0 }
     if key != 0 { view.last_click_ms = 0 }
     // Dismiss before submitting pane controls so the next native press sees
     // enabled divider/views immediately, without an idle-frame dependency.
@@ -1682,206 +2541,48 @@ DrawInPane :: (host: *Host, view: *PaneView, host_session: HostSession, host_vie
         DrawPreview(host, session, viewport, key, modifiers, focused)
         return 0
     }
-    if manager.prompt == .PromptNone && !host.actions_open && !host.breadcrumb_open && key == 80 && (modifiers & KeyModifierControl) != 0 &&
+    if manager.prompt == .PromptNone && !host.actions_open && !host.breadcrumb_open && !host.info_open && key == 80 && modifiers == KeyModifierControl &&
         manager.cursor >= 0 {
         OpenPreview(host, Model.EntryPath(manager, manager.cursor))
         DrawPreview(host, session, viewport, 0, 0, focused)
         return 0
     }
 
-    if manager.prompt == .PromptNone && !host.actions_open && !host.breadcrumb_open && (modifiers & KeyModifierControl) != 0 {
-        if key == 69 { TreeMode(host, !view.tree_mode); key = 0 }
-        else if key == 66 { TreeMode(host, false); key = 0 }
-        else if key == 76 { view.tree_focused = false; OpenPrompt(host, .PromptLocation); key = 0 }
-        else if key == 70 { OpenPrompt(host, .PromptSearch); key = 0 }
-        else if key == 84 && !Input.TreeTextFocused(session) { unused Model.NewTab(manager); key = 0 }
-        else if key == 87 && !Input.TreeTextFocused(session) { unused Model.CloseTab(manager, manager.active_tab); key = 0 }
-        else if key == KeyTab && !Input.TreeTextFocused(session) {
-            if (modifiers & KeyModifierShift) != 0 {
-                unused Model.SwitchTab(manager, cast(s32)((manager.active_tab + manager.tabs.count - 1) % manager.tabs.count))
-            } else { Model.NextTab(manager) }
-            key = 0
-        }
-        else if (key == KeyPageUp || key == KeyPageDown) && !Input.TreeTextFocused(session) {
-            next := manager.active_tab + ifx key == KeyPageUp then -1 else 1
-            if (modifiers & KeyModifierShift) != 0 { unused Model.ReorderTab(manager, manager.active_tab, next) }
-            else { unused Model.SwitchTab(manager, next) }
-            key = 0
-        }
-        else if key == 65 { Model.SelectAll(manager); key = 0 }
-        else if key == 67 { unused FileClipboard.Copy(*host.file_clipboard, manager, false); key = 0 }
-        else if key == 88 { unused FileClipboard.Copy(*host.file_clipboard, manager, true); key = 0 }
-        else if key == 86 { unused PasteFiles(host); key = 0 }
-        else if key == 49 { view.tree_focused = false; Model.SetView(manager, .ViewIcon); key = 0 }
-        else if key == 50 { view.tree_focused = false; Model.SetView(manager, .ViewList); key = 0 }
-        else if key == 51 { view.tree_focused = false; Model.SetView(manager, .ViewCompact); key = 0 }
-    }
+    if DispatchShortcut(host,session,key,modifiers) { key=0 }
+    window_focused:=focused
+    if host.info_open { focused=false; key=0 }
 
-    narrow := viewport.width < 720.0
-    body_offset: float32 = ifx narrow then 40.0 else 0.0
-    toolbar := Rectangle.{viewport.x + 8.0, viewport.y + 8.0, viewport.width - 16.0, 40.0}
-    if Button(session, 1, "Back", Rectangle.{toolbar.x, toolbar.y, 58.0, 36.0}) {
-        unused Model.NavigateBack(manager)
-    }
-    if Button(session, 2, "Up", Rectangle.{toolbar.x + 64.0, toolbar.y, 48.0, 36.0}) {
-        unused Model.OpenPathTracked(manager, Model.PathParent(manager.cwd))
-    }
-    if Button(session, 3, "Home", Rectangle.{toolbar.x + 118.0, toolbar.y, 62.0, 36.0}) {
-        unused Model.OpenPathTracked(manager, Model.HomePath())
-    }
-    path_bounds := Rectangle.{toolbar.x + 188.0, toolbar.y + 5.0,
-        viewport.width - 530.0, 26.0}
-    if path_bounds.width < 160.0 { path_bounds.width = 160.0 }
-    if narrow { path_bounds = .{viewport.x + 8.0, viewport.y + 92.0, viewport.width - 54.0, 32.0} }
-    else { path_bounds.width -= 38.0 }
-    if Button(session, 226, "…", .{path_bounds.x + path_bounds.width + 4.0, path_bounds.y, 34.0, path_bounds.height},
-        focused && manager.prompt == .PromptNone) { OpenPrompt(host, .PromptLocation) }
-    breadcrumb_handled := host.breadcrumb_open
-    if manager.prompt != .PromptLocation { DrawLocationBreadcrumb(host, session, path_bounds, focused, key) }
-    if breadcrumb_handled || host.breadcrumb_open { key = 0 }
+    // Keep the native toolbar at the original top edge when its menu is hidden.
+    // The root clip remains the real window; the shared geometry retains GTK's
+    // measured menu allocation for an ordinary visible menubar.
+    if host.menubar_hidden { viewport.y-=Native.MenuHeight(); viewport.height+=Native.MenuHeight() }
 
-    if !narrow {
-    action_x := viewport.x + viewport.width - 328.0
-    if Button(session, 4, "Folder", Rectangle.{action_x, toolbar.y, 68.0, 36.0}) { OpenPrompt(host, .PromptFolder) }
-    if Button(session, 5, "File", Rectangle.{action_x + 74.0, toolbar.y, 50.0, 36.0}) { OpenPrompt(host, .PromptFile) }
-    if Button(session, 6, "Rename", Rectangle.{action_x + 130.0, toolbar.y, 72.0, 36.0}) { OpenPrompt(host, .PromptRename) }
-    if Button(session, 7, "Copy", Rectangle.{action_x + 208.0, toolbar.y, 56.0, 36.0}) { unused FileClipboard.Copy(*host.file_clipboard, manager, false) }
-    if Button(session, 8, "Paste", Rectangle.{action_x + 270.0, toolbar.y, 58.0, 36.0}) { unused PasteFiles(host) }
-
+    if !GtkPainterBegin(*host.paint,session,viewport) { return 1 }
+    host.paint_active=true
+    chrome_height:=Native.ChromeHeight()
+    path_bounds := Native.LocationBounds(viewport)
+    sidebar_width: float32=ifx host.sidebar_hidden then 0.0 else 170.0
+    sidebar := Rectangle.{viewport.x,viewport.y+chrome_height,sidebar_width,viewport.height-chrome_height}
+    separator_width: float32=ifx host.sidebar_hidden then 0.0 else Native.PaneSeparatorWidth()
+    view_x := viewport.x+sidebar_width+separator_width
+    view_width:=viewport.width-sidebar_width-separator_width
+    breadcrumb_was_open:=host.breadcrumb_open
+    DrawNativeChrome(host,session,viewport,path_bounds,focused,key)
+    if breadcrumb_was_open || host.breadcrumb_open { key=0 }
+    if host.sidebar_hidden { }
+    else if view.tree_mode {
+        Native.Surface(*host.paint,sidebar,"sidebar")
+        if DrawDirectoryTree(host,session,sidebar,focused,key) { key=0 }
+    } else { DrawNativePlaces(host,session,sidebar,focused) }
+    if separator_width>0.0 { Native.PaneSeparator(*host.paint,.{viewport.x+sidebar_width,sidebar.y,separator_width,sidebar.height}) }
+    tab_height: float32 = ifx manager.tabs.count > 1 || host.split then 32.0 else 0.0
+    if !host.split && tab_height > 0.0 {
+        if DrawTabs(host,session,.{view_x,viewport.y+chrome_height,view_width,32.0},focused,key,modifiers) { key=0 }
     }
-    second := Rectangle.{viewport.x + 8.0, viewport.y + 52.0, viewport.width - 16.0, 38.0}
-    if !narrow {
-    if Button(session, 9, "Cut", Rectangle.{second.x, second.y, 46.0, 32.0}) { unused FileClipboard.Copy(*host.file_clipboard, manager, true) }
-    if Button(session, 10, "Duplicate", Rectangle.{second.x + 52.0, second.y, 88.0, 32.0}) { unused Model.DuplicateSelection(manager); RefreshOtherPane(host) }
-    if Button(session, 11, "Link", Rectangle.{second.x + 146.0, second.y, 50.0, 32.0}) { unused Model.MakeLinkSelection(manager); RefreshOtherPane(host) }
-    if Button(session, 12, "Trash", Rectangle.{second.x + 202.0, second.y, 56.0, 32.0}) { unused Model.DeleteSelection(manager, true); RefreshOtherPane(host) }
-    if Button(session, 13, "Hidden", Rectangle.{second.x + 264.0, second.y, 70.0, 32.0}) {
-        manager.show_hidden = !manager.show_hidden
-        unused Model.Refresh(manager)
-    }
-    if manager.cwd == Model.TrashDirectory(false) &&
-        Button(session, 14, "Restore", Rectangle.{second.x + 340.0, second.y, 72.0, 32.0}) {
-        unused Model.RestoreSelection(manager); RefreshOtherPane(host)
-    }
-    if manager.cwd != Model.TrashDirectory(false) &&
-        Button(session, 67, "Preview", .{second.x + 340.0, second.y, 84.0, 32.0}) && manager.cursor >= 0 {
-        OpenPreview(host, Model.EntryPath(manager, manager.cursor))
-    }
-    }
-    if narrow && DrawNarrowActions(host, session, .{viewport.x + viewport.width - 168.0, toolbar.y, 160.0, 36.0}, focused, key) { key = 0 }
-    if !host.split {
-    tab_bounds := Rectangle.{viewport.x + 450.0, second.y, viewport.width - 500.0, 32.0}
-    if narrow { tab_bounds = .{second.x, second.y, viewport.width - 58.0, 32.0} }
-    if Button(session, 15, "+", .{viewport.x + viewport.width - 40.0, second.y, 32.0, 32.0},
-        focused && manager.prompt == .PromptNone) { unused Model.NewTab(manager) }
-    if DrawTabs(host, session, tab_bounds, focused, key, modifiers) { key = 0 }
-
-    } else {
-        Text(session, TextProps.{.key = cast(u64)241,
-            .bounds = .{viewport.x + ifx narrow then 8.0 else 450.0, second.y + 4.0,
-                viewport.width - ifx narrow then 16.0 else 460.0, 26.0},
-            .text = ifx host.active_pane == 0 then "Split view · Left pane" else "Split view · Right pane", .font = 13})
-    }
-    if manager.prompt == .PromptNone {
-    if Button(session, 240, ifx host.split then "Single" else "Split",
-        .{viewport.x + viewport.width - 70.0, viewport.y + viewport.height - 30.0, 62.0, 26.0}, focused && !PaneLocked(host)) {
-        unused ToggleSplit(host)
-    }
-    if host.split && Button(session, 239, "Other pane",
-        .{viewport.x + viewport.width - 186.0, viewport.y + viewport.height - 30.0, 108.0, 26.0}, focused && !PaneLocked(host)) {
-        RequestPane(host, 1 - host.active_pane)
-    }
-    }
-
-    sidebar := Rectangle.{viewport.x + 8.0, viewport.y + 96.0 + body_offset, 150.0, viewport.height - 106.0 - body_offset}
-    if focused {
-        press := Input.TreeLastPress(session)
-        if press.serial != view.tree_press {
-            view.tree_press = press.serial
-            view.tree_focused = view.tree_mode && press.x >= sidebar.x && press.x < sidebar.x + sidebar.width &&
-                press.y >= sidebar.y + 68.0 && press.y < sidebar.y + sidebar.height
-        }
-    }
-    side_enabled := focused && manager.prompt == .PromptNone
-    if Button(session, 30, "Places", .{sidebar.x, sidebar.y, 74.0, 26.0}, side_enabled) { TreeMode(host, false) }
-    if Button(session, 210, "Tree", .{sidebar.x + 78.0, sidebar.y, 72.0, 26.0}, side_enabled) { TreeMode(host, !view.tree_mode) }
-    if view.tree_mode {
-        tree_key := ifx modifiers == 0 then key else 0
-        if DrawDirectoryTree(host, session, sidebar, focused, tree_key) { key = 0 }
-    } else {
-        if Button(session, 31, "Home", Rectangle.{sidebar.x, sidebar.y + 30.0, sidebar.width, 32.0}) {
-            unused Model.OpenPathTracked(manager, Model.HomePath())
-        }
-        if Button(session, 32, "File System", Rectangle.{sidebar.x, sidebar.y + 68.0, sidebar.width, 32.0}) {
-            unused Model.OpenPathTracked(manager, "/")
-        }
-        if Button(session, 33, "Trash", Rectangle.{sidebar.x, sidebar.y + 106.0, sidebar.width, 32.0}) {
-            unused Model.OpenPathTracked(manager, Model.TrashDirectory(false))
-        }
-        DrawBookmarks(host, session, sidebar, focused)
-    }
-
-    view_x := viewport.x + 166.0
-    view_y := viewport.y + 96.0 + body_offset
-    if Button(session, 41, ifx manager.view_mode == .ViewIcon then "[Icon]" else "Icon",
-        .{view_x, view_y, 66.0, 32.0}) { Model.SetView(manager, .ViewIcon) }
-    if Button(session, 42, ifx manager.view_mode == .ViewList then "[List]" else "List",
-        .{view_x + 72.0, view_y, 62.0, 32.0}) { Model.SetView(manager, .ViewList) }
-    if Button(session, 43, ifx manager.view_mode == .ViewCompact then "[Compact]" else "Compact",
-        .{view_x + 140.0, view_y, 98.0, 32.0}) { Model.SetView(manager, .ViewCompact) }
-    sort_names: [4]string = .["Name", "Size", "Type", "Modified"]
-    active_sort_names: [4]string = .["[Name]", "[Size]", "[Type]", "[Modified]"]
-    for column: cast(s32)0..3 {
-        if Button(session, 60 + column,
-            ifx SortColumn(manager.sort_mode) == column then active_sort_names[column] else sort_names[column],
-            .{view_x + 250.0 + cast(float32)column * 78.0, view_y, 72.0, 32.0}) {
-            mode := SortForColumn(column)
-            Model.SetSort(manager, mode, ifx mode == manager.sort_mode then !manager.sort_reverse else false)
-            view.last_click_ms = 0
-        }
-    }
-    if Button(session, 64, ifx manager.sort_reverse then "Descending" else "Ascending",
-        .{view_x + 562.0, view_y, 100.0, 32.0}) {
-        Model.SetSort(manager, manager.sort_mode, !manager.sort_reverse)
-        view.last_click_ms = 0
-    }
-    // Reserve wrapped footer text above the controls in narrow embeddings.
-    stacked_error := narrow && manager.prompt != .PromptLocation && manager.error != ""
-    footer_extra: float32 = 0.0
-    if stacked_error { footer_extra = 44.0 }
-    else if manager.prompt == .PromptLocation && viewport.width < 520.0 { footer_extra = 22.0 }
-    status_width := viewport.width - ifx host.split then 370.0 else 254.0
-    if stacked_error { status_width = viewport.width - 174.0 }
-    status_y := viewport.y + viewport.height - ifx stacked_error then 74.0 else 30.0
-    status_height: float32 = ifx stacked_error then 44.0 else 26.0
-    if manager.prompt != .PromptLocation && status_width >= 28.0 {
-        status_bounds := Rectangle.{view_x, status_y, status_width, status_height}
-        status_node := Box(session, BoxProps.{.key = cast(u64)242, .bounds = status_bounds})
-        if status_node >= 0 && TreePushScope(session, status_node) {
-            TreeSetChildClip(session, status_node, status_bounds)
-            if manager.error != "" {
-                caption: Text = FileDisplay.Caption(manager.error)
-                Text(session, TextProps.{.key = cast(u64)21,
-                    .bounds = status_bounds, .text = TextView(caption), .font = 13})
-            } else {
-                selected_buffer: [16]u8
-                selected_count := Number.FormatInteger(Model.SelectedCount(manager), selected_buffer[:])
-                Text(session, TextProps.{.key = cast(u64)65,
-                    .bounds = .{view_x, status_y + 4.0, 60.0, 22.0},
-                    .text = selected_count, .font = 13})
-                if status_width >= 140.0 {
-                    Text(session, TextProps.{.key = cast(u64)66,
-                        .bounds = .{view_x + 64.0, status_y + 4.0, 76.0, 22.0},
-                        .text = "selected", .font = 13})
-                }
-            }
-            End(session)
-        }
-    }
-    list_bounds := Rectangle.{viewport.x + 166.0, viewport.y + 136.0 + body_offset, viewport.width - 174.0,
-        viewport.height - 168.0 - body_offset - footer_extra}
-    if list_bounds.width < 1.0 { list_bounds.width = 1.0 }
-    if list_bounds.height < 1.0 { list_bounds.height = 1.0 }
+    footer:=NativeStatusBounds(host,viewport)
+    list_bounds := Rectangle.{view_x,viewport.y+chrome_height+tab_height,view_width,footer.y-(viewport.y+chrome_height+tab_height)}
+    if list_bounds.width < 1.0 { list_bounds.width=1.0 }
+    if list_bounds.height < 1.0 { list_bounds.height=1.0 }
     content_enabled := focused && manager.prompt == .PromptNone && !host.breadcrumb_open && !host.actions_open
     if host.split {
         pane := PanedView(session, PanedViewProps.{.key = cast(u64)548, .id = 548,
@@ -1898,11 +2599,35 @@ DrawInPane :: (host: *Host, view: *PaneView, host_session: HostSession, host_vie
             ifx manager.prompt == .PromptNone then key else 0, modifiers, content_enabled)
     }
 
+    if host.breadcrumb_open { Native.RetainedControls(*host.paint,host.breadcrumb_first,host.breadcrumb_last,host.breadcrumb_bounds,true) }
+    menu_was_open:=host.actions_open
+    DrawNativeMenu(host,session,viewport,focused,key)
+    if menu_was_open { key=0 }
+    if host.info_open {
+        bounds:=Rectangle.{viewport.x+(viewport.width-620.0)*0.5,viewport.y+(viewport.height-420.0)*0.5,620.0,420.0}
+        Native.Surface(*host.paint,bounds,"window")
+        Native.Label(*host.paint,.{bounds.x+20.0,bounds.y+12.0,bounds.width-40.0,28.0},host.info_title,"label")
+        Native.Label(*host.paint,.{bounds.x+20.0,bounds.y+48.0,bounds.width-40.0,bounds.height-110.0},TextView(host.info_body[:]),"label")
+        if Native.Control(*host.paint,cast(u64)55,.{bounds.x+bounds.width-120.0,bounds.y+bounds.height-46.0,100.0,32.0},"Close","",window_focused) { host.info_open=false }
+    }
+    painted:=GtkPainterEnd(*host.paint,cast(u64)599)
+    host.paint_active=false
+    if !painted { return 1 }
     if manager.prompt == .PromptLocation {
         DrawLocationEditor(host, session, path_bounds, viewport, key, modifiers, typed_text, focused)
         if manager.prompt == .PromptLocation { DrawLocationStatus(host, session, viewport) }
     }
-    if manager.prompt != .PromptNone && manager.prompt != .PromptLocation {
+    if manager.prompt==.PromptDelete {
+        bounds:=Rectangle.{viewport.x+viewport.width*0.5-250.0,viewport.y+viewport.height*0.5-55.0,500.0,110.0}
+        Box(session,BoxProps.{.key=cast(u64)50,.bounds=bounds,.fill=ColorFromPacked(host.palette.base)})
+        Text(session,TextProps.{.key=cast(u64)51,.bounds=.{bounds.x+16.0,bounds.y+12.0,468.0,40.0},.text=PromptTitle(host),.font=16})
+        if Button(host,session,53,"Cancel",.{bounds.x+250.0,bounds.y+62.0,100.0,32.0},focused) {
+            manager.prompt=.PromptNone
+        } else if Button(host,session,54,"Delete",.{bounds.x+364.0,bounds.y+62.0,120.0,32.0},focused) || (focused && key==KeyEnter) {
+            FinishDelete(host)
+        }
+    }
+    if manager.prompt != .PromptNone && manager.prompt != .PromptLocation && manager.prompt!=.PromptDelete {
         prompt_bounds := Rectangle.{viewport.x + viewport.width * 0.5 - 220.0,
             viewport.y + viewport.height * 0.5 - 46.0, 440.0, 92.0}
         Box(session, BoxProps.{.key = cast(u64)50, .bounds = prompt_bounds,

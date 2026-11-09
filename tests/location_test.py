@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import sys
 import time
+from ui_test import menu_action
 
 
 def main():
@@ -105,16 +106,18 @@ def main():
         deep = root / 'deep'; deep.mkdir()
         for index in range(8): deep = deep / f'long ancestor {index} é'; deep.mkdir()
         (deep / 'zz-proof.txt').write_text('deep')
-        navigate(str(deep)); opened(deep); capture('breadcrumbs')
+        navigate(str(deep)); opened(deep)
+        menu_action(xdo, window, 'View', 9)  # Pathbar, then overflow navigation.
+        capture('breadcrumbs')
         xdo('windowsize', window, 560, 600); time.sleep(.4)
         key('ctrl+l'); assert field() == str(deep); capture('narrow-editor'); key('Escape')
         capture('narrow-breadcrumbs')
         # Overflow owns the left of the full-width row; Home picks filesystem root.
-        xdo('mousemove', '--window', window, 40, 108); xdo('click', '1'); time.sleep(.3)
+        xdo('mousemove', '--window', window, 160, 46); xdo('click', '1'); time.sleep(.3)
         key('Home', 'Return')
         key('ctrl+l'); assert field() == '/', 'breadcrumb overflow did not activate root'
         key('Escape'); navigate(str(root)); opened(root)
-        xdo('mousemove', '--window', window, 500, 26); xdo('click', '1'); time.sleep(.3)
+        menu_action(xdo, window, 'File')
         capture('narrow-actions-open'); key('Home'); capture('narrow-actions-home'); key('Return'); capture('narrow-actions-commit')
         xdo('type', '--clearmodifiers', '--delay', 15, 'from-narrow-actions'); key('Return')
         assert (root / 'from-narrow-actions').is_dir(), 'narrow actions keyboard menu lost folder creation'

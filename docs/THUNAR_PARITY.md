@@ -6,36 +6,36 @@ specific so each missing row can become an independent implementation task.
 
 | Thunar feature | Shelf status | Remaining work |
 | --- | --- | --- |
-| Icon view | Partial | Row-major icon grid, shared multi-selection, keyboard navigation and vertical scroll exist; add zoom, alignment preferences and rubber-band selection. |
+| Icon view | Partial | Row-major icon grid, shared multi-selection, keyboard navigation, zoom and immediate native vertical scroll exist; add alignment preferences and rubber-band selection. |
 | List view | Partial | Sortable Name/Size/Type/Modified details with resizable headers and shared multi-selection exist; add inline rename and configurable columns. |
-| Compact view | Partial | Column-major layout, small leading icons, shared selection and horizontal scroll exist; add zoom and persistent layout preferences. |
-| Shortcuts side pane | Partial | Fixed Home, File System and Trash plus persistent local GTK bookmarks with add, label rename, removal, reordering and external refresh exist; add devices and remote shortcuts. |
+| Compact view | Partial | Column-major layout, leading icons, zoom, shared selection and immediate native horizontal scroll exist; add persistent layout preferences. |
+| Shortcuts side pane | Partial | Native Places/Devices/Network groups, XDG folders, GTK bookmarks and GVolumeMonitor device names/icons exist; add mount/unmount/eject controls and remote bookmark editing. |
 | Tree side pane | Partial | Lazy local Home/File System tree, expansion state, cwd ancestor reveal, hidden filtering, explicit branch refresh, safe raw-name captions and horizontal scrolling/reveal exist. Add remote/device trees and automatic filesystem watching. |
-| Location bar and path bar | Partial | Native local breadcrumbs with ancestor overflow, inline Ctrl+L editor, bounded raw-name completion and checked folder/file selection exist. Add remote URI providers and broader path-bar preferences. |
+| Location bar and path bar | Partial | Native location entry, local breadcrumbs, bounded raw-name completion and checked folder/file selection exist. GIO URI navigation retains native errors; add URI completion, authentication and broader path-bar preferences. |
 | Tabs | Partial | Native stable-key labels, active state, close controls, scrolling overflow and pointer/keyboard reorder exist; dynamic tabs retain independent raw routes/history/selection/focus/scroll. Add detached windows and persistent sessions. |
 | Split view | Partial | Local dual panes use a native draggable divider with independent tabs, navigation, selection, scrolling and settings, shared clipboard and explicit active-pane actions. Collapse retains the other pane in memory; add persistent layout and remote providers. |
 | Open With and default apps | Partial | Files delegate to `kryon/open_uri`; add application chooser, MIME database and defaults. |
-| MIME handling | Missing | Add shared MIME detection, type labels, icons and inheritance-aware choices. |
+| MIME handling | Partial | GIO supplies localized MIME descriptions and theme-resolved file icons with inheritance; add MIME application/default editing. |
 | Copy, move and links | Partial | Recursive copy/cut/paste, duplicate and symbolic links work; add progress, pause/cancel and conflict resolution. |
-| Trash | Partial | XDG Trash/files plus `.trashinfo`, deletion timestamps and restore work; add permanent-delete UI, empty trash, size and age columns. |
+| Trash | Partial | XDG Trash/files plus `.trashinfo`, deletion timestamps, restore, Delete and confirmed Shift+Delete work; add empty trash, size and age columns. |
 | Drag and drop | Missing | Add internal/file-list drag payloads, drop targets and drop-menu semantics. |
 | Clipboard | Partial | Desktop X11/XWayland copy/cut/paste uses text/uri-list and x-special/gnome-copied-files, with local URI validation and internal fallback when transport is unavailable. Native Wayland and clipboard-manager persistence remain; foreign identical same-window cut generations cannot be distinguished. |
-| Properties and permissions | Missing | Add single/multiple summaries, usage, metadata and permission/ownership editing with errors. |
+| Properties and permissions | Partial | Alt+Enter displays read-only path/name/type/size/date/owner metadata; add aggregate usage and permission/ownership editing. |
 | File search | Partial | Case-insensitive recursive filename search; add filtering, content search, cancellation and result navigation. |
 | Hidden files | Done | Toggle and filtered directory/search scans work. |
 | Sorting | Partial | Visible Name/size/modified/filesystem-type controls, reversal and deterministic name/path ties preserve selected identities and focus; add per-folder memory and configurable secondary keys. |
-| Zoom | Missing | Add view zoom levels, icon/text scaling and Ctrl+wheel shortcuts. |
-| Bookmarks and places | Partial | Persistent editable local GTK bookmarks preserve unsupported records and use atomic saves; add remote navigation and device-aware places. |
-| Mounting and removable volumes | Missing | Add mount discovery, mount/unmount/eject, open-on-insert and thunar-volman-equivalent behavior. |
-| Remote locations | Missing | Add a GVFS-like location abstraction, credentials, mounts, connectivity and remote operation errors. |
+| Zoom | Partial | Per-view icon levels, Ctrl+plus/minus/0, keypad variants and Ctrl+wheel work; add persistent preferences and independent text scaling. |
+| Bookmarks and places | Partial | Persistent editable local GTK bookmarks preserve unsupported records and use atomic saves. Native devices and GIO locations are navigable; add remote bookmark editing. |
+| Mounting and removable volumes | Partial | GVolumeMonitor discovers mounted devices and native roots; add mount/unmount/eject, open-on-insert and thunar-volman-equivalent behavior. |
+| Remote locations | Partial | GIO-backed URI enumeration and checked navigation participate in history, tabs and panes. Add authentication, mounting, URI completion and remote writes. |
 | Thumbnails and preview | Partial | Common-image grid thumbnails, large image preview with fit/zoom/pan/browse, bounded UTF-8 text preview and file metadata exist; add persistent Tumbler-equivalent cache, document/media providers and animated playback. |
-| System theme | Partial | Views, icons, prompts and previews follow the configured GTK color palette and refresh while running; add desktop font and icon-theme preferences. |
+| System theme | Partial | GTK CSS, Pango fonts, native measurements, themed icons and overlay scrollbars follow the active desktop settings. Private tests compare the complete default details window with installed Thunar; broader preferences and feature parity remain. |
 | Bulk rename | Missing | Add pattern/number renaming, preview, undoable batches and conflict handling. |
 | Custom actions | Missing | Add UCA discovery, command templates, execution contexts and output handling. |
 | Send To | Missing | Add destination providers, file contracts and extensible menu. |
 | Archive integration | Missing | Add create/extract/inspect flows through an explicit archive service. |
 | FileManager1 D-Bus interfaces | Missing | Implement `org.freedesktop.FileManager1` and `org.xfce.FileManager`. |
-| Keyboard shortcuts | Partial | Layout-aware arrows, Home/End, Space/Enter, modifier ranges, Ctrl+1/2/3, navigation, location, search, select-all and Ctrl+Tab exist; complete Thunar bindings, shortcuts help and remapping. |
+| Keyboard shortcuts | Partial | Standard navigation, selection, file operations, Undo/Redo, tab/window, zoom, sidebar/menubar, Help/Properties and keypad aliases work. Menus switch on hover and keyboard navigation; add shortcut remapping and bindings for future features. |
 | Preferences | Missing | Add persistent view, behavior, shortcuts, privacy and service preferences. |
 
 ## Current application boundaries

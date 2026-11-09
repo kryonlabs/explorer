@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import sys
 import time
+from ui_test import menu_action, native_sidebar_geometry
 from urllib.parse import quote_from_bytes
 
 
@@ -107,6 +108,9 @@ def main():
                 healthy(); time.sleep(.05)
             raise AssertionError('missing owned Shelf window')
         window = start()
+        native_geometry = native_sidebar_geometry()
+        (root / 'native-sidebar-geometry.json').write_text(json.dumps(native_geometry, indent=2) + '\n')
+        first_bookmark, second_bookmark = native_geometry['bookmark_centers']
         def key(*keys):
             for item in keys:
                 xdo('key', '--clearmodifiers', item); time.sleep(.15); healthy()
@@ -144,29 +148,36 @@ def main():
             assert captured.read_bytes() == os.fsencode(folder / 'proof.txt')
         navigate(beta)
         opened(beta)  # Assert navigation before publishing the current folder.
-        click(80, 287)  # Add current.
+        key('ctrl+d')  # A selected file is never bookmarked as its parent.
+        check_file([alpha])
+        key('Escape')  # With no selection, Add bookmarks the current folder.
+        menu_action(xdo, window, "Bookmarks", 0)  # Add current.
         check_file([alpha, beta])
-        click(40, 321)  # Rename the selected new bookmark.
+        navigate(root)
+        key('ctrl+s'); paste(beta.name); key('Return', 'ctrl+d')
+        check_file([alpha, beta])  # The selected directory, never root, is added.
+        navigate(beta); key('Escape', 'ctrl+d')
+        menu_action(xdo, window, "Bookmarks", 1)  # Rename the selected new bookmark.
         key('ctrl+a'); paste('Favorite é')
         key('Return'); check_file([alpha, beta], 'Favorite é')
-        click(40, 355); check_file([beta, alpha], 'Favorite é')
-        click(118, 355); check_file([alpha, beta], 'Favorite é')
-        click(40, 355); check_file([beta, alpha], 'Favorite é')
+        menu_action(xdo, window, "Bookmarks", 3); check_file([beta, alpha], 'Favorite é')
+        menu_action(xdo, window, "Bookmarks", 4); check_file([alpha, beta], 'Favorite é')
+        menu_action(xdo, window, "Bookmarks", 3); check_file([beta, alpha], 'Favorite é')
         navigate(root)
-        click(75, 392)  # Activate even though this bookmark is already selected.
+        click(75, first_bookmark)  # Activate even though this bookmark is already selected.
         opened(beta)
         assert uri(beta) in native_uris(), 'installed GTK did not read Shelf-added bookmark'
         process.terminate(); process.wait(timeout=10)
         window = start()
-        click(75, 392); opened(beta)
-        click(118, 321); check_file([alpha])  # Remove, then restart.
+        click(75, first_bookmark); opened(beta)
+        menu_action(xdo, window, "Bookmarks", 2); check_file([alpha])  # Remove, then restart.
         process.terminate(); process.wait(timeout=10)
         window = start()
-        click(75, 392); opened(alpha)
+        click(75, first_bookmark); opened(alpha)
         # Native external edits refresh without restarting Shelf.
         path.write_bytes(unknown + (uri(beta) + ' External beta\n').encode())
         time.sleep(1.3)
-        click(75, 392); opened(beta)
+        click(75, first_bookmark); opened(beta)
         check_file([beta], 'External beta')
         # GTK file URIs can represent raw Unix filename bytes. Shelf keeps those
         # identities and uses safe captions, independently of clipboard policy.
@@ -177,7 +188,7 @@ def main():
         raw_uri = 'file://' + quote_from_bytes(raw, safe='/')
         path.write_bytes(path.read_bytes() + (raw_uri + '\n').encode())
         time.sleep(1.3)
-        click(75, 424)
+        click(75, second_bookmark)
         key('ctrl+2', 'Home', 'Return')
         assert captured.read_bytes() == raw + b'/proof.txt'
         assert raw_uri in native_uris()
@@ -186,7 +197,7 @@ def main():
         path.rename(target)
         path.symlink_to(target.name)
         time.sleep(1.3)
-        click(40, 321)
+        menu_action(xdo, window, "Bookmarks", 1)
         key('ctrl+a'); paste('Do not replace symlink'); key('Return')
         assert path.is_symlink() and target.read_bytes() == original
         key('Escape')

@@ -1,0 +1,287 @@
+// Session-local filesystem journal. Paths own memory; payloads stay on disk.
+// Undone creations survive disposal in private app/Trash recovery directories.
+#scope_module
+Files :: #import "std/file_tree_linux";
+Env :: #import "std/environment_linux";
+Number :: #import "std/number_text";
+Whole :: #import "std/file";
+Strings :: #import "std/c_string";
+libc :: #system_library "c";
+StatxRaw :: (fd: s32, path: *u8, flags: s32, mask: u32, output: *u64) -> s32 #foreign libc "statx";
+LimitsRaw :: (resource: s32, output: *u64) -> s32 #foreign libc "getrlimit64";
+OpenRaw :: (path: *u8, flags: s32, mode: s32) -> s32 #foreign libc "open";
+CloseRaw :: (fd: s32) -> s32 #foreign libc "close";
+EffectiveUser :: () -> u32 #foreign libc "geteuid";
+RemoveDirectory :: (path: *u8) -> s32 #foreign libc "rmdir";
+pins: s32;
+#scope_export
+MAX_PINS :: 128;
+MAX_BATCHES :: 32;
+MAX_STEPS :: 8192;
+Step :: struct { before: Text; after: Text; recovery: Text; identity: Files.PathInfo; previous: Files.PathInfo; before_parent: Files.PathInfo; after_parent: Files.PathInfo; pin: s32; applied: bool; enabled: bool; }
+Batch :: struct { steps: Vec(Step) }
+Journal :: struct { batches: Vec(Batch); cursor: s64; }
+#scope_module
+RemoveEmpty :: (path: string) {
+    name: [4096]u8
+    if path != "" && Strings.CopyCString(path, name[:]) { unused RemoveDirectory(*name[0]) }
+}
+ReleaseBatch :: (batch: *Batch) {
+    for * batch.steps {
+        if it.pin > 0 { unused CloseRaw(it.pin - 1); pins -= 1 }
+        RemoveEmpty(TextView(it.recovery))
+    }
+    VecFree(batch.steps)
+}
+SameObject :: (a: Files.PathInfo, b: Files.PathInfo) -> bool {
+    return a.identity_valid && b.identity_valid && a.kind == b.kind && a.inode == b.inode &&
+        a.device_major == b.device_major && a.device_minor == b.device_minor
+}
+SameIdentity :: (a: Files.PathInfo, b: Files.PathInfo) -> bool {
+    return a.identity_valid && b.identity_valid && a.kind == b.kind && a.inode == b.inode &&
+        a.device_major == b.device_major && a.device_minor == b.device_minor &&
+        a.changed == b.changed && a.changed_nanoseconds == b.changed_nanoseconds &&
+        a.size == b.size && a.modified == b.modified && a.modified_nanoseconds == b.modified_nanoseconds && a.mode == b.mode
+}
+#scope_export
+Close :: (journal: *Journal) {
+    for * journal.batches { ReleaseBatch(it) }
+    VecFree(journal.batches); journal.cursor = 0
+}
+Reserve :: (batch: *Batch, count: s64) -> bool {
+    return count > 0 && count <= MAX_STEPS && VecReserve(batch.steps, count)
+}
+Begin :: (journal: *Journal, batch: *Batch, count: s64) -> bool {
+    return count > 0 && count <= MAX_STEPS && VecReserve(journal.batches, MAX_BATCHES + 1) && VecReserve(batch.steps, count)
+}
+// Recovery stays on the same filesystem so undo can rename without copying.
+Join :: (directory: string, name: string) -> Text {
+    out: Vec(u8)
+    if directory == "" || directory[0] != #char "/" || directory.count + name.count + 1 > 4095 ||
+        !VecReserve(out, directory.count + name.count + 1) { return .{} }
+    BuilderAppend(out, directory)
+    if directory[directory.count - 1] != #char "/" { unused VecPush(out, #char "/") }
+    BuilderAppend(out, name)
+    return BuilderFinish(out)
+}
+PrivateDirectory :: (path: string) -> bool {
+    query := Files.PathQuery(path, false)
+    if query.valid { return query.info.kind == .Directory && query.info.owner_uid == EffectiveUser() && (query.info.mode & 63) == 0 }
+    return query.missing && Whole.CreatePrivateDirectory(path)
+}
+RecoveryRoot :: (original: string) -> Text {
+    data: Text = TextCopy(Env.EnvironmentText("XDG_DATA_HOME"))
+    if data.bytes.count == 0 {
+        fallback: Text = Join(Env.EnvironmentText("HOME"), ".local/share")
+        VecSwap(data.bytes, fallback.bytes)
+    }
+    root: Text = Join(data, "shelf")
+    if data.bytes.count == 0 || !Files.CreateDirectories(data) || !PrivateDirectory(root) { return .{} }
+    destination := Files.PathStatus(root)
+    source := Files.PathStatus(Files.PathParent(original))
+    if !source.identity_valid || !destination.identity_valid { return .{} }
+    if source.device_major != destination.device_major || source.device_minor != destination.device_minor {
+        // Use this filesystem's private Trash area rather than littering the
+        // viewed folder. Never follow a pre-existing per-user Trash symlink.
+        mount: Text = Files.ResolvePath(Files.PathParent(original))
+        while mount.bytes.count > 1 {
+            parent: Text = TextCopy(Files.PathParent(mount))
+            info := Files.PathStatus(parent)
+            if info.device_major != source.device_major || info.device_minor != source.device_minor { break }
+            VecSwap(mount.bytes, parent.bytes)
+        }
+        digits: [32]u8
+        name: Vec(u8)
+        if !VecReserve(name, 64) { return .{} }
+        BuilderPrint(*name, ".Trash-%", Number.FormatInteger(cast(s64)EffectiveUser(), digits[:]))
+        trash: Text = Join(mount, TextView(name[:name.count]))
+        if !PrivateDirectory(trash) { return .{} }
+        next_root: Text = Join(trash, "shelf-undo")
+        VecSwap(root.bytes, next_root.bytes)
+        if !PrivateDirectory(root) { return .{} }
+    }
+    undo: Text = Join(root, "undo")
+    if !PrivateDirectory(undo) { return .{} }
+    return undo
+}
+Recovery :: (original: string) -> Text {
+    bytes: Text = TextCopy(original)
+    if bytes.bytes.count != original.count { return .{} }
+    root: Text = RecoveryRoot(original)
+    if root.bytes.count == 0 { return .{} }
+    directory: Text = Files.CreateTemporaryDirectory(root, "operation-")
+    if directory.bytes.count == 0 { return .{} }
+    name: Text = Join(directory, "original-path")
+    if name.bytes.count != directory.bytes.count + 14 { RemoveEmpty(directory); return .{} }
+    file := Whole.OpenNew(name)
+    if !file.valid { RemoveEmpty(directory); return .{} }
+    written := Whole.Write(file, bytes.bytes[:bytes.bytes.count]) == bytes.bytes.count
+    closed := Whole.CloseFile(file)
+    if !written || !closed { return .{} }
+    return directory
+}
+Prepare :: (batch: *Batch, before: string, after: string) -> bool {
+    if batch.steps.count >= MAX_STEPS { return false }
+    step: Step
+    step.after_parent = Files.PathStatus(Files.PathParent(after))
+    if !step.after_parent.identity_valid { return false }
+    step.enabled = true
+    step.after = TextCopy(after)
+    if after == "" || step.after.bytes.count != after.count { return false }
+    if before != "" {
+        step.before = TextCopy(before); step.previous = Files.PathStatus(before, false)
+        step.before_parent = Files.PathStatus(Files.PathParent(before))
+        if !step.before_parent.identity_valid { return false }
+        if step.before.bytes.count != before.count { return false }
+    }
+    if !VecPush(batch.steps, step) { return false }
+    return true
+}
+#scope_module
+PinBudget :: () -> s32 {
+    limits: [2]u64
+    if LimitsRaw(7, *limits[0]) != 0 { return 0 }
+    if limits[0] / 4 < cast(u64)MAX_PINS { return cast(s32)(limits[0] / 4) }
+    return MAX_PINS
+}
+#scope_export
+Commit :: (batch: *Batch) {
+    at := batch.steps.count - 1
+    batch.steps[at].identity = Files.PathStatus(TextView(batch.steps[at].after), false)
+    name: [4096]u8
+    if pins < PinBudget() && Strings.CopyCString(TextView(batch.steps[at].after), name[:]) {
+        fd := OpenRaw(*name[0], 2752512, 0) // O_PATH | O_NOFOLLOW | O_CLOEXEC
+        if fd >= 0 {
+            empty: [1]u8; record: [32]u64
+            identity := batch.steps[at].identity
+            if StatxRaw(fd, *empty[0], 4096, 2047, *record[0]) == 0 && record[4] == identity.inode &&
+                cast(u32)record[17] == identity.device_major && cast(u32)(record[17] >> 32) == identity.device_minor {
+                batch.steps[at].pin = fd + 1; pins += 1
+            } else { unused CloseRaw(fd) }
+        }
+    }
+    batch.steps[at].applied = true
+}
+Cancel :: (batch: *Batch) {
+    if batch.steps.count == 0 { return }
+    at := batch.steps.count - 1
+    if batch.steps[at].pin > 0 { unused CloseRaw(batch.steps[at].pin - 1); pins -= 1 }
+    RemoveEmpty(TextView(batch.steps[at].recovery))
+    unused VecResize(batch.steps, batch.steps.count - 1)
+}
+Finish :: (journal: *Journal, batch: *Batch) {
+    if batch.steps.count == 0 { return }
+    // Keep completed portions of interrupted replay as undoable work; discard
+    // only their undone portions when a new user action branches history.
+    if journal.cursor < journal.batches.count && AnyApplied(*journal.batches[journal.cursor]) { journal.cursor += 1 }
+    for at: cast(s64)0..journal.cursor - 1 {
+        batch_at := *journal.batches[at]
+        for * batch_at.steps { if !it.applied { it.enabled = false } }
+    }
+    for at: journal.cursor..journal.batches.count - 1 { ReleaseBatch(*journal.batches[at]) }
+    unused VecResize(journal.batches, journal.cursor)
+    for * batch.steps { Rebase(journal, it.previous, it.identity) }
+    total := batch.steps.count
+    for * journal.batches { total += it.steps.count }
+    while journal.batches.count > 0 && (journal.batches.count >= MAX_BATCHES || total > MAX_STEPS) {
+        total -= journal.batches[0].steps.count
+        ReleaseBatch(*journal.batches[0])
+        for at: cast(s64)1..journal.batches.count - 1 { VecSwap(journal.batches[at - 1].steps, journal.batches[at].steps) }
+        unused VecResize(journal.batches, journal.batches.count - 1)
+    }
+    pending: Batch
+    VecSwap(pending.steps, batch.steps)
+    unused VecPush(journal.batches, pending)
+    journal.cursor = journal.batches.count
+}
+#scope_module
+Rebase :: (journal: *Journal, previous: Files.PathInfo, current: Files.PathInfo) {
+    if !previous.identity_valid { return }
+    for * journal.batches {
+        for * it.steps { if SameIdentity(it.identity, previous) { it.identity = current } }
+    }
+}
+Replay :: (journal: *Journal, step: *Step, forward: bool) -> bool {
+    if !step.enabled || step.applied == forward { return true }
+    if !forward && step.before.bytes.count == 0 {
+        recovery: Text = Recovery(TextView(step.after))
+        if recovery.bytes.count == 0 { return false }
+        path: Text = Join(recovery, "payload")
+        if path.bytes.count != recovery.bytes.count + 8 { return false }
+        step.before_parent = Files.PathStatus(recovery)
+        VecSwap(step.before.bytes, path.bytes)
+        VecSwap(step.recovery.bytes, recovery.bytes)
+    }
+    source := ifx forward then TextView(step.before) else TextView(step.after)
+    target := ifx forward then TextView(step.after) else TextView(step.before)
+    source_parent := ifx forward then step.before_parent else step.after_parent
+    target_parent := ifx forward then step.after_parent else step.before_parent
+    if !SameObject(source_parent, Files.PathStatus(Files.PathParent(source))) ||
+        !SameObject(target_parent, Files.PathStatus(Files.PathParent(target))) { return false }
+    current := Files.PathQuery(source, false)
+    destination := Files.PathQuery(target, false)
+    if !current.valid || !Matches(step, current.info) || !destination.missing { return false }
+    if !Whole.RenameNoReplace(source, target) { return false }
+    step.applied = forward
+    info := Files.PathStatus(target, false)
+    if !SameObject(step.identity, info) { return false }
+    previous := step.identity
+    step.identity = info
+    Rebase(journal, previous, info)
+    return true
+}
+// A pinned inode cannot be reused. Modified contents are moved intact into
+// recovery; when pinning failed, require the full unchanged metadata snapshot.
+Matches :: (step: *Step, info: Files.PathInfo) -> bool {
+    if step.pin == 0 { return SameIdentity(step.identity, info) }
+    return info.identity_valid && step.identity.identity_valid && info.kind == step.identity.kind &&
+        info.inode == step.identity.inode && info.device_major == step.identity.device_major &&
+        info.device_minor == step.identity.device_minor
+}
+AnyApplied :: (batch: *Batch) -> bool {
+    for * batch.steps { if it.enabled && it.applied { return true } }
+    return false
+}
+PartlyUndone :: (batch: *Batch) -> bool {
+    for * batch.steps { if it.enabled && !it.applied { return true } }
+    return false
+}
+#scope_export
+Undo :: (journal: *Journal) -> bool {
+    at := journal.cursor - 1
+    // An interrupted redo is also reversible, without losing its progress.
+    if journal.cursor < journal.batches.count {
+        pending := *journal.batches[journal.cursor]
+        for * pending.steps { if it.enabled && it.applied { at = journal.cursor; break } }
+    }
+    if at < 0 { return false }
+    batch := *journal.batches[at]
+    index := batch.steps.count - 1
+    while index >= 0 {
+        if !Replay(journal, *batch.steps[index], false) { return false }
+        index -= 1
+    }
+    if at < journal.cursor { journal.cursor -= 1 }
+    return true
+}
+Redo :: (journal: *Journal) -> bool {
+    at := journal.cursor
+    if at > 0 && PartlyUndone(*journal.batches[at - 1]) { at -= 1 }
+    if at >= journal.batches.count { return false }
+    batch := *journal.batches[at]
+    for * batch.steps { if !Replay(journal, it, true) { return false } }
+    if at == journal.cursor { journal.cursor += 1 }
+    return true
+}
+
+Discard :: (batch: *Batch) { ReleaseBatch(batch) }
+
+AdoptRecovery :: (batch: *Batch, recovery: *Text) { VecSwap(batch.steps[batch.steps.count - 1].recovery.bytes, recovery.bytes) }
+
+// Return an owned path for inspection/recovery without exposing borrowed bytes.
+RecoveryPayload :: (journal: *Journal, batch: s64, step: s64 = 0) -> Text {
+    if batch < 0 || batch >= journal.batches.count { return .{} }
+    entry := *journal.batches[batch]
+    if step < 0 || step >= entry.steps.count { return .{} }
+    return TextCopy(TextView(entry.steps[step].before))
+}

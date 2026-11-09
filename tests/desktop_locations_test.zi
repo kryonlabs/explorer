@@ -1,0 +1,233 @@
+using Locations :: #import "desktop_locations";
+using Vectors :: #import "std/vec";
+using Bytes :: #import "std/byte_text_linux";
+Files :: #import "std/file_tree_linux";
+using Model :: #import "model";
+Location :: #import "location";
+Env :: #import "std/environment_linux";
+Utf8 :: #import "std/utf8";
+CString :: #import "std/c_string";
+gio :: #system_library "gio-2.0";
+glib :: #system_library "glib-2.0";
+gobject :: #system_library "gobject-2.0";
+List :: struct { data: *void; next: *List; previous: *List; }
+MonitorNew :: () -> *void #foreign gio "g_volume_monitor_get";
+MonitorMounts :: (monitor: *void) -> *List #foreign gio "g_volume_monitor_get_mounts";
+MountRoot :: (mount: *void) -> *void #foreign gio "g_mount_get_root";
+MountShadowed :: (mount: *void) -> s32 #foreign gio "g_mount_is_shadowed";
+GetUri :: (file: *void) -> *u8 #foreign gio "g_file_get_uri";
+Unref :: (object: *void) #foreign gobject "g_object_unref";
+Free :: (data: *u8) #foreign glib "g_free";
+ListFree :: (list: *List) #foreign glib "g_list_free";
+FileUri :: (uri: *u8) -> *void #foreign gio "g_file_new_for_uri";
+Relative :: (file: *void, path: *u8) -> *void #foreign gio "g_file_resolve_relative_path";
+
+Require :: (condition: bool, name: string) -> bool {
+    if !condition { print("FAIL: %\n", name) }
+    return condition
+}
+Find :: (state: *Locations.State, name: string) -> s64 {
+    for i: cast(s64)0..state.entries.count - 1 { if state.entries[i].name == name { return i } }
+    return -1
+}
+ModelRoutes :: (directory: string) -> bool {
+    print("Model native routes: recent\n")
+    manager: Model.Manager
+    Model.Init(*manager,directory); defer Model.Dispose(*manager)
+    if !Require(Model.OpenPathTracked(*manager,"recent:///") && manager.cwd=="recent:///" && manager.entries.count==4,"model exposes real recent location") { return false }
+    remote: s32=-1
+    count:=cast(s32)manager.entries.count
+    for i: cast(s32)0..count-1 {
+        entry:=manager.entries[i]
+        if entry.uri=="sftp://example.invalid/remote.txt" { remote=i }
+        if !Require(entry.uri!="" && entry.key==Locations.Key(entry.uri) && entry.icon_serialized!="","model retains native URI and GIcon identity") { return false }
+    }
+    if !Require(remote>=0,"remote recent identity retained") { return false }
+    Model.SelectOne(*manager,remote)
+    selected:=manager.entries[remote].key
+    if !Require(!Model.CreateFolder(*manager,"must-not-exist") && !Model.CreateFile(*manager,"must-not-exist") && !Model.Search(*manager,"note") &&
+        !Model.CopySelection(*manager,false) && !Model.RenameSelection(*manager,"renamed") && !Model.DeleteSelection(*manager,false) &&
+        !Model.DuplicateSelection(*manager) && !Model.MakeLinkSelection(*manager) && manager.cwd=="recent:///" && manager.entries.count==4,
+        "unsupported virtual writes fail without mutating route or entries") { return false }
+    manager.scroll=37
+    print("Model native routes: tabs\n")
+    if !Require(Model.NewTab(*manager,directory) && Model.SwitchTab(*manager,0) && manager.cwd=="recent:///" &&
+        Model.SelectedCount(*manager)==1 && manager.entries[manager.cursor].key==selected && manager.scroll==37,
+        "URI tab restores selection by native identity") { return false }
+    print("Model native routes: history\n")
+    if !Require(Model.NavigateBack(*manager) && manager.cwd==directory && Model.NavigateForward(*manager) && manager.cwd=="recent:///",
+        "URI history preserves native route") { return false }
+    before:=manager.back.count
+    if !Require(!Model.OpenPathTracked(*manager,"shelf-unsupported-test:///missing") && manager.cwd=="recent:///" && manager.entries.count==4 && manager.back.count==before,
+        "URI open error keeps listing and history") { return false }
+    editor: Location.State; defer Location.Release(*editor)
+    print("Model native routes: editor\n")
+    uri: Text=Locations.UriForPath(directory)
+    if !Require(Location.Begin(*editor,manager.cwd,Model.HomePath()) && Location.Query(*editor,TextView(uri),false) &&
+        editor.candidates.count==0 && Location.Submit(*editor,*manager,TextView(uri),false) && manager.cwd==directory,
+        "location editor opens file URI as exact local path") { return false }
+    if !Require(Model.NavigateBack(*manager) && manager.cwd=="recent:///" && !Model.NavigateUp(*manager) && manager.cwd=="recent:///",
+        "virtual root has no fabricated filesystem parent") { return false }
+    resolved: Text=Locations.ResolveUri("sftp://example.invalid/a/b/","../folder name")
+    base: [128]u8; child: [64]u8
+    unused CString.CopyCString("sftp://example.invalid/a/b/",base[:]); unused CString.CopyCString("../folder name",child[:])
+    native_base:=FileUri(*base[0]); native_child:=Relative(native_base,*child[0]); native_uri:=GetUri(native_child)
+    matches:=TextView(resolved)==Bytes.TextFromCString(native_uri)
+    Free(native_uri);Unref(native_child);Unref(native_base)
+    if !Require(matches,"relative URI resolution matches current native GFile backend") { return false }
+    roots:=string.["computer:///","network:///"]
+    print("Model native routes: virtual roots\n")
+    for route: roots {
+        print("Model native route: %\n",route)
+        old: Text=TextCopy(manager.cwd); count:=manager.entries.count; back:=manager.back.count
+        if Model.OpenPathTracked(*manager,route) {
+            if !Require(manager.cwd==route,"model virtual route retains native URI") { return false }
+            at: s64
+            while at<manager.entries.count {
+                entry:=manager.entries[at];at+=1
+                if !Require(entry.uri!="" && entry.key==Locations.Key(entry.uri),"model virtual child identity") { return false }
+            }
+        } else {
+            if !Require(Env.EnvironmentText("GIO_USE_VFS")=="local","fresh GVfs virtual root activates natively") { print("Native root error: %\n",manager.error);return false }
+            if !Require(manager.error!="" && manager.cwd==TextView(old) && manager.entries.count==count && manager.back.count==back,
+                "unavailable virtual route preserves model transaction") { return false }
+        }
+    }
+    print("Native model URI routes/history/tabs/location/write-boundary tests passed\n")
+    return true
+}
+Run :: (root: string) -> bool {
+    directory: Text = Files.JoinPath(root, "files")
+    uri: Text = Locations.UriForPath(TextView(directory))
+    raw_bytes := u8.[114, 97, 119, 45, 255, 32, 35, 37, 10]
+    raw: Text = Files.JoinPath(TextView(directory), Bytes.TextFromBytes(raw_bytes[:]))
+    raw_uri: Text = Locations.UriForPath(TextView(raw))
+    roundtrip: Text = Locations.PathForUri(TextView(raw_uri))
+    remote: Text = Locations.PathForUri("sftp://example.invalid/path")
+    if !Require(TextView(roundtrip) == TextView(raw) && raw_uri.bytes.count > raw.bytes.count && remote.bytes.count == 0, "raw filename URI round trip/nonlocal identity") { return false }
+    invalid: Text = Locations.UriForPath("relative")
+    if !Require(invalid.bytes.count == 0, "reject relative path identity") { return false }
+    invalid_uris := string.["file://remote.invalid/path", "file:///bad%00tail", "file:///bad%GG", "file:relative"]
+    for bad_uri: invalid_uris {
+        bad_path: Text = Locations.PathForUri(bad_uri)
+        if !Require(bad_path.bytes.count == 0, "reject nonlocal or malformed file URI identity") {
+            print("Invalid file URI % mapped to %\n", bad_uri, TextView(bad_path)); return false
+        }
+    }
+    local_parent: Text = Locations.ParentUri(TextView(raw_uri))
+    remote_parent: Text = Locations.ParentUri("sftp://example.invalid/folder/child")
+    invalid_parent: Text = Locations.ParentUri("file://remote.invalid/path")
+    if !Require(TextView(local_parent) == TextView(uri) && TextView(remote_parent) == "sftp://example.invalid/folder" &&
+        invalid_parent.bytes.count == 0, "native byte-safe local and remote parent URI identity") { return false }
+    roots_without_parent := string.["file:///", "computer:///", "network:///", "recent:///", "sftp://example.invalid/"]
+    for root_uri: roots_without_parent {
+        parent: Text = Locations.ParentUri(root_uri)
+        if !Require(parent.bytes.count == 0, "native root has no Up destination") { print("Unexpected parent of %: %\n", root_uri, TextView(parent)); return false }
+    }
+    state: Locations.State; Locations.Init(*state)
+    if !Require(Locations.OpenUri(*state, TextView(uri)), "local native enumeration") {
+        print("Native error %:% %\n", state.error.domain, state.error.code, state.error.message); return false
+    }
+    if !Require(state.entries.count == 6 && state.current_uri == TextView(uri), "complete fixture listing") { return false }
+    raw_index := Find(*state, Bytes.TextFromBytes(raw_bytes[:]))
+    dir_index := Find(*state, "folder")
+    link_index := Find(*state, "link")
+    hidden_index := Find(*state, ".hidden")
+    if !Require(raw_index >= 0 && dir_index >= 0 && link_index >= 0 && hidden_index >= 0, "all native names retained") { return false }
+    row := state.entries[raw_index]
+    if !Require(row.local_path == TextView(raw) && row.uri == TextView(raw_uri) && row.size == 3 &&
+        row.key == Locations.Key(row.uri) && row.icon_name != "" && row.icon_serialized != "" &&
+        row.content_type != "" && Utf8.Valid(row.caption) && state.entries[dir_index].is_directory &&
+        state.entries[link_index].is_symlink && state.entries[hidden_index].is_hidden, "native metadata and display/raw names") { return false }
+    key := row.key; saved_caption: Text = TextCopy(row.caption)
+    missing: Text = Files.JoinPath(root, "missing")
+    missing_uri: Text = Locations.UriForPath(TextView(missing))
+    if !Require(!Locations.OpenUri(*state, TextView(missing_uri)) && state.error.domain != 0 &&
+        state.error.message != "" && state.current_uri == TextView(uri) && state.entries.count == 6 &&
+        state.entries[raw_index].key == key && state.entries[raw_index].caption == TextView(saved_caption), "native error rollback and borrowed lifetime") { return false }
+    state.max_entries = 1
+    if !Require(!Locations.OpenUri(*state, TextView(uri)) && state.error.code == -2 && state.entries.count == 6 &&
+        state.current_uri == TextView(uri), "entry limit rollback") { return false }
+    state.max_entries = 4096; state.max_bytes = 8
+    if !Require(!Locations.OpenUri(*state, TextView(uri)) && state.error.code == -2 && state.entries.count == 6,
+        "metadata limit rollback") { return false }
+    state.max_bytes = 16777216
+    denied: Text = Files.JoinPath(root, "denied")
+    denied_uri: Text = Locations.UriForPath(TextView(denied))
+    if !Require(!Locations.OpenUri(*state, TextView(denied_uri)) && state.error.domain != 0 &&
+        state.current_uri == TextView(uri), "permission failure rollback") { return false }
+    busy: Text = Files.JoinPath(root, "busy")
+    busy_uri: Text = Locations.UriForPath(TextView(busy))
+    state.timeout_ms = 1
+    if !Require(!Locations.OpenUri(*state, TextView(busy_uri)) && state.error.domain != 0 &&
+        state.error.code == 19 && state.current_uri == TextView(uri) && state.entries.count == 6,
+        "native cancellable deadline rolls back and drains callbacks") { return false }
+    state.timeout_ms = 10000
+    if !Require(Locations.OpenRecent(*state) && state.current_uri == "recent:///" && state.error.message == "" &&
+        state.entries.count == 4, "GTK recent history real local/remote entries and missing filtering") { print("Recent error: % (% entries)\n", state.error.message, state.entries.count); return false }
+    recent_local := false; recent_raw := false; recent_remote := false; recent_nonlocal := false
+    for entry: state.entries {
+        if entry.name == "note.txt" { recent_local = entry.local_path != "" && entry.kind == .File && entry.caption == "Recent note" }
+        if entry.name == Bytes.TextFromBytes(raw_bytes[:]) { recent_raw = entry.local_path == TextView(raw) }
+        if entry.uri == "sftp://example.invalid/remote.txt" { recent_remote = entry.local_path == "" && entry.caption == "Remote note" && entry.content_type == "text/plain" }
+        if entry.uri == "file://remote.invalid/path" { recent_nonlocal = entry.local_path == "" && entry.caption == "Nonlocal file note" }
+    }
+    if !Require(recent_local && recent_raw && recent_remote && recent_nonlocal && state.entries[0].caption == "Remote note", "recent original identities, captions and modified ordering") { return false }
+    recent_file: Text = Files.JoinPath(Env.EnvironmentText("XDG_DATA_HOME"), "recently-used.xbel")
+    if !ModelRoutes(TextView(directory)) { return false }
+    if !Files.ReplaceFile(TextView(recent_file), "<not-xbel") { return false }
+    if !Require(!Locations.OpenRecent(*state) && state.entries.count == 4 && state.current_uri == "recent:///" &&
+        state.error.domain != 0 && state.error.message != "", "recent parser failure rollback") { return false }
+    if !Files.RemoveFile(TextView(recent_file)) { return false }
+    if !Require(Locations.OpenRecent(*state) && state.entries.count == 0 && state.error.message == "", "missing recent history is genuinely empty") { return false }
+    if !Require(Locations.OpenMounts(*state), "volume monitor enumeration") { return false }
+    monitor := MonitorNew(); if monitor == null { return false }
+    list := MonitorMounts(monitor); cursor := list; count: s64
+    while cursor != null {
+        mount := cursor.data; cursor = cursor.next
+        if MountShadowed(mount) == 0 {
+            file := MountRoot(mount)
+            if file == null { return false }
+            native := GetUri(file); found := false
+            for entry: state.entries { if entry.uri == Bytes.TextFromCString(native) && entry.is_directory && entry.kind == .Mount { found = true } }
+            Free(native); Unref(file)
+            if !Require(found, "mounted root identity matches independent GVolumeMonitor") { return false }
+            count += 1
+        }
+        Unref(mount)
+    }
+    ListFree(list); Unref(monitor)
+    if !Require(count == state.entries.count, "mounted root count matches independent native monitor") { return false }
+    print("Native mounted roots matched: %\n", count)
+    roots := string.["computer:///", "network:///"]
+    for target: roots {
+        if !Locations.OpenUri(*state, TextView(uri)) { return false }
+        success := Locations.OpenUri(*state, target)
+        if success {
+            if !Require(state.current_uri == target, "virtual native URI identity") { return false }
+            for entry: state.entries {
+                if !Require(entry.uri != "" && entry.key == Locations.Key(entry.uri), "virtual child native identity") { return false }
+                if entry.target_uri != "" {
+                    path: Text = Locations.PathForUri(entry.target_uri)
+                    if !Require(entry.local_path == TextView(path), "virtual target local-path mapping") { return false }
+                }
+            }
+            print("Native virtual enumeration %: % entries\n", target, state.entries.count)
+        } else {
+            if !Require(state.error.domain != 0 && state.error.message != "" && state.current_uri == TextView(uri) && state.entries.count == 6,
+                "virtual unavailable-service error with rollback") { return false }
+            print("Native virtual service unavailable %: %:% %\n", target, state.error.domain, state.error.code, state.error.message)
+        }
+    }
+    // A definitively unsupported scheme cannot be silently treated as a path.
+    if !Require(!Locations.OpenUri(*state, "shelf-unsupported-test:///unavailable") && state.error.domain != 0 &&
+        state.error.message != "", "unsupported service is a genuine error") { return false }
+    Locations.Release(*state)
+    if !Require(state.entries.count == 0 && state.current_uri == "" && state.error.message == "", "owned native state release") { return false }
+    print("Desktop location native identity/recent/mount/virtual/rollback/limit tests passed\n")
+    return true
+}
+main :: (argc: s32, argv: **u8) -> s32 {
+    if argc != 2 { return 64 }
+    return ifx Run(Bytes.TextFromCString(argv[1])) then 0 else 1
+}
