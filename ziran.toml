@@ -12,7 +12,7 @@ ref = "919bb6fe3c58cf703fb1179c2926b655e35ab97b"
 
 [dependencies.kryon]
 git = "https://github.com/kryonlabs/kryon.git"
-ref = "b3e38a7bb888857bc414c290de3d18514528b132"
+ref = "73ff84637aeeb57a1b5250ed122140b1056eb755"
 
 [exports]
 model = "src/model.zi"

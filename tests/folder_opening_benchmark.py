@@ -17,6 +17,7 @@ import statistics
 import subprocess
 import sys
 import time
+import xml.etree.ElementTree as ET
 
 REPO = Path(__file__).resolve().parents[1]
 OUTPUT = REPO / "build/folder-opening"
@@ -39,60 +40,67 @@ def make_fixture(home):
     return root
 
 
-def window_for(process):
-    started = time.monotonic()
+def window_for(process, started):
     deadline = started + 20
+    mapped_at = None
+    candidate = None
+    stable_since = None
     while time.monotonic() < deadline:
         if process.poll() is not None:
             raise AssertionError("application exited early: " + str(process.returncode))
         search = subprocess.run(["xdotool", "search", "--onlyvisible", "--pid", str(process.pid)],
                                 capture_output=True, text=True, timeout=5)
         for window in search.stdout.splitlines():
-            fields = dict(item.split("=", 1) for item in
-                          run("xdotool", "getwindowgeometry", "--shell", window).splitlines())
+            try:
+                geometry = run("xdotool", "getwindowgeometry", "--shell", window)
+                owner = run("xdotool", "getwindowpid", window)
+            except subprocess.CalledProcessError:
+                continue
+            fields = dict(item.split("=", 1) for item in geometry.splitlines())
             if int(fields["WIDTH"]) > 300 and int(fields["HEIGHT"]) > 200:
-                assert run("xdotool", "getwindowpid", window) == str(process.pid)
-                return int(window), (time.monotonic() - started) * 1000
-        time.sleep(.01)
-    raise AssertionError("owned application window did not appear")
+                assert owner == str(process.pid)
+                now = time.monotonic()
+                if mapped_at is None:
+                    mapped_at = now
+                if candidate != window:
+                    candidate, stable_since = window, now
+                elif now - stable_since >= .05:
+                    return int(window), (mapped_at - started) * 1000
+            break
+        time.sleep(.005)
+    raise AssertionError("owned application window did not become stable")
 
 
 def image_bytes(window, exporter):
     pixbuf = exporter(window)
     assert pixbuf is not None
-    mode = "RGBA" if pixbuf.get_has_alpha() else "RGB"
-    from PIL import Image
-    image = Image.frombytes(mode, (pixbuf.get_width(), pixbuf.get_height()),
-                            bytes(pixbuf.get_pixels()), "raw", mode, pixbuf.get_rowstride())
-    return image.convert("RGB").tobytes()
+    return bytes(pixbuf.get_pixels())
 
 
-def settle(window, exporter, baseline=None, deadline_seconds=12):
-    started = time.monotonic()
+def settle(window, exporter, baseline=None, deadline_seconds=12, started=None):
+    if started is None:
+        started = time.monotonic()
     deadline = started + deadline_seconds
     previous = baseline
     changed_at = None
-    stable = 0
+    stable_since = None
+    ready_at = None
     while time.monotonic() < deadline:
         current = image_bytes(window, exporter)
         now = time.monotonic()
         if current != previous:
-            stable = 0
+            stable_since = now
+            ready_at = now
             if changed_at is None and baseline is not None:
                 changed_at = now
             previous = current
-        elif changed_at is not None:
-            stable += 1
-            if stable >= 1:
+        elif changed_at is not None or baseline is None:
+            if stable_since is not None and now - stable_since >= .3:
                 return {"changed_ms": None if changed_at is None else (changed_at - started) * 1000,
-                        "ready_ms": (now - started) * 1000}
-        elif baseline is None:
-            stable += 1
-            if stable >= 1:
-                return {"changed_ms": None, "ready_ms": (now - started) * 1000}
+                        "ready_ms": (ready_at - started) * 1000}
         else:
             previous = current
-        time.sleep(.02)
+        time.sleep(.005)
     raise AssertionError("application pixels did not reach a stable opened-folder state")
 
 
@@ -117,9 +125,8 @@ def sample(app, executable, target, home):
         process = subprocess.Popen([str(executable)], cwd=home, stdout=log,
                                    stderr=subprocess.STDOUT)
         try:
-            window, mapped_ms = window_for(process)
-            mapped_ms += (time.monotonic_ns() - before_launch) / 1_000_000
-            native_window = foreign_window(display, window)
+            window, mapped_ms = window_for(process, before_launch / 1_000_000_000)
+            native_window = None
 
             def exporter(_):
                 return Gdk.pixbuf_get_from_window(native_window, 0, 0,
@@ -129,16 +136,31 @@ def sample(app, executable, target, home):
             run("xdotool", "windowmove", "--sync", window, 0, 0)
             run("xdotool", "windowsize", "--sync", window, WIDTH, HEIGHT)
             run("xdotool", "windowfocus", "--sync", window)
-            root = settle(window, exporter)
-            startup_ready_ms = (time.monotonic_ns() - before_launch) / 1_000_000
-            baseline = image_bytes(window, exporter)
+            # A foreign GDK window caches its initial geometry. Create it after
+            # resizing so both captures contain the full, same-sized viewport.
+            native_window = foreign_window(display, window)
+            assert (native_window.get_width(), native_window.get_height()) == (WIDTH, HEIGHT)
+            root = settle(window, exporter, started=before_launch / 1_000_000_000)
+            startup_ready_ms = root["ready_ms"]
+            # Observe file rows, excluding toolbar/sidebar/status and native
+            # scrollbar fades. Full-window captures remain available to inspect.
+            response_exporter = lambda _: Gdk.pixbuf_get_from_window(
+                native_window, 200, 150, WIDTH-224, HEIGHT-190)
             run("xdotool", "key", "--clearmodifiers", "ctrl+l")
             run("xdotool", "type", "--delay", "0", "--window", window, str(target))
-            run("xdotool", "key", "--window", window, "Return")
-            opened = settle(window, exporter, baseline=baseline)
+            # Return measures navigation handling only. Let the completed
+            # toolbar edit settle, then record both pixels immediately before
+            # the submission key reaches the application.
+            settle(window, response_exporter)
+            response_baseline = image_bytes(window, response_exporter)
+            submitted_at = time.monotonic()
+            run("xdotool", "key", "--delay", "0", "--window", window, "Return")
+            opened = settle(window, response_exporter, baseline=response_baseline,
+                            started=submitted_at)
+            exporter(window).savev(str(OUTPUT / (app + "-" + target.name + ".png")), "png", [], [])
             return {"app": app, "folder": target.name,
                     "entries": sum(1 for _ in target.iterdir()),
-                    "mapped_ms": mapped_ms, "root_ready_ms": root["ready_ms"],
+                    "mapped_ms": mapped_ms, "root_ready_ms": startup_ready_ms - mapped_ms,
                     "startup_ready_ms": startup_ready_ms,
                     "folder_changed_ms": opened["changed_ms"],
                     "folder_ready_ms": opened["ready_ms"], "log": str(log_path)}
@@ -177,6 +199,16 @@ def main():
     assert ignored.returncode == 0, "benchmark artifacts must be ignored"
     home = Path(os.environ["HOME"])
     targets = make_fixture(home)
+    # Explorer starts in details view with 48px icons. Match that workload in
+    # Thunar, using only this private session's configuration.
+    channel = ET.Element("channel", name="thunar", version="1.0")
+    for name, value in (("last-view", "ThunarDetailsView"),
+                        ("last-details-view-zoom-level", "THUNAR_ZOOM_LEVEL_75_PERCENT"),
+                        ("last-location-bar", "ThunarLocationEntry")):
+        ET.SubElement(channel, "property", name=name, type="string", value=value)
+    config = Path(os.environ["XDG_CONFIG_HOME"]) / "xfce4/xfconf/xfce-perchannel-xml/thunar.xml"
+    config.parent.mkdir(parents=True, exist_ok=True)
+    ET.ElementTree(channel).write(config, encoding="utf-8")
     apps = {"explorer": args.executable.resolve(), "thunar": Path(args.thunar).resolve()}
     samples = []
     for iteration in range(args.iterations):
@@ -186,7 +218,9 @@ def main():
                 samples.append(sample(app, apps[app], target, home))
                 (OUTPUT / "progress.json").write_text(json.dumps(samples[-1], indent=2) + "\n")
     report = {"schema": 1, "status": "complete", "window_size": [WIDTH, HEIGHT],
-              "iterations": args.iterations,
+              "iterations": args.iterations, "view": "details", "icon_size": 48,
+              "navigation_region": [200, 150, WIDTH-224, HEIGHT-190],
+              "stability_verification_ms": 300,
               "host": {"kernel": platform.release(), "machine": platform.machine()},
               "executables": {app: {"path": str(path), "sha256": hashlib.file_digest(
                   path.open("rb"), "sha256").hexdigest()} for app, path in apps.items()},

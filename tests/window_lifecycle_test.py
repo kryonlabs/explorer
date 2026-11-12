@@ -28,7 +28,8 @@ def endpoint(pid, env=None):
         for byte in os.fsencode(env.get(key, '')) + b'\xff':
             scope = ((scope ^ byte) * 1099511628211) & ((1 << 64) - 1)
     address = bytearray(48)
-    address[1:15] = b'explorer-close-v1'
+    prefix = b'explorer-close-v1'
+    address[1:1 + len(prefix)] = prefix
     struct.pack_into('=QQQ', address, 16, scope, pid, birth(pid))
     return bytes(address)
 def ready(child, env=None):

@@ -57,8 +57,7 @@ DetailsCells :: struct {
     cells: [4]string
     size: [32]u8
     modified: [32]u8
-    description: [8192]u8
-    description_length: s32
+    description: Text
     link: bool
     broken: bool
     path_key: u64
@@ -78,6 +77,7 @@ PaneView :: struct {
     columns_resized: bool
     columns_signature: u64
     columns_generation: u64
+    columns_pending: bool
     name_minimum: s32
     column_values: Vec(string)
     last_click_path: Text
@@ -1538,12 +1538,12 @@ DetailsData :: (manager: *Model.Manager, index: s32, data: *DetailsCells) {
             caption: Text=FileDisplay.Caption(TextView(target[:target_length]))
             BuilderPrint(*b," (link to %)",TextView(caption))
         }
-        data.description_length=CopyInto(data.description[:],TextView(b[:]))
+        VecSwap(data.description.bytes,b)
         VecFree(b)
         data.path_key=entry.key; data.stamp=entry.info.modified
         data.stamp_ns=entry.info.modified_nanoseconds; data.size_value=entry.info.size
     }
-    data.cells[2]=TextView(data.description[:data.description_length])
+    data.cells[2]=TextView(data.description)
     date_length:=Gtk.GtkFormatFileDate(entry.info.modified,data.modified[:],.RelativeDate,-1,"thunar")
     data.cells[3]=ifx date_length>0 then TextView(data.modified[:date_length]) else ""
 }
@@ -1558,9 +1558,23 @@ MeasureDetailsColumns :: (manager: *Model.Manager, view: *PaneView, bounds: Rect
     }
     generation:=Gtk.GtkStyleGeneration()
     count:=cast(s32)manager.entries.count
-    if signature!=view.columns_signature || generation!=view.columns_generation {
-        if !VecResize(view.column_values,cast(s64)count) { return }
-        for index: cast(s32)0..count-1 { DetailsData(manager,index,*view.details_cells[index]) }
+    changed:=signature!=view.columns_signature || generation!=view.columns_generation
+    if changed || view.columns_pending {
+        // Show the destination's visible rows before measuring offscreen text.
+        // The next frame finishes the exact native widths for the whole list.
+        first: s32=0; end:=count
+        if changed {
+            icon:=ifx view.zoom[cast(s32)manager.view_mode]==3 then cast(s32)Native.DetailsIconSize() else ZoomIcon(view,.ViewList)
+            row_height:=Native.DetailsRowHeight()+icon-cast(s32)Native.DetailsIconSize()
+            if row_height<1 { row_height=1 }
+            first=manager.scroll/row_height
+            if first<0 || first>=count { first=0 }
+            end=first+cast(s32)(bounds.height/ cast(float32)row_height)+2
+            if end>count { end=count }
+        }
+        measured:=end-first
+        if !VecResize(view.column_values,cast(s64)measured) { return }
+        for index: first..end-1 { DetailsData(manager,index,*view.details_cells[index]) }
         headers: [4]string=.["Name","Size","Type","Date Modified"]
         tree:=Native.Nodes("treeview"); header:=Native.HeaderNodes()
         style:=Gtk.GtkStyleQuery(tree[:],1)
@@ -1570,7 +1584,7 @@ MeasureDetailsColumns :: (manager: *Model.Manager, view: *PaneView, bounds: Rect
             if column==0 {
                 if preferred.available { view.name_minimum=preferred.minimum_width }
             } else if preferred.available && preferred.minimum_width>view.column_widths[column] { view.column_widths[column]=preferred.minimum_width }
-            for index: cast(s32)0..count-1 { view.column_values[index]=view.details_cells[index].cells[column] }
+            for index: cast(s32)0..measured-1 { view.column_values[index]=view.details_cells[first+index].cells[column] }
             cell:=Gtk.GtkCellTextMeasureMany(tree[:],view.column_values[:],ifx column==0 then 60 else -1,column==0)
             if column==0 {
                 icon:=ifx view.zoom[cast(s32)manager.view_mode]==3 then cast(s32)Native.DetailsIconSize() else ZoomIcon(view,.ViewList)
@@ -1583,6 +1597,7 @@ MeasureDetailsColumns :: (manager: *Model.Manager, view: *PaneView, bounds: Rect
             if cell.available && width>view.column_widths[column] { view.column_widths[column]=width }
         }
         view.columns_signature=signature; view.columns_generation=generation
+        view.columns_pending=first>0 || end<count
     }
     name_width:=cast(s32)bounds.width-view.column_widths[1]-view.column_widths[2]-view.column_widths[3]
     if name_width<view.name_minimum { name_width=view.name_minimum }
@@ -2549,6 +2564,12 @@ DrawInPane :: (host: *Host, view: *PaneView, host_session: HostSession, host_vie
     }
 
     if DispatchShortcut(host,session,key,modifiers) { key=0 }
+    // A completed location edit can commit before drawing its destination.
+    // Text arriving with Return still goes through the field's edit path.
+    if focused && manager.prompt == .PromptLocation && key == KeyEnter && typed_text == "" {
+        FinishPrompt(host)
+        key = 0
+    }
     window_focused:=focused
     if host.info_open { focused=false; key=0 }
 

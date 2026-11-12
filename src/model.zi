@@ -303,17 +303,15 @@ SortEntries :: (manager: *Manager) {
     if manager.entries.count < 2 { return }
     cursor_path := EntryPath(manager, manager.cursor)
     anchor_path := EntryPath(manager, manager.anchor)
-    for index: cast(s64)1..manager.entries.count - 1 {
-        current := manager.entries[index]
-        selected := manager.selected[index]
-        at := index - 1
-        while at >= 0 && EntryBefore(manager, *current, *manager.entries[at]) {
-            manager.entries[at + 1] = manager.entries[at]
-            manager.selected[at + 1] = manager.selected[at]
-            at -= 1
-        }
-        manager.entries[at + 1] = current
-        manager.selected[at + 1] = selected
+    // Directory enumeration is unordered. Keep opening large directories
+    // bounded by O(n log n), carrying each entry's selection with it.
+    start := manager.entries.count / 2
+    while start > 0 { start -= 1; SortSiftDown(manager, start, manager.entries.count) }
+    end := manager.entries.count
+    while end > 1 {
+        end -= 1
+        SwapEntries(manager, 0, end)
+        SortSiftDown(manager, 0, end)
     }
     manager.cursor = -1
     manager.anchor = -1
@@ -322,6 +320,22 @@ SortEntries :: (manager: *Manager) {
         if manager.entries[index].path == anchor_path { manager.anchor = index }
     }
     manager.reveal_focus = true
+}
+
+SwapEntries :: (manager: *Manager, first: s64, second: s64) {
+    entry := manager.entries[first]; selected := manager.selected[first]
+    manager.entries[first] = manager.entries[second]; manager.selected[first] = manager.selected[second]
+    manager.entries[second] = entry; manager.selected[second] = selected
+}
+SortSiftDown :: (manager: *Manager, root: s64, end: s64) {
+    parent := root
+    while parent * 2 + 1 < end {
+        child := parent * 2 + 1
+        if child + 1 < end && EntryBefore(manager, *manager.entries[child], *manager.entries[child+1]) { child += 1 }
+        if !EntryBefore(manager, *manager.entries[parent], *manager.entries[child]) { return }
+        SwapEntries(manager, parent, child)
+        parent = child
+    }
 }
 
 SetSort :: (manager: *Manager, mode: SortMode, reverse: bool) {

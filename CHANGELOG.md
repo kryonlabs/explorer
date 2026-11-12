@@ -2,12 +2,18 @@
 
 ## [Unreleased]
 
+- Sort directory entries in O(n log n), size visible details before offscreen
+  rows, and allocate file descriptions according to their text length. Submit
+  completed location edits before drawing the destination.
+
 - Rename the package, executable, build output, desktop identity, embedded
   module paths and internal runtime names from Shelf to Explorer.
 - Clarify Explorer as an independent standalone Thunar alternative and remove
   Rill hosting language from its public documentation.
 - Add a private Xvfb Explorer/Thunar benchmark for fresh-window launch, first
-  stable root rendering and tiny/medium/large folder-opening latency.
+  stable root rendering and tiny/medium/large folder-opening latency. Match
+  details views, icon sizes and complete viewports, and time file-row changes
+  separately from toolbar, status and scrollbar animations.
 - Switch open menus on hover and support keyboard menu navigation with visible
   shortcuts. Apply native wheel distances immediately, handle keypad Delete,
   confirm permanent deletion, and preserve text-editor key behavior. Honor the

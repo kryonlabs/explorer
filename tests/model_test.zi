@@ -299,6 +299,34 @@ ViewSortTest :: () -> bool {
     return true
 }
 
+LargeSortTest :: () -> bool {
+    manager: Model.Manager
+    defer Model.Dispose(*manager)
+    // A permutation of 4096 unique sizes exercises both halves of the heap,
+    // its shrinking tail, and selection/anchor identity through repeated sorts.
+    for index: cast(s64)0..4095 {
+        value := (index * 4051) % 4096
+        digits: [32]u8
+        name := Number.FormatInteger(value, digits[:])
+        if !Model.AppendEntry(*manager, name, name, .{.kind=.File, .size=value}) { return false }
+        manager.selected[index] = value % 17 == 0
+    }
+    manager.cursor = 1; manager.anchor = 4095
+    cursor := Model.EntryPath(*manager, manager.cursor)
+    anchor := Model.EntryPath(*manager, manager.anchor)
+    for reverse: cast(s32)0..1 {
+        Model.SetSort(*manager, .SortSize, reverse == 1)
+        for index: cast(s64)0..4095 {
+            expected := ifx reverse == 0 then index else 4095-index
+            if manager.entries[index].info.size != expected ||
+                manager.selected[index] != (expected % 17 == 0) { return false }
+        }
+        if Model.EntryPath(*manager, manager.cursor) != cursor ||
+            Model.EntryPath(*manager, manager.anchor) != anchor { return false }
+    }
+    return true
+}
+
 ExactPaneModelTest :: (root: string) -> bool {
     folder: Text = Files.JoinPath(root, "exact-pane-model")
     missing: Text = Files.JoinPath(root, "missing-exact-pane")
@@ -322,6 +350,7 @@ ExactPaneModelTest :: (root: string) -> bool {
 #program_export
 main :: (argc: s32, argv: **u8) -> s32 {
     if !ViewSortTest() { print("view/sort identity test failed\n"); return 70 }
+    if !LargeSortTest() { print("large sort identity test failed\n"); return 71 }
     if argc != 2 {
         print("usage: model_test FIXTURE_ROOT\n")
         return 64

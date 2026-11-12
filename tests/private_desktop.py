@@ -26,14 +26,15 @@ def main():
             path = root / folder
             path.mkdir(mode=0o700)
             env[key] = str(path)
-        env.update(YUE_DESKTOP_RECOVERY="0", SDL_VIDEODRIVER="x11", GTK_USE_PORTAL="0",
+        env.update(HARMONY_DESKTOP_RECOVERY="0", YUE_DESKTOP_RECOVERY="0", SDL_VIDEODRIVER="x11", GTK_USE_PORTAL="0",
                    EXPLORER_PRIVATE_DESKTOP="1", PYTHONDONTWRITEBYTECODE="1")
         command = sys.argv[1:]
         if command[0] == "--headless":
             command = command[1:]
         else:
             command = ["unshare", "--user", "--map-current-user", "--keep-caps", "--mount",
-                       "--propagation", "private", "dbus-run-session", "--", "xvfb-run", "-a", *command]
+                       "--propagation", "private", "dbus-run-session", "--", "xvfb-run", "-a",
+                       "-s", "-screen 0 1600x1200x24", *command]
         return subprocess.run(command, env=env).returncode
     finally:
         # D-Bus-activated test services can finish their final state writes just
