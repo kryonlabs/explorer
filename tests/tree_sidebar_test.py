@@ -15,7 +15,7 @@ from PIL import Image, ImageChops
 def main():
     repo = Path(__file__).resolve().parents[1]
     parser = argparse.ArgumentParser()
-    parser.add_argument('--executable', type=Path, default=repo / 'build/shelf-desktop')
+    parser.add_argument('--executable', type=Path, default=repo / 'build/explorer-desktop')
     parser.add_argument('--capture-prefix', default='tree')
     options = parser.parse_args()
     assert os.environ.get('DISPLAY') and os.environ.get('XDG_RUNTIME_DIR')
@@ -39,7 +39,7 @@ def main():
     try:
         process = subprocess.Popen([str(options.executable)], cwd=root, env=env, stdout=log, stderr=log)
         def healthy():
-            assert process.poll() is None, f'Shelf exited {process.returncode}; see {root / "app.log"}'
+            assert process.poll() is None, f'Explorer exited {process.returncode}; see {root / "app.log"}'
         def xdo(*args):
             healthy()
             return subprocess.run(['xdotool', *map(str, args)], check=True,
@@ -54,7 +54,7 @@ def main():
                 time.sleep(.8)
                 break
             healthy(); time.sleep(.05)
-        assert window, 'missing owned Shelf window'
+        assert window, 'missing owned Explorer window'
         def key(*items):
             for item in items:
                 xdo('key', '--clearmodifiers', item); time.sleep(.2); healthy()
@@ -119,7 +119,7 @@ def main():
                 window = found.stdout.splitlines()[0]
                 xdo('windowfocus', '--sync', window); time.sleep(.8); break
             healthy(); time.sleep(.05)
-        assert window, 'missing owned deep Shelf window'
+        assert window, 'missing owned deep Explorer window'
         payload = root / 'tree-location-payload'
         payload.write_text(str(target))
         peer = subprocess.Popen([sys.executable, str(repo / 'tests/file_clipboard_test.py'),
@@ -142,7 +142,7 @@ def main():
         key('ctrl+e', 'ctrl+e', 'Right', 'Return')
         opened(target)
         capture('deep-keyboard')
-        print('Shelf native tree toggle/disclosure/repeated activation/raw/hidden/cycle GUI tests passed', flush=True)
+        print('Explorer native tree toggle/disclosure/repeated activation/raw/hidden/cycle GUI tests passed', flush=True)
     except Exception:
         if window and process.poll() is None:
             subprocess.run(['import', '-window', window, str(root / 'failure.png')], capture_output=True, timeout=10)

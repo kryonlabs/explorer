@@ -224,7 +224,7 @@ Save :: (state: *State, contents: string) -> bool {
     if destination.valid && destination.info.kind == .Link { return Fail(state, "Bookmarks file is a symbolic link; changes were not saved") }
     if destination.valid && destination.info.kind != .File { return Fail(state, "Bookmarks destination is not a regular file") }
     if !Files.CreateDirectories(Files.PathParent(target), 448) { return Fail(state, "Cannot create bookmarks folder") }
-    lock_name: Text = Files.JoinPath(Files.PathParent(target), ".shelf-bookmarks.lock")
+    lock_name: Text = Files.JoinPath(Files.PathParent(target), ".explorer-bookmarks.lock")
     lock := Files.LockPath(TextView(lock_name), true, false)
     if lock < 0 { return Fail(state, "Bookmarks are busy or cannot be locked") }
     defer { Files.UnlockPath(lock) }

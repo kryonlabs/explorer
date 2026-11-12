@@ -1,4 +1,4 @@
-// Shelf file-list policy. Transport and selection ownership belong to Kryon.
+// Explorer file-list policy. Transport and selection ownership belong to Kryon.
 #scope_module
 Model :: #import "model";
 Utf8 :: #import "std/utf8";
@@ -15,7 +15,7 @@ Release :: (clipboard: *Model.Clipboard) {
     clipboard.mode = .ClipboardNone
 }
 
-// Only local absolute UTF-8 paths are representable by Shelf's file model.
+// Only local absolute UTF-8 paths are representable by Explorer's file model.
 LocalPath :: (path: string) -> bool {
     if path.count < 2 || path.count >= 4096 || path[0] != #char "/" || !Utf8.Valid(path) { return false }
     for byte: path { if byte == cast(u8)0 { return false } }

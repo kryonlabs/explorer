@@ -1,6 +1,6 @@
-# Shelf
+# Explorer
 
-Shelf is the Linux file manager for Rill, written in Ziran with a Kryon user
+Explorer is the Linux file manager for Rill, written in Ziran with a Kryon user
 interface. Its goal is full Thunar parity; the current implementation covers
 basic navigation and file operations. It runs standalone and embeds directly
 in Rill through its native Ziran host module.
@@ -23,7 +23,7 @@ BMP, TIFF and SVG previews are tested with the native desktop backend; other
 image formats depend on the installed Kryon codecs. Animated images show a
 still frame. Missing, unreadable or undecodable files show an explicit message.
 
-Shelf's Linux chrome uses GTK3 CSS, Pango text and the active icon theme through
+Explorer's Linux chrome uses GTK3 CSS, Pango text and the active icon theme through
 Kryon's native GTK bridge. Theme inheritance, SVG/PNG/symbolic icons and file
 MIME descriptions use GTK/GIO discovery. No theme assets or machine-specific
 theme paths are bundled. Native theme changes invalidate cached artwork.
@@ -31,7 +31,7 @@ The menubar exposes file actions, view settings, navigation and bookmarks; the
 compact toolbar provides Back, Forward, Up, Home and the editable location.
 GTK measures menu items, toolbar allocations, the location entry and pane
 separator; their dimensions follow the active font and theme.
-Embedded drawing restores the caller's palette after each Shelf viewport.
+Embedded drawing restores the caller's palette after each Explorer viewport.
 
 Open menus switch on hover. F10 or Alt+F/E/V/G/B/H opens a menu; arrows, Home,
 End, Enter and Escape navigate it. Menu labels show their shortcuts. Delete
@@ -40,14 +40,14 @@ Shift+Delete requires permanent-deletion confirmation. Editors retain Delete,
 selection and clipboard keys. Mouse wheels apply GTK's page-based distance
 immediately, retaining fractional offsets between notches.
 
-F1 opens Shelf Help; Alt+Enter shows read-only file properties. F2 renames,
+F1 opens Explorer Help; Alt+Enter shows read-only file properties. F2 renames,
 Ctrl+Shift+N creates a folder, Ctrl+H toggles hidden files, F5/Ctrl+R reloads,
 Ctrl+S selects by pattern and Ctrl+Shift+I inverts selection. Alt+Left/Right
 and Backspace use history; Alt+Up goes to the parent and Alt+Home goes home.
 Ctrl+L/Alt+D edits the location. F9 toggles the sidebar; Ctrl+M toggles the
 menubar. Ctrl++/=/−/0 (and keypad variants) changes or resets the active view's
 icon size; Ctrl+wheel zooms the view. Ctrl+N opens a window, Ctrl+Shift+P/O opens the selected directory
-in a tab/window. Ctrl+Q closes the current window; Ctrl+Shift+W closes all Shelf
+in a tab/window. Ctrl+Q closes the current window; Ctrl+Shift+W closes all Explorer
 windows from the same executable on the current display.
 
 Ctrl+Z and Ctrl+Shift+Z undo and redo file operations as batches, including
@@ -79,7 +79,7 @@ URI locations use GIO, including relative paths from a URI location; local
 completion is available for local paths. These local file/directory semantics follow
 [current upstream Thunar's location entry](https://raw.githubusercontent.com/xfce-mirror/thunar/master/thunar/thunar-location-entry.c).
 The installed Thunar 4.20.2 uses file launch instead; private native comparison
-there covers completion keys and cancellation, while Shelf tests verify safe
+there covers completion keys and cancellation, while Explorer tests verify safe
 file-parent selection directly.
 
 Tab at the end inserts the common prefix, appending `/` for one matching folder;
@@ -122,7 +122,7 @@ location bar, sidebar and file actions follow that pane. Tab traversal,
 Ctrl+Tab tab cycling and location completion keep their existing shortcuts.
 Editors, previews and open menus retain their original pane until dismissed.
 
-Disabling Split view shows the active pane across the full file area. Shelf keeps the other
+Disabling Split view shows the active pane across the full file area. Explorer keeps the other
 pane and its tabs in memory; F3 restores it after a checked refresh. An unreadable
 or allocation-failed pane stays hidden with an error, while the usable pane
 remains available. This retention lasts only for the current Host lifetime.
@@ -144,7 +144,7 @@ also used by [Thunar](https://raw.githubusercontent.com/xfce-mirror/thunar/maste
 Unsupported remote, malformed and unknown records retain their original bytes
 when local records are edited. Local URI paths can contain raw Unix filename
 bytes; labels use safe display captions. Changes replace the whole file atomically,
-and read/save errors keep the previous shortcuts. Shelf refreshes external edits
+and read/save errors keep the previous shortcuts. Explorer refreshes external edits
 about once a second; a label editor keeps its snapshot and rejects stale saves.
 Independent applications can still race between the final recheck and replacement.
 Symbolic-link bookmark files are readable but are not replaced. Files above 1 MiB,
@@ -191,7 +191,7 @@ can be explored with horizontal scrolling. Remote locations, devices and
 drag/drop remain pending; switching panes preserves bookmark records.
 
 Copy, Cut and Paste (also Ctrl+C/X/V outside prompts) exchange local file
-selections with desktop file managers on X11/XWayland. Shelf publishes both
+selections with desktop file managers on X11/XWayland. Explorer publishes both
 `text/uri-list` and `x-special/gnome-copied-files`; URI-only lists copy, while
 the GNOME header selects copy or cut. Spaces, Unicode and filename newlines
 are percent-escaped. Remote URIs, invalid UTF-8/NUL, malformed or empty lists,
@@ -204,9 +204,9 @@ completed prefix, with pending cut paths retained for retry.
 Clipboard data remains owned by the copying application until another owner
 replaces it or the application closes. A newer clipboard containing ordinary
 text does not paste an older internal selection. Headless embeddings retain
-the internal clipboard when native transport is unavailable. Shelf releases
+the internal clipboard when native transport is unavailable. Explorer releases
 only its own completed cut selection, never another application's clipboard.
-For foreign cuts, Shelf remembers the exact owner/payload and completed paths
+For foreign cuts, Explorer remembers the exact owner/payload and completed paths
 to prevent repeated moves. Re-copying identical bytes from the same foreign
 owner window cannot be distinguished from retrying that cut; copy again with
 a changed selection to reset it. Partial local cuts keep the original desktop
@@ -235,15 +235,16 @@ make build      # desktop profile
 make check
 make test       # filesystem model and embedded host, from source and saved IR
 make test-ui    # desktop interaction on a private Xvfb display
-make test-file-clipboard # native Shelf/Thunar interchange on a private desktop
+make test-file-clipboard # native Explorer/Thunar interchange on a private desktop
 make test-filenames # raw-byte names, directories and operations on a private desktop
 make test-bookmarks # source/saved persistence and private GTK/sidebar GUI tests
 make test-tree      # source/saved lazy tree, host integration and private GUI
-make test-location  # source/saved paths, failure rollback, private Shelf/Thunar keys
+make test-location  # source/saved paths, failure rollback, private Explorer/Thunar keys
 make test-tabs      # dynamic state/real allocation failure and private native tabs
 make test-split     # independent panes, real failures, native focus/drag and Thunar
 make test-locations # fresh private GVfs/local backend, source/saved URI model tests
 make test-thunar    # exact-pixel private comparison; writes differences and fails on mismatch
+make benchmark-folder-opening # Explorer/Thunar startup and folder-opening latency
 make test-native-theme # GTK bars/gestures, all views/split, full 4K/resize, source/saved
 make test-native-status # installed Thunar footer oracle, locales and live metadata
 make test-native-window # actual native cursors, themed window icon and scrollbar gestures
@@ -260,13 +261,13 @@ Use that setting for the other build and test commands as well. Local stack
 development can instead use the ignored `ziran.local.toml` overrides described
 in Ziran's package documentation; committed builds use the lock without them.
 
-The desktop profile produces `build/shelf-desktop`. Its window and desktop entry
+The desktop profile produces `build/explorer-desktop`. Its window and desktop entry
 use GTK’s discovered `system-file-manager` icon. Native file chrome uses the
 system arrow cursor; location editing retains the text cursor. File views use
 GTK scrollbar geometry, input, overlay fading, theme assets, fonts and selection
 metrics. Rounded native surfaces draw over their current background so Cairo
 uses the same curve coverage as a GTK window. The standalone entry is
-the Kryon `Frame` export in `src/app.zi`. Rill imports `shelf/app_host` and calls
+the Kryon `Frame` export in `src/app.zi`. Rill imports `explorer/app_host` and calls
 `Prepare`, `Draw` and `Close` with its session, viewport and focus state.
 Keep each prepared `Host` at a stable address until `Close`.
 Native embedding hosts link the libraries declared in `ziran.toml`, including

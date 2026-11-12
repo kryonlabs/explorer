@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""GTK bookmark compatibility and Shelf UI persistence on a private desktop."""
+"""GTK bookmark compatibility and Explorer UI persistence on a private desktop."""
 import argparse
 import ctypes as C
 import json
@@ -55,7 +55,7 @@ def gtk_bookmarks():
 def main():
     repo = Path(__file__).resolve().parents[1]
     parser = argparse.ArgumentParser()
-    parser.add_argument('--executable', type=Path, default=repo / 'build/shelf-desktop')
+    parser.add_argument('--executable', type=Path, default=repo / 'build/explorer-desktop')
     parser.add_argument('--gtk-only', action='store_true')
     options = parser.parse_args()
     assert os.environ.get('DISPLAY') and os.environ.get('XDG_RUNTIME_DIR')
@@ -87,7 +87,7 @@ def main():
     log = (root / 'app.log').open('wb')
     try:
         def healthy():
-            assert process.poll() is None, f'Shelf exited {process.returncode}; see {root / "app.log"}'
+            assert process.poll() is None, f'Explorer exited {process.returncode}; see {root / "app.log"}'
         def xdo(*args):
             healthy()
             return subprocess.run(['xdotool', *map(str, args)], check=True,
@@ -106,7 +106,7 @@ def main():
                     time.sleep(1.0)
                     return window
                 healthy(); time.sleep(.05)
-            raise AssertionError('missing owned Shelf window')
+            raise AssertionError('missing owned Explorer window')
         window = start()
         native_geometry = native_sidebar_geometry()
         (root / 'native-sidebar-geometry.json').write_text(json.dumps(native_geometry, indent=2) + '\n')
@@ -166,7 +166,7 @@ def main():
         navigate(root)
         click(75, first_bookmark)  # Activate even though this bookmark is already selected.
         opened(beta)
-        assert uri(beta) in native_uris(), 'installed GTK did not read Shelf-added bookmark'
+        assert uri(beta) in native_uris(), 'installed GTK did not read Explorer-added bookmark'
         process.terminate(); process.wait(timeout=10)
         window = start()
         click(75, first_bookmark); opened(beta)
@@ -174,12 +174,12 @@ def main():
         process.terminate(); process.wait(timeout=10)
         window = start()
         click(75, first_bookmark); opened(alpha)
-        # Native external edits refresh without restarting Shelf.
+        # Native external edits refresh without restarting Explorer.
         path.write_bytes(unknown + (uri(beta) + ' External beta\n').encode())
         time.sleep(1.3)
         click(75, first_bookmark); opened(beta)
         check_file([beta], 'External beta')
-        # GTK file URIs can represent raw Unix filename bytes. Shelf keeps those
+        # GTK file URIs can represent raw Unix filename bytes. Explorer keeps those
         # identities and uses safe captions, independently of clipboard policy.
         raw = os.fsencode(root) + b'/raw-\xff'
         os.mkdir(raw)
@@ -201,7 +201,7 @@ def main():
         key('ctrl+a'); paste('Do not replace symlink'); key('Return')
         assert path.is_symlink() and target.read_bytes() == original
         key('Escape')
-        print('Shelf bookmark add/rename/reorder/reselect/remove/restart/external refresh/raw-name/symlink GUI tests passed', flush=True)
+        print('Explorer bookmark add/rename/reorder/reselect/remove/restart/external refresh/raw-name/symlink GUI tests passed', flush=True)
     except Exception:
         if process and process.poll() is None:
             subprocess.run(['import', '-window', window, str(root / 'failure.png')],

@@ -64,7 +64,7 @@ test-file-clipboard: build build/file-clipboard-probe
 	python3 tests/private_desktop.py python3 tests/file_clipboard_test.py
 
 test-installed:
-	python3 tests/private_desktop.py python3 tests/ui_test.py --executable "$(HOME)/.local/bin/shelf" --capture-prefix installed-ui
+	python3 tests/private_desktop.py python3 tests/ui_test.py --executable "$(HOME)/.local/bin/explorer" --capture-prefix installed-ui
 
 .PHONY: test-native-window
 test-native-window: test-window-lifecycle
@@ -97,6 +97,10 @@ test-native-status:
 
 test-thunar: build
 	build-queue -- python3 tests/thunar_visual_test.py
+
+.PHONY: benchmark-folder-opening
+benchmark-folder-opening: build
+	build-queue -- python3 tests/private_desktop.py python3 tests/folder_opening_benchmark.py
 
 install:
 	build-queue -- $(ZIRAN) install

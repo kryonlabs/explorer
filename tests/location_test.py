@@ -16,7 +16,7 @@ from ui_test import menu_action
 def main():
     repo = Path(__file__).resolve().parents[1]
     parser = argparse.ArgumentParser()
-    parser.add_argument('--executable', type=Path, default=repo / 'build/shelf-desktop')
+    parser.add_argument('--executable', type=Path, default=repo / 'build/explorer-desktop')
     parser.add_argument('--capture-prefix', default='location')
     args = parser.parse_args()
     assert os.environ.get('DISPLAY') and os.environ.get('XDG_RUNTIME_DIR')
@@ -42,7 +42,7 @@ def main():
     peer = None; window = None
     try:
         def healthy():
-            assert proc.poll() is None, f'Shelf exited {proc.returncode}; see {root / "app.log"}'
+            assert proc.poll() is None, f'Explorer exited {proc.returncode}; see {root / "app.log"}'
         def xdo(*parts):
             healthy()
             return subprocess.run(['xdotool', *map(str, parts)], check=True, capture_output=True, text=True, timeout=10).stdout.strip()
@@ -52,7 +52,7 @@ def main():
             if found.returncode == 0:
                 window = found.stdout.splitlines()[0]; break
             healthy(); time.sleep(.05)
-        assert window, 'missing owned Shelf window'
+        assert window, 'missing owned Explorer window'
         xdo('windowfocus', '--sync', window); time.sleep(.6)
         def key(*parts):
             for part in parts: xdo('key', '--clearmodifiers', part); time.sleep(.15); healthy()
@@ -122,7 +122,7 @@ def main():
         xdo('type', '--clearmodifiers', '--delay', 15, 'from-narrow-actions'); key('Return')
         assert (root / 'from-narrow-actions').is_dir(), 'narrow actions keyboard menu lost folder creation'
         passed = True
-        print('Shelf native location common-prefix/cycling/cancel/file/relative/home/raw/Unicode/errors/narrow/breadcrumb tests passed', flush=True)
+        print('Explorer native location common-prefix/cycling/cancel/file/relative/home/raw/Unicode/errors/narrow/breadcrumb tests passed', flush=True)
     except Exception:
         if window and proc.poll() is None:
             subprocess.run(['import', '-window', window, str(root / 'failure.png')], capture_output=True, timeout=10)

@@ -166,7 +166,7 @@ NativeScrollViewsTest :: (host: *App.Host, session: Sessions.Session) -> bool {
             if row.bounds.x+row.bounds.width!=right { print("native full-row width % expected %\n",row.bounds.x+row.bounds.width,right); return false }
         }
     }
-    print("Shelf native scrollbars: all views/both axes, outside fast release, focus cancellation and full-row hit width passed\n")
+    print("Explorer native scrollbars: all views/both axes, outside fast release, focus cancellation and full-row hit width passed\n")
     return true
 }
 
@@ -1178,7 +1178,7 @@ InteractionHostTest :: (session: Sessions.Session, root: string) -> bool {
     }
     if home_bounds.width<=0 || !Click(*host,session,home_bounds.x+20.0,home_bounds.y+home_bounds.height*0.5) ||
         !host.location_without_slash || Model.SelectedCount(*host.manager)!=0 { return InteractionFailure(34) }
-    print("Shelf interaction local tests: menu hover/arrows/mnemonics, hidden/sidebar/history keys, Delete, editor focus, permanent confirmation/cancel/replacement protection passed\n")
+    print("Explorer interaction local tests: menu hover/arrows/mnemonics, hidden/sidebar/history keys, Delete, editor focus, permanent confirmation/cancel/replacement protection passed\n")
     return true
 }
 
@@ -1216,7 +1216,7 @@ main :: (argc: s32, argv: **u8) -> s32 {
         }
         if !App.ToggleSplit(*host) || !RenderAt(*host,session,true,.{0.0,0.0,3840.0,2160.0}) ||
             host.paint.region_count<2 { return 71 }
-        print("Shelf native GTK: all three views, split panes, full 4K composition and resize passed\n")
+        print("Explorer native GTK: all three views, split panes, full 4K composition and resize passed\n")
         return 0
     }
     if !Render(*host, session, true) { return 3 }
@@ -1305,6 +1305,6 @@ main :: (argc: s32, argv: **u8) -> s32 {
         App.Close(*host)
         if !App.Prepare(*host, root) { return 27 }
     }
-    print("Shelf three-view host selection, sorting, layout, clipping, viewport, input, storage and reopen local tests passed\n")
+    print("Explorer three-view host selection, sorting, layout, clipping, viewport, input, storage and reopen local tests passed\n")
     return 0
 }

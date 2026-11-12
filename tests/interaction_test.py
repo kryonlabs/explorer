@@ -11,7 +11,7 @@ OUTPUT = REPO / 'build/interactions'
 
 def main():
     require_private_display()
-    assert os.environ.get('SHELF_PRIVATE_DESKTOP') == '1'
+    assert os.environ.get('EXPLORER_PRIVATE_DESKTOP') == '1'
     OUTPUT.mkdir(exist_ok=True)
     fixture = Path(os.environ['HOME']) / 'interaction-fixture'
     fixture.mkdir()
@@ -22,15 +22,15 @@ def main():
     def xdo(*args):
         return subprocess.check_output(['xdotool', *map(str, args)], text=True, timeout=5).strip()
     def windows():
-        return subprocess.run(['xdotool','search','--onlyvisible','--class','Shelf'],capture_output=True,text=True).stdout.splitlines()
-    with (OUTPUT / 'shelf.log').open('w') as log:
-        process = subprocess.Popen([str(REPO/'build/shelf-desktop')],cwd=fixture,stdout=log,stderr=subprocess.STDOUT)
+        return subprocess.run(['xdotool','search','--onlyvisible','--class','Explorer'],capture_output=True,text=True).stdout.splitlines()
+    with (OUTPUT / 'explorer.log').open('w') as log:
+        process = subprocess.Popen([str(REPO/'build/explorer-desktop')],cwd=fixture,stdout=log,stderr=subprocess.STDOUT)
         owned = []
         def wait(check, reason):
             end = time.monotonic()+10
             while time.monotonic()<end:
                 if check(): return
-                assert process.poll() is None, 'Shelf exited: '+reason
+                assert process.poll() is None, 'Explorer exited: '+reason
                 time.sleep(.02)
             raise AssertionError(reason)
         try:
@@ -106,16 +106,16 @@ def main():
             def new_window():
                 new[:]=list(set(windows())-before)
                 return bool(new)
-            wait(new_window,'Ctrl+N did not open an independent Shelf window')
+            wait(new_window,'Ctrl+N did not open an independent Explorer window')
             for extra in new:
                 pid=int(xdo('getwindowpid',extra))
-                assert Path(f'/proc/{pid}/exe').resolve()==(REPO/'build/shelf-desktop').resolve()
+                assert Path(f'/proc/{pid}/exe').resolve()==(REPO/'build/explorer-desktop').resolve()
                 owned.append(extra)
                 xdo('windowfocus','--sync',extra);xdo('key','--window',extra,'ctrl+q')
             xdo('windowfocus','--sync',window)
             key('ctrl+q');assert process.wait(timeout=10)==0
             (OUTPUT/'report.json').write_text(json.dumps({'status':'passed','menu_hover':True,'keyboard_menus':True,'text_focus_delete':True,'trash_delete':True,'keypad_delete':True,'permanent_confirmation_cancel':True,'create_folder_shortcut':True,'new_window':True,'close_own_window':True},indent=2))
-            print('Shelf private interaction local tests passed')
+            print('Explorer private interaction local tests passed')
         finally:
             for window in owned:
                 subprocess.run(['xdotool','key','--window',window,'ctrl+q'],capture_output=True)

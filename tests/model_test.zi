@@ -529,6 +529,6 @@ main :: (argc: s32, argv: **u8) -> s32 {
     }
     Model.Dispose(*manager)
     if !Files.RemoveTree(root) { return 70 }
-    print("Shelf model navigation, operations, tabs, history, hidden files, search, trash and links passed\n")
+    print("Explorer model navigation, operations, tabs, history, hidden files, search, trash and links passed\n")
     return 0
 }

@@ -1,4 +1,4 @@
-// Shelf's local directory policy. Transport and retained tree UI stay upstream.
+// Explorer's local directory policy. Transport and retained tree UI stay upstream.
 #scope_module
 Files :: #import "std/file_tree_linux";
 Display :: #import "file_display";

@@ -1,4 +1,4 @@
-// Native authenticated Shelf lifecycle.
+// Native authenticated Explorer lifecycle.
 #scope_module
 CString :: #import "std/c_string";
 Bytes :: #import "std/byte_text_linux";
@@ -73,7 +73,7 @@ SameExecutable :: (other: Identity)->bool {
 Endpoint :: (pid: s32, start: u64)->Address {
     result: Address; result.family=1
     // Fixed abstract address includes display scope, PID and birth time.
-    for byte,index:"shelf-close-v1" { result.path[index+1]=byte }
+    for byte,index:"explorer-close-v1" { result.path[index+1]=byte }
     for index:0..7 {
         result.path[16+index]=cast(u8)(scope >> cast(u64)(index*8))
         result.path[24+index]=cast(u8)(cast(u64)pid >> cast(u64)(index*8))

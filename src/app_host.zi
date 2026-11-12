@@ -435,7 +435,7 @@ RefreshOtherPane :: (host: *Host) {
     unused Model.ReloadPreserving(other)
 }
 
-// Shelf owns tab routes and identity. Kryon owns the strip, clipping, focus,
+// Explorer owns tab routes and identity. Kryon owns the strip, clipping, focus,
 // wheel overflow, close hit targets and pointer reorder interaction.
 DrawTabs :: (host: *Host, session: Session, bounds: Rectangle, focused: bool,
     key: s32, modifiers: s32, pane_index: s32 = -1) -> bool {
@@ -2225,11 +2225,11 @@ FinishDelete :: (host: *Host) {
 
 OpenInfo :: (host: *Host, properties: bool) {
     if !CaptureModalOwner(host) { return }
-    host.info_open=true; host.info_title=ifx properties then "Properties" else "Shelf Help"
+    host.info_open=true; host.info_title=ifx properties then "Properties" else "Explorer Help"
     VecClear(host.info_body)
     host.actions_open=false; host.breadcrumb_open=false
     if !properties {
-        unused BuilderAppend(host.info_body,"Navigate: Alt+Left/Right, Backspace, Alt+Up/Home\nLocation: Ctrl+L / Alt+D   Search: Ctrl+F\nCreate folder: Ctrl+Shift+N   Rename: F2\nTrash: Delete   Delete permanently: Shift+Delete\nUndo / Redo: Ctrl+Z / Ctrl+Shift+Z   Cut / Copy / Paste: Ctrl+X / C / V\nSelect all / pattern / invert: Ctrl+A / S / Shift+I\nViews: Ctrl+1/2/3   Zoom: Ctrl++ / − / 0\nSplit: F3   Sidebar: F9   Menubar: Ctrl+M\nTabs: Ctrl+T / W / Tab   Window: Ctrl+N / Q\nClose all Shelf windows: Ctrl+Shift+W\nProperties: Alt+Return   Menus: F10 / Alt+letter\nEsc closes an editor, menu, preview or this dialog.")
+        unused BuilderAppend(host.info_body,"Navigate: Alt+Left/Right, Backspace, Alt+Up/Home\nLocation: Ctrl+L / Alt+D   Search: Ctrl+F\nCreate folder: Ctrl+Shift+N   Rename: F2\nTrash: Delete   Delete permanently: Shift+Delete\nUndo / Redo: Ctrl+Z / Ctrl+Shift+Z   Cut / Copy / Paste: Ctrl+X / C / V\nSelect all / pattern / invert: Ctrl+A / S / Shift+I\nViews: Ctrl+1/2/3   Zoom: Ctrl++ / − / 0\nSplit: F3   Sidebar: F9   Menubar: Ctrl+M\nTabs: Ctrl+T / W / Tab   Window: Ctrl+N / Q\nClose all Explorer windows: Ctrl+Shift+W\nProperties: Alt+Return   Menus: F10 / Alt+letter\nEsc closes an editor, menu, preview or this dialog.")
         return
     }
     manager:=ActiveManager(host)
@@ -2395,7 +2395,7 @@ DrawNativeMenu :: (host: *Host, session: Session, viewport: Rectangle, focused: 
     else if host.menu_index == 3 { labels[0]="Icons"; labels[1]="Detailed List"; labels[2]="Compact List"; labels[3]="Show hidden files"; labels[4]="Places"; labels[5]="Tree"; labels[6]="Split view"; labels[7]="Other pane"; labels[8]="Reload"; labels[9]="Pathbar"; count=10 }
     else if host.menu_index == 4 { labels[0]="Back"; labels[1]="Forward"; labels[2]="Parent"; labels[3]="Home"; labels[4]="File System"; labels[5]="Location"; labels[6]="Search"; count=7 }
     else if host.menu_index == 5 { labels[0]="Add bookmark"; labels[1]="Rename bookmark"; labels[2]="Remove bookmark"; labels[3]="Move bookmark up"; labels[4]="Move bookmark down"; count=5 }
-    else { labels[0]="About Shelf"; count=1 }
+    else { labels[0]="About Explorer"; count=1 }
     if focused {
         if key == KeyUp { host.menu_cursor=(host.menu_cursor+count-1)%count }
         if key == KeyDown { host.menu_cursor=(host.menu_cursor+1)%count }
@@ -2461,7 +2461,7 @@ DrawNativeMenu :: (host: *Host, session: Session, viewport: Rectangle, focused: 
                 target:=previous+ifx i==3 then -1 else 1
                 if ok && i>=3 && target>=0 && target<host.bookmarks.document.rows.count { host.bookmark_selected=target }
             }
-        } else { Model.SetError(manager,"Shelf · Ziran file manager · Ctrl+1/2/3 views · F3 split · Ctrl+L location") }
+        } else { Model.SetError(manager,"Explorer · Ziran file manager · Ctrl+1/2/3 views · F3 split · Ctrl+L location") }
     }
 }
 

@@ -1,4 +1,4 @@
-"""Actual Shelf cursors and theme-resolved window icon on a private display."""
+"""Actual Explorer cursors and theme-resolved window icon on a private display."""
 import ctypes as C
 import ctypes.util
 import json
@@ -17,17 +17,17 @@ def fn(lib,name,result,*args):
     f=getattr(lib,name);f.restype=result;f.argtypes=args;return f
 
 def main():
-    assert os.environ.get('SHELF_PRIVATE_DESKTOP')=='1' and os.environ['YUE_DESKTOP_RECOVERY']=='0'
+    assert os.environ.get('EXPLORER_PRIVATE_DESKTOP')=='1' and os.environ['YUE_DESKTOP_RECOVERY']=='0'
     OUTPUT.mkdir(exist_ok=True)
     def binary_hash():
-        with (REPO/'build/shelf-desktop').open('rb') as stream:
+        with (REPO/'build/explorer-desktop').open('rb') as stream:
             return hashlib.file_digest(stream,'sha256').hexdigest()
     report={'status':'running','binary_sha256':binary_hash()}
     (OUTPUT/'report.json').write_text(json.dumps(report,indent=2))
     home=Path(os.environ['HOME']);(home/'Folder').mkdir(exist_ok=True)
     (home/'Notes.txt').write_text('Native window fixture\n')
     for index in range(120):(home/f"File {index:03d}.txt").write_text("scroll fixture\n")
-    for name,colour in (('ShelfFixtureOne',(203,37,71,255)),('ShelfFixtureTwo',(29,173,211,255))):
+    for name,colour in (('ExplorerFixtureOne',(203,37,71,255)),('ExplorerFixtureTwo',(29,173,211,255))):
         theme=Path(os.environ['XDG_DATA_HOME'])/'icons'/name
         (theme/'48x48/apps').mkdir(parents=True,exist_ok=True)
         (theme/'index.theme').write_text(f'[Icon Theme]\nName={name}\nDirectories=48x48/apps\nInherits=Adwaita\n[48x48/apps]\nSize=48\nContext=Applications\nType=Fixed\n')
@@ -91,16 +91,16 @@ def main():
                     values.append((a<<24)|(r<<16)|(g<<8)|b)
             return tuple(values)
         finally:fn(obj,'g_object_unref',None,ptr)(image)
-    child=None;log=(OUTPUT/'shelf.log').open('w')
+    child=None;log=(OUTPUT/'explorer.log').open('w')
     try:
         set_theme('Adwaita')
-        child=subprocess.Popen([str(REPO/'build/shelf-desktop')],cwd=home,stdout=log,stderr=subprocess.STDOUT)
+        child=subprocess.Popen([str(REPO/'build/explorer-desktop')],cwd=home,stdout=log,stderr=subprocess.STDOUT)
         windows=[]
         def locate():
-            assert child.poll() is None,'Shelf exited during native window test'
+            assert child.poll() is None,'Explorer exited during native window test'
             found=subprocess.run(['xdotool','search','--onlyvisible','--pid',str(child.pid)],capture_output=True,text=True)
             windows[:]=found.stdout.splitlines();return bool(windows)
-        wait(locate,'Shelf native window missing');window=int(windows[0])
+        wait(locate,'Explorer native window missing');window=int(windows[0])
         xdo('windowmove',window,200,100);xdo('windowfocus',window)
         def hover(x_,y_,expected):
             xdo('mousemove','--window',window,x_,y_)
@@ -123,7 +123,7 @@ def main():
             if status or fmt.value!=32:return ()
             try:return tuple(C.cast(data,C.POINTER(ulong))[i]&0xffffffff for i in range(count.value))
             finally:fn(x,'XFree',None,ptr)(data)
-        for theme in ('Adwaita','ShelfFixtureOne','ShelfFixtureTwo','Adwaita'):
+        for theme in ('Adwaita','ExplorerFixtureOne','ExplorerFixtureTwo','Adwaita'):
             set_theme(theme);expected=expected_icon(theme)
             wait(lambda:icon()==expected,f'Window icon differs from actual GTK icon theme {theme}')
             report.setdefault('native_icon_themes',[]).append(theme)
@@ -186,7 +186,7 @@ def main():
                 shot(mode+'-focus-loss')
                 with PNG.open(OUTPUT/(mode+'-focus-loss.png')) as captured:
                     return captured.crop((0,0,width,top)).tobytes()!=focused_chrome
-            wait(focus_loss_drawn,f'{mode}: Shelf did not redraw its inactive chrome')
+            wait(focus_loss_drawn,f'{mode}: Explorer did not redraw its inactive chrome')
             xdo('mousemove',30,30);xdo('mouseup',1)
             xdo('windowfocus',window);settle()
             canceled=shot(mode+'-after-focus-cancel')
@@ -198,11 +198,11 @@ def main():
             report.setdefault('native_scrollbar_views',{})[mode]={'held_across_frames':True,
                 'fast_outside_release':True,'focus_cancel_preserves_nonzero_position':True,'wheel_after_reenter':True,'home_recovery':True}
         report['binary_sha256_after']=binary_hash()
-        assert report['binary_sha256_after']==report['binary_sha256'],'Shelf executable changed during actual-window test'
+        assert report['binary_sha256_after']==report['binary_sha256'],'Explorer executable changed during actual-window test'
         report['window_pid']=child.pid
         report['status']='passed'
         (OUTPUT/'report.json').write_text(json.dumps(report,indent=2))
-        print('Shelf native cursors, live exact GTK window icons and all-view real-window scrollbar gestures passed',flush=True)
+        print('Explorer native cursors, live exact GTK window icons and all-view real-window scrollbar gestures passed',flush=True)
     except BaseException as error:
         report['status']='failed';report['failure']=str(error)
         (OUTPUT/'report.json').write_text(json.dumps(report,indent=2))

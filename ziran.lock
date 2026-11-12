@@ -139,7 +139,7 @@
   "root": {
     "dependencies": {"data_views": "pc4c837bf2ac33dfb", "kryon": "p3cf597cf815203c0"},
     "dependency_refs": {"data_views": "942fea7809063407e2b4fa9611a2247ab6b3b894", "kryon": "af027a528c6e42b44b68fdaa90b13a7c1136d161"},
-    "name": "shelf"
+    "name": "explorer"
   },
   "toolchain": {
     "commit": "919bb6fe3c58cf703fb1179c2926b655e35ab97b",

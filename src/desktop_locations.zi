@@ -316,7 +316,7 @@ Wait :: (request: *Request, context: *void, cancel: *void, deadline: s64) {
         unused Iterate(context, 0)
         // GVfs keeps process-wide D-Bus proxies on the global context even
         // when the individual GTask callback uses a thread-default context.
-        // Dispatch those service signals too; Shelf's retained input/render
+        // Dispatch those service signals too; Explorer's retained input/render
         // loop is separate and is never entered from GLib callbacks.
         unused Iterate(null, 0)
         if !cancelled && Monotonic() >= deadline { Cancel(cancel); cancelled = true }

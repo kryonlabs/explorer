@@ -75,7 +75,7 @@ RecoveryRoot :: (original: string) -> Text {
         fallback: Text = Join(Env.EnvironmentText("HOME"), ".local/share")
         VecSwap(data.bytes, fallback.bytes)
     }
-    root: Text = Join(data, "shelf")
+    root: Text = Join(data, "explorer")
     if data.bytes.count == 0 || !Files.CreateDirectories(data) || !PrivateDirectory(root) { return .{} }
     destination := Files.PathStatus(root)
     source := Files.PathStatus(Files.PathParent(original))
@@ -96,7 +96,7 @@ RecoveryRoot :: (original: string) -> Text {
         BuilderPrint(*name, ".Trash-%", Number.FormatInteger(cast(s64)EffectiveUser(), digits[:]))
         trash: Text = Join(mount, TextView(name[:name.count]))
         if !PrivateDirectory(trash) { return .{} }
-        next_root: Text = Join(trash, "shelf-undo")
+        next_root: Text = Join(trash, "explorer-undo")
         VecSwap(root.bytes, next_root.bytes)
         if !PrivateDirectory(root) { return .{} }
     }

@@ -45,7 +45,7 @@ def fixture():
         return f'''<bookmark href="{escape(address, {'"': '&quot;'})}" added="{stamp}" modified="{stamp}" visited="{stamp}">
 <title>{escape(title)}</title><info><metadata owner="http://freedesktop.org">
 <mime:mime-type type="text/plain"/><bookmark:applications>
-<bookmark:application name="Shelf test" exec="shelf %u" modified="{stamp}" count="1"/>
+<bookmark:application name="Explorer test" exec="explorer %u" modified="{stamp}" count="1"/>
 </bookmark:applications></metadata></info></bookmark>'''
 
     history = '''<?xml version="1.0" encoding="UTF-8"?>
@@ -67,7 +67,7 @@ def run(binary, local_only):
     if local_only:
         os.environ["GIO_USE_VFS"] = "local"
     # A fresh private bus deliberately starts without gio/Thunar pre-mounting
-    # virtual roots. Shelf must activate the native backend itself.
+    # virtual roots. Explorer must activate the native backend itself.
     try:
         command("stdbuf", "-oL", str(binary), str(root), timeout=65)
     finally:

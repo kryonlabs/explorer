@@ -54,7 +54,7 @@ def main():
         key('Escape', 'Escape', 'ctrl+l')
         reset = text(); print('Thunar Escape:', repr(reset), flush=True)
         assert reset.rstrip('/') == str(root), reset
-        print('Installed Thunar common-prefix/popup keys/Escape verified; Shelf file-parent selection follows current upstream, not4.20.2 file launch', flush=True)
+        print('Installed Thunar common-prefix/popup keys/Escape verified; Explorer file-parent selection follows current upstream, not4.20.2 file launch', flush=True)
     finally:
         if peer:
             if peer.poll() is None: peer.terminate()

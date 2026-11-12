@@ -1,5 +1,5 @@
 #!/bin/sh
-# Use Shelf's canonical local toolchain override or the version in ziran.lock.
+# Use Explorer's canonical local toolchain override or the version in ziran.lock.
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
@@ -19,7 +19,7 @@ else
     toolchain=$("$launcher" pkg path ziran --locked)
 fi
 if [ ! -x "$toolchain/build/bin/ziran" ]; then
-    printf 'Shelf: build the package toolchain first: make -C %s build/bin/ziran\n' "$toolchain" >&2
+    printf 'Explorer: build the package toolchain first: make -C %s build/bin/ziran\n' "$toolchain" >&2
     exit 1
 fi
 exec "$toolchain/build/bin/ziran" "$@"

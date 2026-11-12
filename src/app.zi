@@ -46,7 +46,7 @@ Frame :: (session: Session, viewport: Rectangle) -> s32 {
     if host.quit_requested || Windows.PollClose() { Window.WindowQuit() }
     if Windows.TakeFailure() { AppHost.ActiveManager(*host).error="The windows could not all be closed." }
     // Only the standalone application owns the desktop window. Embedding
-    // Shelf in another host must not change that application's window icon.
+    // Explorer in another host must not change that application's window icon.
     generation:=Gtk.GtkStyleGeneration()
     if generation!=0 && generation!=window_icon_generation {
         nodes:=Native.Nodes("image")

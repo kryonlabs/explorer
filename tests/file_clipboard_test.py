@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Private native Shelf/Thunar interchange, with a native GTK adversarial peer."""
+"""Private native Explorer/Thunar interchange, with a native GTK adversarial peer."""
 import ctypes as C
 import os
 from pathlib import Path
@@ -66,7 +66,7 @@ def main():
     root = repo / 'build/file-clipboard-fixture'
     shutil.rmtree(root, ignore_errors=True)
     root.mkdir(mode=0o700)
-    executable = Path(sys.argv[1]) if len(sys.argv) > 1 else repo / 'build/shelf-desktop'
+    executable = Path(sys.argv[1]) if len(sys.argv) > 1 else repo / 'build/explorer-desktop'
     processes = []
     logs = []
     peer = None
@@ -125,11 +125,11 @@ def main():
         peer = new
 
     try:
-        shelf = start([executable], 'shelf')
+        explorer = start([executable], 'explorer')
         thunar = start(['thunar', root], 'thunar')
         special = 'é 世界 space\n%#?.txt'
-        for index, (sender, receiver, cut) in enumerate(((shelf, thunar, False),
-                (shelf, thunar, True), (thunar, shelf, False), (thunar, shelf, True))):
+        for index, (sender, receiver, cut) in enumerate(((explorer, thunar, False),
+                (explorer, thunar, True), (thunar, explorer, False), (thunar, explorer, True))):
             source = root / f'source-{index}'
             target = root / f'target-{index}'
             source.mkdir(); target.mkdir()
@@ -156,7 +156,7 @@ def main():
             (large / name).write_text(name)
         for cut in (False, True):
             target = root / ('large-cut' if cut else 'large-copy'); target.mkdir()
-            navigate(shelf, large); key(shelf, 'ctrl+a', 'ctrl+x' if cut else 'ctrl+c')
+            navigate(explorer, large); key(explorer, 'ctrl+a', 'ctrl+x' if cut else 'ctrl+c')
             advertised = subprocess.run([sys.executable, __file__, '--read',
                                         'x-special/gnome-copied-files'], capture_output=True,
                                        check=True, timeout=12).stdout
@@ -183,7 +183,7 @@ def main():
         old = root / 'old-internal'; old.mkdir()
         original = old / 'keep.txt'; original.write_text('keep')
         target = root / 'invalid-target'; target.mkdir()
-        navigate(shelf, old); key(shelf, 'ctrl+a', 'ctrl+x'); navigate(shelf, target)
+        navigate(explorer, old); key(explorer, 'ctrl+a', 'ctrl+x'); navigate(explorer, target)
         valid = original.as_uri().encode()
         invalid = [b'', b'cut\n', b'cut\nfile://', b'cut\nfile://remote/a',
                    b'cut\n' + valid + b'\nfile:///bad%GG', b'cut\nfile:///bad%00',
@@ -191,41 +191,41 @@ def main():
                    b'copy\n' + b'x' * 1048576]
         for payload in invalid:
             offer('x-special/gnome-copied-files', payload)
-            key(shelf, 'ctrl+v')
+            key(explorer, 'ctrl+v')
             assert original.exists() and not list(target.iterdir()), payload[:100]
         offer('x-special/gnome-copied-files', b'cut\n' + valid + b'\n', stall=True)
-        key(shelf, 'ctrl+v')
+        key(explorer, 'ctrl+v')
         time.sleep(1.3)
         assert original.exists() and not list(target.iterdir()), 'transport timeout mutated files'
         offer('UTF8_STRING', b'ordinary text replacing stale cut')
-        key(shelf, 'ctrl+v')
+        key(explorer, 'ctrl+v')
         assert original.exists() and not list(target.iterdir())
         # URI-only lists copy; a failed operation retains a pending cut and error.
         offer('text/uri-list', b'# native URI peer\r\n' + valid + b'\r\n')
-        key(shelf, 'ctrl+v')
+        key(explorer, 'ctrl+v')
         wait(lambda: (target / 'keep.txt').exists(), 'URI-only copy')
         assert original.exists()
-        offer('x-special/gnome-copied-files', b'cut\nfile:///missing-shelf-clipboard-test\n')
+        offer('x-special/gnome-copied-files', b'cut\nfile:///missing-explorer-clipboard-test\n')
         before = sorted(p.name for p in target.iterdir())
-        key(shelf, 'ctrl+v')
+        key(explorer, 'ctrl+v')
         assert before == sorted(p.name for p in target.iterdir()) and original.exists()
         # Foreign cut consumption is cached: repeat paste cannot move it twice.
         offer('x-special/gnome-copied-files', b'cut\n' + valid + b'\n')
-        key(shelf, 'ctrl+v')
+        key(explorer, 'ctrl+v')
         wait(lambda: not original.exists(), 'foreign cut')
         before = sorted(p.name for p in target.iterdir())
-        key(shelf, 'ctrl+v')
+        key(explorer, 'ctrl+v')
         assert before == sorted(p.name for p in target.iterdir())
         # Retry only the pending suffix after a partially completed foreign cut.
         first = old / 'first.txt'; first.write_text('first')
         second = old / 'second.txt'
         offer('x-special/gnome-copied-files', b'cut\n' + first.as_uri().encode() +
               b'\n' + second.as_uri().encode() + b'\n')
-        key(shelf, 'ctrl+v')
+        key(explorer, 'ctrl+v')
         wait(lambda: not first.exists(), 'partial cut completed prefix')
         assert (target / 'first.txt').read_text() == 'first'
         second.write_text('retry')
-        key(shelf, 'ctrl+v')
+        key(explorer, 'ctrl+v')
         wait(lambda: not second.exists(), 'partial cut retry suffix')
         assert (target / 'second.txt').read_text() == 'retry'
         assert not (target / 'first (2).txt').exists()

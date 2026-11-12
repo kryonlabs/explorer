@@ -16,7 +16,7 @@ from ui_test import menu_action, wait_for
 def main():
     repo = Path(__file__).resolve().parents[1]
     parser = argparse.ArgumentParser()
-    parser.add_argument('--executable', type=Path, default=repo / 'build/shelf-desktop')
+    parser.add_argument('--executable', type=Path, default=repo / 'build/explorer-desktop')
     parser.add_argument('--capture-prefix', default='split')
     args = parser.parse_args()
     assert os.environ.get('DISPLAY') and os.environ.get('XDG_RUNTIME_DIR')
@@ -39,7 +39,7 @@ def main():
     peer = None; thunar = None; captures = []; passed = False
     try:
         def xdo(*parts):
-            assert proc.poll() is None, f'Shelf exited {proc.returncode}'
+            assert proc.poll() is None, f'Explorer exited {proc.returncode}'
             return subprocess.run(['xdotool', *map(str, parts)], check=True, capture_output=True, text=True, timeout=10).stdout.strip()
         def find(pid):
             deadline = time.monotonic() + 15

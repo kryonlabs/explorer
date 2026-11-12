@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Capture real Thunar/Shelf on an owned Xvfb; exact parity is an assertion.
+"""Capture real Thunar/Explorer on an owned Xvfb; exact parity is an assertion.
 
 Run with build-queue -- python3 tests/thunar_visual_test.py [--reference-only].
 Add --populated-home for a separate 960x1020 Home/bookmark/scroll comparison.
 Artifacts persist in ignored build/thunar-visual. No owner settings are changed.
-The reference-only mode never opens or reads the Shelf executable.
+The reference-only mode never opens or reads the Explorer executable.
 """
 import argparse
 from collections import Counter
@@ -200,7 +200,7 @@ def fixture(populated_home=False):
     assert path.is_mount() and not any(path.iterdir()), "fixture must be an empty private mount"
     for name in ("01 Folder", "Documents", "Pictures"):
         (path / name).mkdir()
-    (path / "04 Notes.txt").write_text("Shelf and Thunar native comparison.\n")
+    (path / "04 Notes.txt").write_text("Explorer and Thunar native comparison.\n")
     Image.new("RGB", (64, 64), (30, 120, 210)).save(path / "05 Image.png")
     (path / "06 Folder link").symlink_to("01 Folder", target_is_directory=True)
     (path / "07 File link.txt").symlink_to("04 Notes.txt")
@@ -482,7 +482,7 @@ def capture(name, command, path, populated_home=False, probe_locations=False):
 
 
 def observe_geometry(target):
-    """Record pixel evidence, with no expected layout supplied by Shelf code."""
+    """Record pixel evidence, with no expected layout supplied by Explorer code."""
     from PIL import Image
     with Image.open(target) as image:
         image = image.convert("RGB")
@@ -498,7 +498,7 @@ def observe_geometry(target):
                     start = x
             spans[str(y)] = runs
         # This strip covers Thunar's first file icon. Preserve literal measured
-        # spans; they are evidence, not an assumption that Shelf uses this column.
+        # spans; they are evidence, not an assumption that Explorer uses this column.
         occupied = []
         for y in range(90, HEIGHT - 30):
             pixels = [image.getpixel((x, y)) for x in range(174, 224)]
@@ -517,11 +517,11 @@ def observe_geometry(target):
 def compare(suffix=""):
     from PIL import Image, ImageChops, ImageStat
     reference = Image.open(OUTPUT / ("thunar" + suffix + ".png")).convert("RGB")
-    shelf = Image.open(OUTPUT / ("shelf" + suffix + ".png")).convert("RGB")
-    diff = ImageChops.difference(reference, shelf)
+    explorer = Image.open(OUTPUT / ("explorer" + suffix + ".png")).convert("RGB")
+    diff = ImageChops.difference(reference, explorer)
     diff.save(OUTPUT / ("difference" + suffix + ".png"))
     pair = Image.new("RGB", (WIDTH * 2, HEIGHT))
-    pair.paste(shelf, (0, 0))
+    pair.paste(explorer, (0, 0))
     pair.paste(reference, (WIDTH, 0))
     pair.save(OUTPUT / ("paired" + suffix + ".png"))
     regions = {}
@@ -529,18 +529,18 @@ def compare(suffix=""):
                        ("top_120px", (0, 0, WIDTH, 120)),
                        ("left_170px", (0, 120, 170, HEIGHT - 30)),
                        ("file_area", (170, 120, WIDTH, HEIGHT - 30))):
-        a, b = reference.crop(rect), shelf.crop(rect)
+        a, b = reference.crop(rect), explorer.crop(rect)
         delta = ImageChops.difference(a, b)
         same = sum(p == (0, 0, 0) for p in delta.getdata())
         colors_a, colors_b = Counter(a.getdata()), Counter(b.getdata())
         regions[name] = {"bounds": rect, "mean_absolute_channel_error": sum(ImageStat.Stat(delta).mean) / 3,
                          "identical_pixel_fraction": same / (a.width * a.height),
                          "thunar_dominant_colors": colors_a.most_common(5),
-                         "shelf_dominant_colors": colors_b.most_common(5)}
+                         "explorer_dominant_colors": colors_b.most_common(5)}
     return {"exact_pixel_parity": diff.getbbox() is None, "difference_bounds": diff.getbbox(), "regions": regions,
             "font_parity": "unverified independently; covered by exact pixel assertion",
             "geometry_parity": "window dimensions matched; internal geometry covered by exact pixel assertion",
-            "icon_parity": "native GTK assets resolved; Shelf raster parity covered by exact pixel assertion"}
+            "icon_parity": "native GTK assets resolved; Explorer raster parity covered by exact pixel assertion"}
 
 
 def worker(options):
@@ -596,20 +596,20 @@ def worker(options):
                 assert all(route["passed"] for route in report["thunar"]["native_sidebar_routes"]), report["thunar"]["native_sidebar_routes"]
             report["status"] = "reference-captured"
             return 0
-        executable = REPO / "build/shelf-desktop"
+        executable = REPO / "build/explorer-desktop"
         before = digest(executable)
-        report["shelf"] = capture("shelf", [executable], path,
+        report["explorer"] = capture("explorer", [executable], path,
                                   options.populated_home, options.probe_locations)
-        filesystem.report["after_shelf"] = filesystem.sample()
-        assert filesystem.report["fixture_ready"] == filesystem.report["after_shelf"], "Shelf browsing changed fixture filesystem"
-        assert digest(executable) == before, "Shelf executable changed during comparison"
-        report["shelf"]["sha256"] = before
+        filesystem.report["after_explorer"] = filesystem.sample()
+        assert filesystem.report["fixture_ready"] == filesystem.report["after_explorer"], "Explorer browsing changed fixture filesystem"
+        assert digest(executable) == before, "Explorer executable changed during comparison"
+        report["explorer"]["sha256"] = before
         report["comparison"] = compare()
         report["state_comparisons"] = {state: compare("-" + state) for state in ("selected", "hover")}
         if options.populated_home:
             report["state_comparisons"]["scrolled"] = compare("-scrolled")
         if options.probe_locations:
-            failed_routes = [(app, route) for app in ("thunar", "shelf")
+            failed_routes = [(app, route) for app in ("thunar", "explorer")
                              for route in report[app]["native_sidebar_routes"] if not route["passed"]]
             assert not failed_routes, ("sidebar did not navigate to native URI", failed_routes)
         parity = all(item["exact_pixel_parity"] for item in

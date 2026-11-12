@@ -57,10 +57,10 @@ def main():
                     if mode == 'fds': resource.setrlimit(resource.RLIMIT_NOFILE, (64, 64))
                 command(*arguments, env=env, preexec_fn=limits, timeout=90)
             if mode == 'regular':
-                metadata = list((FIXTURE / 'data/shelf/undo').glob('operation-*/original-path'))
+                metadata = list((FIXTURE / 'data/explorer/undo').glob('operation-*/original-path'))
                 assert metadata and all(p.read_bytes().startswith(os.fsencode(FIXTURE)) for p in metadata)
-                assert not list((FIXTURE / 'a').glob('.shelf-undo-*'))
-                assert not list((FIXTURE / 'b').glob('.shelf-undo-*'))
+                assert not list((FIXTURE / 'a').glob('.explorer-undo-*'))
+                assert not list((FIXTURE / 'b').glob('.explorer-undo-*'))
     print('Operation history source/saved-IR local tests passed', flush=True)
 
 

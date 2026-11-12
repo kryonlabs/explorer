@@ -114,7 +114,7 @@ Run :: (root: string) -> bool {
 main :: (argc: s32, argv: **u8) -> s32 {
     if argc != 2 { return 64 }
     root := Bytes.TextFromCString(argv[1])
-    if !Run(root) { print("Shelf tree lazy/reveal/raw/hidden/cycle/transaction/limit test failed\n"); return 1 }
-    print("Shelf tree lazy/reveal/raw/hidden/cycle/transaction/limit tests passed\n")
+    if !Run(root) { print("Explorer tree lazy/reveal/raw/hidden/cycle/transaction/limit test failed\n"); return 1 }
+    print("Explorer tree lazy/reveal/raw/hidden/cycle/transaction/limit tests passed\n")
     return 0
 }

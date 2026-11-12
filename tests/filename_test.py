@@ -12,7 +12,7 @@ from ui_test import menu_action
 def main():
     repo = Path(__file__).resolve().parents[1]
     parser = argparse.ArgumentParser()
-    parser.add_argument('--executable', type=Path, default=repo / 'build/shelf-desktop')
+    parser.add_argument('--executable', type=Path, default=repo / 'build/explorer-desktop')
     options = parser.parse_args()
     assert os.environ.get('DISPLAY') and os.environ.get('XDG_RUNTIME_DIR')
     root = repo / 'build/filename-fixture'
@@ -36,7 +36,7 @@ def main():
                                stdout=log, stderr=log)
     try:
         def healthy():
-            assert process.poll() is None, f'Shelf exited {process.returncode}; see {root / "app.log"}'
+            assert process.poll() is None, f'Explorer exited {process.returncode}; see {root / "app.log"}'
         def xdo(*args):
             healthy()
             return subprocess.run(['xdotool', *map(str, args)], capture_output=True,
@@ -50,7 +50,7 @@ def main():
                 window = result.stdout.splitlines()[0]
             else:
                 healthy(); time.sleep(.05)
-        assert window, 'missing owned Shelf window'
+        assert window, 'missing owned Explorer window'
         xdo('windowfocus', '--sync', window)
         def key(*keys):
             for item in keys:

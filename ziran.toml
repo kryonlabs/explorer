@@ -1,5 +1,5 @@
 [package]
-name = "shelf"
+name = "explorer"
 entry = "src/app.zi"
 module_roots = ["src", "tests"]
 bridge_modules = ["app"]
@@ -19,7 +19,7 @@ model = "src/model.zi"
 app_host = "src/app_host.zi"
 
 [install]
-bin = "shelf"
+bin = "explorer"
 
 [tool.kryon]
 default_profile = "desktop"
@@ -35,7 +35,7 @@ assets = "assets"
 
 [tool.kryon.install]
 profile = "desktop"
-name = "Shelf"
+name = "Explorer"
 icon_name = "system-file-manager"
 comment = "Ziran file manager"
 categories = "Utility;FileManager;Core;"

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- Rename the package, executable, build output, desktop identity, embedded
+  module paths and internal runtime names from Shelf to Explorer.
+- Add a private Xvfb Explorer/Thunar benchmark for fresh-window launch, first
+  stable root rendering and tiny/medium/large folder-opening latency.
 - Switch open menus on hover and support keyboard menu navigation with visible
   shortcuts. Apply native wheel distances immediately, handle keypad Delete,
   confirm permanent deletion, and preserve text-editor key behavior. Honor the

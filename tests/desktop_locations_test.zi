@@ -58,7 +58,7 @@ ModelRoutes :: (directory: string) -> bool {
     if !Require(Model.NavigateBack(*manager) && manager.cwd==directory && Model.NavigateForward(*manager) && manager.cwd=="recent:///",
         "URI history preserves native route") { return false }
     before:=manager.back.count
-    if !Require(!Model.OpenPathTracked(*manager,"shelf-unsupported-test:///missing") && manager.cwd=="recent:///" && manager.entries.count==4 && manager.back.count==before,
+    if !Require(!Model.OpenPathTracked(*manager,"explorer-unsupported-test:///missing") && manager.cwd=="recent:///" && manager.entries.count==4 && manager.back.count==before,
         "URI open error keeps listing and history") { return false }
     editor: Location.State; defer Location.Release(*editor)
     print("Model native routes: editor\n")
@@ -220,7 +220,7 @@ Run :: (root: string) -> bool {
         }
     }
     // A definitively unsupported scheme cannot be silently treated as a path.
-    if !Require(!Locations.OpenUri(*state, "shelf-unsupported-test:///unavailable") && state.error.domain != 0 &&
+    if !Require(!Locations.OpenUri(*state, "explorer-unsupported-test:///unavailable") && state.error.domain != 0 &&
         state.error.message != "", "unsupported service is a genuine error") { return false }
     Locations.Release(*state)
     if !Require(state.entries.count == 0 && state.current_uri == "" && state.error.message == "", "owned native state release") { return false }

@@ -114,7 +114,7 @@ def wait_for(check, label, process):
     deadline = time.monotonic() + 15
     while time.monotonic() < deadline:
         if process.poll() is not None:
-            raise AssertionError(f"Shelf exited during {label}: {process.returncode}")
+            raise AssertionError(f"Explorer exited during {label}: {process.returncode}")
         result = check()
         if result:
             return result
@@ -211,7 +211,7 @@ def assert_editor_text(xdo, expected, process=None):
     actual = b""
     while time.monotonic() < deadline:
         if process is not None:
-            assert process.poll() is None, "Shelf exited while checking typed input"
+            assert process.poll() is None, "Explorer exited while checking typed input"
         xdo("key", "--clearmodifiers", "ctrl+a", "ctrl+c")
         read = subprocess.run([sys.executable, str(Path(__file__).with_name("file_clipboard_test.py")),
                                "--read", "UTF8_STRING"], capture_output=True, timeout=10)
@@ -226,7 +226,7 @@ def main():
     require_private_display()
     repo = Path(__file__).resolve().parents[1]
     parser = argparse.ArgumentParser()
-    parser.add_argument("--executable", type=Path, default=repo / "build/shelf-desktop")
+    parser.add_argument("--executable", type=Path, default=repo / "build/explorer-desktop")
     parser.add_argument("--capture-prefix", default="ui")
     parser.add_argument("--system-theme-config", type=Path)
     parser.add_argument("--system-theme-css", type=Path)
@@ -256,7 +256,7 @@ def main():
                  "selected": "376aaf", "selected_fg": "ffffff", "border": "586274"},
     }
     for name, colors in theme_colors.items():
-        css = fixture / ".themes" / ("ShelfTest" + name) / "gtk-3.0/gtk.css"
+        css = fixture / ".themes" / ("ExplorerTest" + name) / "gtk-3.0/gtk.css"
         css.parent.mkdir(parents=True)
         definitions = "\n".join(f"@define-color {token} #{colors[color]};" for token, color in (
             ("theme_bg_color", "bg"), ("theme_base_color", "base"),
@@ -276,7 +276,7 @@ def main():
     settings_daemon = None
 
     def set_theme(name):
-        theme = "ShelfTest" + name
+        theme = "ExplorerTest" + name
         settings.write_text("[Settings]\ngtk-theme-name=" + theme + "\n")
         if settings_daemon is not None:
             assert settings_daemon.poll() is None, "private XSettings manager exited"
@@ -310,7 +310,7 @@ def main():
         assert settings_daemon.poll() is None, "private XSettings manager exited"
         if not options.system_theme_config:
             subprocess.run(["xfconf-query", "-c", "xsettings", "-p", "/Net/ThemeName",
-                            "--create", "-t", "string", "-s", "ShelfTestLight"],
+                            "--create", "-t", "string", "-s", "ExplorerTestLight"],
                            env=env, check=True, capture_output=True, timeout=10)
         process = subprocess.Popen([str(options.executable)], env=env, cwd=fixture,
                                    stdout=log, stderr=subprocess.STDOUT)
@@ -539,7 +539,7 @@ def main():
                     key("Escape")
             if options.system_theme_config:
                 theme_tests(system=True)
-                print("Shelf installed private-Xvfb current system theme: all three views, glyphs, table, preview and prompt local tests passed")
+                print("Explorer installed private-Xvfb current system theme: all three views, glyphs, table, preview and prompt local tests passed")
                 return
             source = fixture / "view-source"
             source.mkdir()
@@ -639,7 +639,7 @@ def main():
                 key("Return")
                 wait_for(lambda: (source / "00-folder" / name).is_file(),
                          mode + " after desktop close/reopen", process)
-            print("Shelf private-Xvfb three-view selection, sorting, image/text preview, system light/dark/live theme changes, opening and reopen local tests passed")
+            print("Explorer private-Xvfb three-view selection, sorting, image/text preview, system light/dark/live theme changes, opening and reopen local tests passed")
         except Exception:
             if "window" in locals() and shutil.which("import"):
                 subprocess.run(["import", "-window", window,

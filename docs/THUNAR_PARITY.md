@@ -1,10 +1,10 @@
 # Thunar parity roadmap
 
-Shelf's goal is feature parity with Thunar as a Ziran/Kryon application. The
+Explorer's goal is feature parity with Thunar as a Ziran/Kryon application. The
 statuses below describe the current Linux implementation; they are intentionally
 specific so each missing row can become an independent implementation task.
 
-| Thunar feature | Shelf status | Remaining work |
+| Thunar feature | Explorer status | Remaining work |
 | --- | --- | --- |
 | Icon view | Partial | Row-major icon grid, shared multi-selection, keyboard navigation, zoom and immediate native vertical scroll exist; add alignment preferences and rubber-band selection. |
 | List view | Partial | Sortable Name/Size/Type/Modified details with resizable headers and shared multi-selection exist; add inline rename and configurable columns. |
@@ -56,7 +56,7 @@ specific so each missing row can become an independent implementation task.
 - `src/app.zi` is the standalone Kryon `Frame` entry.
 - `src/app_host.zi` owns widget composition and exports `Host`, `Prepare`,
   `Draw` and `Close` for direct Ziran embedding.
-- Rill imports the native `shelf/app_host` module. `Draw` respects the supplied
+- Rill imports the native `explorer/app_host` module. `Draw` respects the supplied
   viewport origin and preserves host input when unfocused. `Close` releases
   model storage before the host is reused.
 - A portable ZX build requires filesystem host capabilities. The current
