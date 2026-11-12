@@ -4,6 +4,8 @@
 
 - Rename the package, executable, build output, desktop identity, embedded
   module paths and internal runtime names from Shelf to Explorer.
+- Clarify Explorer as an independent standalone Thunar alternative and remove
+  Rill hosting language from its public documentation.
 - Add a private Xvfb Explorer/Thunar benchmark for fresh-window launch, first
   stable root rendering and tiny/medium/large folder-opening latency.
 - Switch open menus on hover and support keyboard menu navigation with visible
@@ -72,8 +74,7 @@
   and restore support.
 - Added visible tab switching, Trash restore controls and a native Ziran model
   test suite.
-- Added a locked Kryon desktop profile and direct native Ziran embedding for Rill.
+- Added a locked Kryon desktop profile and native Ziran application state.
 - Removed the alternate build file, C sources, C host library and C tests.
-- Documented the complete Thunar parity roadmap and current Rill hosting
-  interface.
+- Documented the complete Thunar parity roadmap.
 - Added model, embedded rendering and private desktop interaction tests.

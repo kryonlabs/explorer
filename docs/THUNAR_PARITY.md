@@ -54,11 +54,9 @@ specific so each missing row can become an independent implementation task.
   Checked directory navigation stages listing, selection and active-tab storage
   before committing; completion and filesystem errors retain the prior route.
 - `src/app.zi` is the standalone Kryon `Frame` entry.
-- `src/app_host.zi` owns widget composition and exports `Host`, `Prepare`,
-  `Draw` and `Close` for direct Ziran embedding.
-- Rill imports the native `explorer/app_host` module. `Draw` respects the supplied
-  viewport origin and preserves host input when unfocused. `Close` releases
-  model storage before the host is reused.
+- `src/app_host.zi` owns widget composition and shared application state.
+- Drawing respects the active viewport origin and preserves host input when
+  unfocused. Closing releases model storage before state is reused.
 - A portable ZX build requires filesystem host capabilities. The current
   Linux implementation uses native filesystem APIs and supplies no portable profile.
 

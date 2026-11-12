@@ -1,9 +1,9 @@
 # Explorer
 
-Explorer is the Linux file manager for Rill, written in Ziran with a Kryon user
-interface. Its goal is full Thunar parity; the current implementation covers
-basic navigation and file operations. It runs standalone and embeds directly
-in Rill through its native Ziran host module.
+Explorer is an independent Linux file manager written in Ziran with a Kryon
+user interface. Its goal is full Thunar parity; the current implementation
+covers basic navigation and file operations. It runs as a standalone desktop
+application.
 
 Use View → Icons, Detailed List or Compact List, or Ctrl+1, Ctrl+2 and Ctrl+3, to change
 views. All views share selection, focus and sorting. Ctrl-click toggles a file;
@@ -266,11 +266,9 @@ use GTK’s discovered `system-file-manager` icon. Native file chrome uses the
 system arrow cursor; location editing retains the text cursor. File views use
 GTK scrollbar geometry, input, overlay fading, theme assets, fonts and selection
 metrics. Rounded native surfaces draw over their current background so Cairo
-uses the same curve coverage as a GTK window. The standalone entry is
-the Kryon `Frame` export in `src/app.zi`. Rill imports `explorer/app_host` and calls
-`Prepare`, `Draw` and `Close` with its session, viewport and focus state.
-Keep each prepared `Host` at a stable address until `Close`.
-Native embedding hosts link the libraries declared in `ziran.toml`, including
+uses the same curve coverage as a GTK window. The application entry is the
+Kryon `Frame` export in `src/app.zi`. The executable links the libraries
+declared in `ziran.toml`, including
 libxcb, GTK3, GIO, GObject, GLib, Pango, Cairo and GdkPixbuf. Package builds and
 saved-IR executable builds propagate these native link requirements.
 Filesystem access uses native Linux APIs. A portable ZX build needs a filesystem
