@@ -9,7 +9,28 @@ Pixmap :: #import "kryon/pixmap";
 Keys :: #import "kryon/input_protocol";
 Kinds :: #import "kryon/widget_kind";
 Scrolls :: #import "kryon/scroll_device";
-UI :: #import "kryon/Widgets";
+#import "kryon/session"
+#import "kryon/geometry"
+#import "kryon/tree"
+#import "kryon/drawing_props"
+#import "kryon/control_props"
+#import "kryon/style"
+#import "kryon/style_sheet"
+#import "kryon/system_clipboard"
+#import "kryon/input_protocol"
+BoxWidget :: #import "kryon/box";
+TextWidget :: #import "kryon/text";
+ButtonWidget :: #import "kryon/button";
+ScrollWidget :: #import "kryon/scroll";
+Overlay :: #import "kryon/overlay";
+BreadcrumbWidget :: #import "kryon/breadcrumb";
+DropdownWidget :: #import "kryon/dropdown";
+TextFieldWidget :: #import "kryon/text_field";
+ListBox :: #import "kryon/list_box";
+PanedViewWidget :: #import "kryon/paned_view";
+TabBar :: #import "kryon/tab_bar";
+GridMultiWidget :: #import "kryon/grid_multi";
+ImageWidget :: #import "kryon/image";
 Gtk :: #import "kryon/GtkStyleLinux";
 NativeUI :: #import "native_ui";
 Paint :: #import "kryon/GtkPainterLinux";
@@ -849,14 +870,14 @@ LargeViewTest :: (host: *App.Host, session: Sessions.Session, root: string) -> b
 
 DrawScoped :: (host: *App.Host, session: Sessions.Session, bounds: Geometry.Rectangle,
     key: u64, focused: bool) -> bool {
-    node := UI.Box(session, UI.BoxProps.{.key = key, .bounds = bounds})
+    node := BoxWidget.Draw(session, BoxWidget.Props.{.key = key, .bounds = bounds})
     if node < 0 || !Tree.TreePushScope(session, node) { return false }
     defer { Tree.End(session) }
     return App.Draw(host, App.HostSession.{session.slot, session.epoch},
         App.HostViewport.{bounds.x, bounds.y, bounds.width, bounds.height}, focused) == 0
 }
 
-Packed :: (color: UI.Color) -> u32 {
+Packed :: (color: Color) -> u32 {
     return (cast(u32)color.r << cast(u32)24) | (cast(u32)color.g << cast(u32)16) |
         (cast(u32)color.b << cast(u32)8) | cast(u32)color.a
 }
@@ -873,8 +894,8 @@ ThemeScopeTest :: (host: *App.Host, session: Sessions.Session, root: string) -> 
         .base = cast(u32)0x151922ff, .text = cast(u32)0xeef1f5ff,
         .selected = cast(u32)0x376aafff, .selected_text = cast(u32)0xffffffff,
         .border = cast(u32)0x586274ff}
-    fallback := UI.ColorFromPacked(cast(u32)0x765432ff)
-    original := Packed(UI.StyleTokenColorOr("canvas", fallback))
+    fallback := ColorFromPacked(cast(u32)0x765432ff)
+    original := Packed(StyleTokenColorOr("canvas", fallback))
     for mode: cast(s32)0..2 {
         Model.SetView(*host.manager, cast(Model.ViewMode)mode)
         Model.SetView(*other.manager, cast(Model.ViewMode)mode)
@@ -888,15 +909,15 @@ ThemeScopeTest :: (host: *App.Host, session: Sessions.Session, root: string) -> 
             cast(s32)Frames.BeginFrame(session, cast(u64)1, .{0.0, 0.0, 960.0, 600.0}) != 0 ||
             !Palettes.WidgetPaletteUse(session, dark) { return false }
         if !DrawScoped(host, session, .{8.0, 8.0, 440.0, 400.0}, cast(u64)720, false) ||
-            Packed(UI.StyleTokenColorOr("canvas", fallback)) != dark.background ||
-            Packed(UI.StyleTokenColorOr("text", fallback)) != dark.text ||
+            Packed(StyleTokenColorOr("canvas", fallback)) != dark.background ||
+            Packed(StyleTokenColorOr("text", fallback)) != dark.text ||
             !DrawScoped(*other, session, .{480.0, 100.0, 440.0, 400.0}, cast(u64)721, true) ||
-            Packed(UI.StyleTokenColorOr("canvas", fallback)) != dark.background {
+            Packed(StyleTokenColorOr("canvas", fallback)) != dark.background {
             unused Palettes.WidgetPaletteRestore(session)
             return false
         }
         if !Palettes.WidgetPaletteRestore(session) ||
-            Packed(UI.StyleTokenColorOr("canvas", fallback)) != original ||
+            Packed(StyleTokenColorOr("canvas", fallback)) != original ||
             cast(s32)Frames.EndFrame(session) != 0 { return false }
         if (theme_pixels[9 * 960 + 9] & cast(u32)0xffffff) != (light.background >> cast(u32)8) ||
             (theme_pixels[101 * 960 + 481] & cast(u32)0xffffff) != (dark.background >> cast(u32)8) ||

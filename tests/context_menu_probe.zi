@@ -1,0 +1,81 @@
+// Prints Explorer's context menu model as JSON, in the shape the Thunar
+// oracle (tests/context_menu_oracle.py) records, for one context:
+//   context_menu_probe KIND SIDE VIEW CAN_PASTE SHORTCUT_PANE CURRENT [SELECTION...]
+// KIND view|shortcuts|tree, SIDE none|folder|bookmark|special|device,
+// VIEW icon|list|compact, CAN_PASTE and SHORTCUT_PANE 0|1.
+using Menus :: #import "context_menu";
+Model :: #import "model";
+using Bytes :: #import "std/byte_text_linux";
+
+Escape :: (output: *Vec(u8), value: string) {
+    unused VecPush(output.*, #char "\"")
+    for byte: value {
+        if byte == #char "\"" || byte == #char "\\" { unused VecPush(output.*, #char "\\"); unused VecPush(output.*, byte) }
+        else if byte == 10 { unused BuilderAppend(output.*, "\\n") }
+        else { unused VecPush(output.*, byte) }
+    }
+    unused VecPush(output.*, #char "\"")
+}
+
+Panel :: (menu: *Menus.FileMenu, parent: s32, output: *Vec(u8)) {
+    unused VecPush(output.*, #char "[")
+    first := true
+    for index: cast(s32)0..cast(s32)menu.items.count - 1 {
+        if menu.items[index].parent != parent { continue }
+        if !first { unused VecPush(output.*, #char ",") }
+        first = false
+        if menu.items[index].separator { unused BuilderAppend(output.*, "{\"separator\": true}"); continue }
+        unused BuilderAppend(output.*, "{\"label\": ")
+        Escape(output, Menus.FileMenuLabel(menu, index))
+        unused BuilderAppend(output.*, ifx menu.items[index].enabled then ", \"sensitive\": true" else ", \"sensitive\": false")
+        unused BuilderAppend(output.*, ", \"accelerator\": \"\"")
+        if menu.items[index].check != 0 {
+            unused BuilderAppend(output.*, ifx menu.items[index].check == 2 then ", \"kind\": \"radio\"" else ", \"kind\": \"check\"")
+            unused BuilderAppend(output.*, ifx menu.items[index].checked then ", \"checked\": true" else ", \"checked\": false")
+        }
+        if menu.items[index].submenu {
+            unused BuilderAppend(output.*, ", \"submenu\": ")
+            Panel(menu, index + 1, output)
+        }
+        unused VecPush(output.*, #char "}")
+    }
+    unused VecPush(output.*, #char "]")
+}
+
+#program_export
+main :: (argc: s32, argv: **u8) -> s32 {
+    if argc < 7 { return 2 }
+    kind := TextFromCString(argv[1])
+    side := TextFromCString(argv[2])
+    view := TextFromCString(argv[3])
+    context: Menus.MenuContext
+    context.kind = .View
+    if kind == "shortcuts" { context.kind = .Shortcuts } else if kind == "tree" { context.kind = .Tree }
+    context.side = .None
+    if side == "folder" { context.side = .Folder }
+    else if side == "bookmark" { context.side = .Bookmark }
+    else if side == "special" { context.side = .Special }
+    else if side == "device" { context.side = .Device }
+    context.view_mode = .ViewList
+    if view == "icon" { context.view_mode = .ViewIcon } else if view == "compact" { context.view_mode = .ViewCompact }
+    context.can_paste = TextFromCString(argv[4]) == "1"
+    context.shortcut_pane = TextFromCString(argv[5]) == "1"
+    context.current = TextFromCString(argv[6])
+    context.window_folder = context.current
+    trash: Text = Model.TrashDirectory(false)
+    context.trash_folder = TextView(trash)
+    // Default zoom: compact views start at Thunar's smallest level.
+    context.zoom = ifx context.view_mode == .ViewCompact then 0 else 3
+    context.zoom_levels = 12
+    selection: Vec(string)
+    for index: cast(s32)7..argc - 1 { unused VecPush(selection, TextFromCString(argv[index])) }
+    context.selection = selection[:]
+    menu: Menus.FileMenu
+    if !Menus.FileMenuBuild(*menu, *context) { return 3 }
+    output: Vec(u8)
+    Panel(*menu, 0, *output)
+    unused VecPush(output, 10)
+    print("%", TextView(output[:output.count]))
+    Menus.FileMenuRelease(*menu)
+    return 0
+}

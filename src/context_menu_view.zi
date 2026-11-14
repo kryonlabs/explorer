@@ -1,0 +1,318 @@
+// A GTK-themed popup for a context_menu FileMenu: cascading panels, theme
+// separators, check/radio indicators and submenu arrows, hover and keyboard
+// navigation as in GtkMenu, and dismissal by a press outside every panel.
+#scope_module
+#import "kryon/session"
+#import "kryon/geometry"
+#import "kryon/tree"
+#import "kryon/drawing_props"
+#import "kryon/control_props"
+#import "kryon/style"
+#import "kryon/style_sheet"
+#import "kryon/system_clipboard"
+#import "kryon/input_protocol"
+BoxWidget :: #import "kryon/box";
+TextWidget :: #import "kryon/text";
+ButtonWidget :: #import "kryon/button";
+ScrollWidget :: #import "kryon/scroll";
+Overlay :: #import "kryon/overlay";
+BreadcrumbWidget :: #import "kryon/breadcrumb";
+DropdownWidget :: #import "kryon/dropdown";
+TextFieldWidget :: #import "kryon/text_field";
+ListBox :: #import "kryon/list_box";
+PanedViewWidget :: #import "kryon/paned_view";
+TabBar :: #import "kryon/tab_bar";
+GridMultiWidget :: #import "kryon/grid_multi";
+ImageWidget :: #import "kryon/image";
+using Gtk :: #import "kryon/GtkStyleLinux";
+using Paint :: #import "kryon/GtkPainterLinux";
+Input :: #import "kryon/tree_input";
+Kinds :: #import "kryon/widget_kind";
+Native :: #import "native_ui";
+using Menus :: #import "context_menu";
+
+#scope_export
+MenuViewState :: struct {
+    open: bool
+    x: float32
+    y: float32
+    // levels[i] is the item id whose submenu is panel i; levels[0] is 0.
+    levels: [8]s32
+    depth: s32
+    // The highlighted item index in each panel, or -1.
+    cursor: [8]s32
+    pointer: Vector2
+    armed: bool
+    panels: [8]Rectangle
+}
+
+MenuViewResult :: struct {
+    activated: s32
+    closed: bool
+}
+
+MenuViewOpen :: (state: *MenuViewState, x: float32, y: float32, pointer: Vector2) {
+    state.open = true; state.x = x; state.y = y
+    state.depth = 1; state.levels[0] = 0
+    for i: 0..7 { state.cursor[i] = -1 }
+    state.pointer = pointer
+    state.armed = false
+}
+
+MenuViewClose :: (state: *MenuViewState) { state.open = false; state.depth = 0 }
+
+#scope_module
+MenuNodes :: (element: string, state: u32 = 0) -> [4]GtkStyleNode {
+    base := Native.Nodes("menu")
+    nodes: [4]GtkStyleNode
+    nodes[0] = base[0]
+    nodes[1] = base[2]
+    nodes[2] = .{.widget_type = "GtkMenuItem", .element = "menuitem", .state = state}
+    nodes[3] = .{.widget_type = "GtkWidget", .element = element, .state = state}
+    return nodes
+}
+SeparatorHeight :: () -> float32 {
+    base := Native.Nodes("menu")
+    nodes: [3]GtkStyleNode
+    nodes[0] = base[0]; nodes[1] = base[2]
+    nodes[2] = .{.widget_type = "GtkSeparatorMenuItem", .element = "separator", .classes = horizontal[:]}
+    style := GtkStyleQuery(nodes[:], 1)
+    height := style.margin.top + style.margin.bottom + style.border.top + style.border.bottom +
+        style.padding.top + style.padding.bottom
+    if style.border.top + style.border.bottom == 0 { height += 1 }
+    if height < 3 { height = 3 }
+    return cast(float32)height
+}
+horizontal: [1]string = .["horizontal"];
+// GTK_STATE_FLAG_DIR_LTR.
+DIR_LTR :: 128;
+Selectable :: (menu: *FileMenu, index: s32) -> bool {
+    return !menu.items[index].separator && menu.items[index].enabled
+}
+RowHeight :: (menu: *FileMenu, index: s32, separator: float32) -> float32 {
+    if menu.items[index].separator { return separator }
+    nodes := MenuNodes("label")
+    item: [3]GtkStyleNode
+    item[0] = nodes[0]; item[1] = nodes[1]; item[2] = nodes[2]
+    style := GtkStyleQuery(item[:], 1)
+    text := GtkTextMeasure(item[:], FileMenuLabel(menu, index), 0, 1)
+    height := text.height
+    if height < 16 { height = 16 }
+    return cast(float32)(height + style.padding.top + style.padding.bottom + style.border.top + style.border.bottom)
+}
+PanelInsets :: () -> GtkStyleInsets {
+    base := Native.Nodes("menu")
+    nodes: [2]GtkStyleNode
+    nodes[0] = base[0]; nodes[1] = base[2]
+    style := GtkStyleQuery(nodes[:], 1)
+    return .{style.padding.left + style.border.left, style.padding.right + style.border.right,
+        style.padding.top + style.border.top, style.padding.bottom + style.border.bottom}
+}
+Layout :: struct {
+    rows: Vec(s32)
+    toggles: bool
+    arrows: bool
+    width: float32
+    height: float32
+}
+Measure :: (menu: *FileMenu, parent: s32, layout: *Layout, separator: float32) {
+    FileMenuChildren(menu, parent, *layout.rows)
+    nodes := MenuNodes("label")
+    item: [3]GtkStyleNode
+    item[0] = nodes[0]; item[1] = nodes[1]; item[2] = nodes[2]
+    style := GtkStyleQuery(item[:], 1)
+    insets := PanelInsets()
+    widest: s32 = 0
+    layout.height = cast(float32)(insets.top + insets.bottom)
+    layout.toggles = false; layout.arrows = false
+    for index: layout.rows {
+        layout.height += RowHeight(menu, index, separator)
+        if menu.items[index].separator { continue }
+        if menu.items[index].check != 0 { layout.toggles = true }
+        if menu.items[index].submenu { layout.arrows = true }
+        text := GtkTextMeasure(item[:], FileMenuLabel(menu, index), 0, 1)
+        if text.width > widest { widest = text.width }
+    }
+    width := widest + style.padding.left + style.padding.right + style.border.left + style.border.right +
+        insets.left + insets.right + 40
+    if layout.toggles { width += 22 }
+    if layout.arrows { width += 22 }
+    layout.width = cast(float32)width
+}
+FreeLayouts :: (first: *Layout) {
+    index: s32 = 0
+    while index < 8 { VecFree(first[index].rows); index += 1 }
+}
+// The first or last selectable row of a panel, stepping from a row.
+Step :: (menu: *FileMenu, rows: *Vec(s32), from: s32, direction: s32) -> s32 {
+    count := cast(s32)rows.count
+    if count == 0 { return -1 }
+    position: s32 = -1
+    index: s32 = 0
+    while index < count { if rows.*[index] == from { position = index }; index += 1 }
+    n: s32 = 1
+    while n <= count {
+        next := ifx position < 0 then (ifx direction > 0 then n - 1 else count - n) else (position + direction * n + count * 4) % count
+        if Selectable(menu, rows.*[next]) { return rows.*[next] }
+        n += 1
+    }
+    return -1
+}
+
+#scope_export
+// Draws the open menu over everything else and reports an activated item.
+// Call after the window's other controls in the same retained scope.
+DrawMenuView :: (state: *MenuViewState, menu: *FileMenu, session: Session, p: *GtkPainter,
+    viewport: Rectangle, key: s32, focused: bool) -> MenuViewResult {
+    result := MenuViewResult.{.activated = -1}
+    if !state.open { return result }
+    separator := SeparatorHeight()
+    layouts: [8]Layout
+    defer { FreeLayouts(*layouts[0]) }
+    pointer := Input.PointerSample(session)
+    secondary := Input.SecondaryPointerSample(session)
+    if pointer.x != state.pointer.x || pointer.y != state.pointer.y { state.armed = true }
+    if pointer.pressed || secondary.pressed { state.armed = true }
+    // Lay out every open panel, cascading right (or left when it would overflow).
+    for level: cast(s32)0..state.depth - 1 {
+        Measure(menu, state.levels[level], *layouts[level], separator)
+        width := layouts[level].width; height := layouts[level].height
+        x := state.x; y := state.y
+        if level > 0 {
+            parent := state.panels[level - 1]
+            x = parent.x + parent.width - 4.0
+            y = parent.y
+            insets := PanelInsets()
+            yy := parent.y + cast(float32)insets.top
+            for at: cast(s64)0..layouts[level - 1].rows.count - 1 {
+                index := layouts[level - 1].rows[at]
+                if index == state.levels[level] - 1 { y = yy - cast(float32)insets.top; break }
+                yy += RowHeight(menu, index, separator)
+            }
+            if x + width > viewport.x + viewport.width { x = parent.x - width + 4.0 }
+        } else if x + width > viewport.x + viewport.width { x = x - width }
+        if x < viewport.x { x = viewport.x }
+        if y + height > viewport.y + viewport.height { y = viewport.y + viewport.height - height }
+        if y < viewport.y { y = viewport.y }
+        state.panels[level] = .{x, y, width, height}
+    }
+    deepest := state.depth - 1
+    // Pointer: the row under it is highlighted, and resting on a submenu row
+    // opens that submenu; moving back to a parent panel closes deeper ones.
+    inside: s32 = -1
+    for level: cast(s32)0..state.depth - 1 {
+        panel := state.panels[level]
+        if pointer.x >= panel.x && pointer.x < panel.x + panel.width && pointer.y >= panel.y && pointer.y < panel.y + panel.height { inside = level }
+    }
+    if focused && inside >= 0 && (pointer.x != state.pointer.x || pointer.y != state.pointer.y) {
+        insets := PanelInsets()
+        yy := state.panels[inside].y + cast(float32)insets.top
+        for at: cast(s64)0..layouts[inside].rows.count - 1 {
+            index := layouts[inside].rows[at]
+            h := RowHeight(menu, index, separator)
+            if pointer.y >= yy && pointer.y < yy + h {
+                state.cursor[inside] = ifx Selectable(menu, index) then index else -1
+                if menu.items[index].submenu && menu.items[index].enabled && inside < 7 {
+                    if state.depth != inside + 2 || state.levels[inside + 1] != index + 1 {
+                        state.depth = inside + 2
+                        state.levels[inside + 1] = index + 1
+                        state.cursor[inside + 1] = -1
+                    }
+                } else if state.depth > inside + 1 { state.depth = inside + 1 }
+                break
+            }
+            yy += h
+        }
+        deepest = state.depth - 1
+    }
+    state.pointer = .{pointer.x, pointer.y}
+    // Keyboard, in the deepest open panel.
+    if focused && key != 0 {
+        panel_rows := *layouts[deepest].rows
+        current := state.cursor[deepest]
+        if key == KeyEscape || (key == KeyLeft && deepest > 0) {
+            if deepest > 0 { state.depth -= 1 } else { result.closed = true }
+        } else if key == KeyDown { state.cursor[deepest] = Step(menu, panel_rows, current, 1) }
+        else if key == KeyUp { state.cursor[deepest] = Step(menu, panel_rows, current, -1) }
+        else if key == KeyHome { state.cursor[deepest] = Step(menu, panel_rows, -1, 1) }
+        else if key == KeyEnd { state.cursor[deepest] = Step(menu, panel_rows, -1, -1) }
+        else if (key == KeyRight || key == KeyEnter || key == 32) && current >= 0 {
+            if menu.items[current].submenu {
+                if deepest < 7 {
+                    state.levels[deepest + 1] = current + 1
+                    state.depth = deepest + 2
+                    child: Vec(s32)
+                    FileMenuChildren(menu, current + 1, *child)
+                    state.cursor[deepest + 1] = Step(menu, *child, -1, 1)
+                    VecFree(child)
+                }
+            } else if key != KeyRight && Selectable(menu, current) { result.activated = current }
+        }
+    }
+    if result.closed || result.activated >= 0 { MenuViewClose(state); return result }
+    // A full-window catcher keeps clicks off the window below; a press
+    // outside every panel dismisses the menu as a GtkMenu grab does.
+    catcher := TreeSubmitCurrent(session, cast(u64)0xfee1000000000000, cast(s32)Kinds.WidgetKind.WidgetKindButton, viewport)
+    TreeSetInteractive(session, catcher, false, false, 0)
+    if (pointer.pressed || secondary.pressed) && inside < 0 { MenuViewClose(state); result.closed = true; return result }
+    insets := PanelInsets()
+    for level: cast(s32)0..state.depth - 1 {
+        panel := state.panels[level]
+        node := TreeSubmitCurrent(session, cast(u64)0xfee1000000000001 + cast(u64)level, cast(s32)Kinds.WidgetKind.WidgetKindCustom, panel)
+        TreeSetInteractive(session, node, false, false, 0)
+        Native.Surface(p, panel, "menu")
+        yy := panel.y + cast(float32)insets.top
+        for at: cast(s64)0..layouts[level].rows.count - 1 {
+            index := layouts[level].rows[at]
+            h := RowHeight(menu, index, separator)
+            row := Rectangle.{panel.x + cast(float32)insets.left, yy, panel.width - cast(float32)(insets.left + insets.right), h}
+            yy += h
+            item := menu.items[index]
+            if item.separator {
+                base := Native.Nodes("menu")
+                nodes: [3]GtkStyleNode
+                nodes[0] = base[0]; nodes[1] = base[2]
+                nodes[2] = .{.widget_type = "GtkSeparatorMenuItem", .element = "separator", .classes = horizontal[:]}
+                style := GtkStyleQuery(nodes[:], 1)
+                line := Rectangle.{row.x + cast(float32)style.margin.left, row.y + cast(float32)style.margin.top,
+                    row.width - cast(float32)(style.margin.left + style.margin.right), row.height - cast(float32)(style.margin.top + style.margin.bottom)}
+                GtkPainterPaint(p, nodes[:], line)
+                continue
+            }
+            open_here := level + 1 < state.depth && state.levels[level + 1] == index + 1
+            hovered := state.cursor[level] == index || open_here
+            gtk_state: u32 = 0
+            if !item.enabled { gtk_state = cast(u32)GtkStyleDisabled }
+            else if hovered { gtk_state = cast(u32)GtkStylePrelight }
+            nodes := MenuNodes("label", gtk_state)
+            item_nodes: [3]GtkStyleNode
+            item_nodes[0] = nodes[0]; item_nodes[1] = nodes[1]; item_nodes[2] = nodes[2]
+            GtkPainterPaint(p, item_nodes[:], row)
+            style := GtkStyleQuery(item_nodes[:], 1)
+            left := row.x + cast(float32)(style.padding.left + style.border.left)
+            if layouts[level].toggles {
+                if item.check != 0 {
+                    indicator := MenuNodes(ifx item.check == 2 then "radio" else "check",
+                        gtk_state | (ifx item.checked then cast(u32)GtkStyleChecked else cast(u32)0))
+                    GtkPainterPaint(p, indicator[:], .{left, row.y + (row.height - 16.0) * 0.5, 16.0, 16.0}, "", ifx item.check == 2 then 10 else 9)
+                }
+                left += 22.0
+            }
+            label_width := row.x + row.width - left - cast(float32)(style.padding.right + style.border.right)
+            if layouts[level].arrows { label_width -= 22.0 }
+            GtkPainterPaint(p, item_nodes[:], .{left, row.y, label_width, row.height}, FileMenuLabel(menu, index), 1)
+            if item.submenu {
+                // Themes give the arrow its icon through arrow:dir(ltr).
+                arrow := MenuNodes("arrow", gtk_state | cast(u32)DIR_LTR)
+                GtkPainterPaint(p, arrow[:], .{row.x + row.width - cast(float32)style.padding.right - 16.0, row.y + (row.height - 16.0) * 0.5, 16.0, 16.0}, "", 11)
+            }
+            // GtkMenuItem activates on release over an enabled command row.
+            if focused && state.armed && pointer.released && Selectable(menu, index) && !item.submenu &&
+                pointer.x >= row.x && pointer.x < row.x + row.width && pointer.y >= row.y && pointer.y < row.y + row.height {
+                result.activated = index
+            }
+        }
+    }
+    if result.activated >= 0 { MenuViewClose(state) }
+    return result
+}

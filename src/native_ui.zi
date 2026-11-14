@@ -1,7 +1,28 @@
 #scope_module
 using Gtk :: #import "kryon/GtkStyleLinux";
 using Paint :: #import "kryon/GtkPainterLinux";
-using UI :: #import "kryon/Widgets";
+#import "kryon/session"
+#import "kryon/geometry"
+#import "kryon/tree"
+#import "kryon/drawing_props"
+#import "kryon/control_props"
+#import "kryon/style"
+#import "kryon/style_sheet"
+#import "kryon/system_clipboard"
+#import "kryon/input_protocol"
+BoxWidget :: #import "kryon/box";
+TextWidget :: #import "kryon/text";
+ButtonWidget :: #import "kryon/button";
+ScrollWidget :: #import "kryon/scroll";
+Overlay :: #import "kryon/overlay";
+BreadcrumbWidget :: #import "kryon/breadcrumb";
+DropdownWidget :: #import "kryon/dropdown";
+TextFieldWidget :: #import "kryon/text_field";
+ListBox :: #import "kryon/list_box";
+PanedViewWidget :: #import "kryon/paned_view";
+TabBar :: #import "kryon/tab_bar";
+GridMultiWidget :: #import "kryon/grid_multi";
+ImageWidget :: #import "kryon/image";
 Input :: #import "kryon/tree_input";
 Kinds :: #import "kryon/widget_kind";
 Cursors :: #import "kryon/cursor";
@@ -363,7 +384,7 @@ StatusLabel :: (p: *GtkPainter, bounds: Rectangle, text: string, wrap: bool) {
 PlacesHeadingHeight :: () -> float32 { RefreshMetrics(); return places_heading_height }
 PlacesRowHeight :: () -> float32 { RefreshMetrics(); return places_row_height }
 Header :: (p: *GtkPainter, key: u64, bounds: Rectangle, label: string, sorted: bool, reverse: bool, enabled: bool) -> bool {
-    clicked := UI.Button(p.session,ButtonProps.{.key=key,.bounds=bounds,.label=label,.invisible=true,.disabled= !enabled})==1
+    clicked := ButtonWidget.Draw(p.session,ButtonWidget.Props.{.key=key,.bounds=bounds,.label=label,.invisible=true,.disabled= !enabled})==1
     nodes:=HeaderNodes()
     slot:=cast(s32)(key % 4)
     nodes[4].sibling_count=4; nodes[4].sibling_index=slot
@@ -419,7 +440,7 @@ Control :: (p: *GtkPainter, key: u64, bounds: Rectangle, label: string, icon: st
         TreeSetSelected(p.session,node,selected)
         TreeSetLabel(p.session,node,label)
     } else {
-        clicked=UI.Button(p.session,ButtonProps.{.key=key,.id=cast(s32)key,.bounds=bounds,.label=label,
+        clicked=ButtonWidget.Draw(p.session,ButtonWidget.Props.{.key=key,.id=cast(s32)key,.bounds=bounds,.label=label,
             .invisible=true,.disabled= !enabled,.selected=selected})==1
     }
     element := ifx row then "treeview" else "button"
@@ -481,7 +502,7 @@ MenuItem :: (p: *GtkPainter, key: u64, bounds: Rectangle, label: string, enabled
     state: u32
     if !enabled { state=cast(u32)GtkStyleDisabled }
     else if selected || Input.TreeHoveredAt(p.session,previous) { state=cast(u32)GtkStylePrelight }
-    clicked:=UI.Button(p.session,ButtonProps.{.key=key,.bounds=bounds,.label=label,.invisible=true,.disabled= !enabled})==1
+    clicked:=ButtonWidget.Draw(p.session,ButtonWidget.Props.{.key=key,.bounds=bounds,.label=label,.invisible=true,.disabled= !enabled})==1
     nodes:=Nodes("menu")
     nodes[1]=nodes[2]
     nodes[2]=.{.widget_type="GtkMenuItem",.element="menuitem",.state=state}

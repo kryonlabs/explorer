@@ -14,11 +14,11 @@ specific so each missing row can become an independent implementation task.
 | Location bar and path bar | Partial | Native location entry, local breadcrumbs, bounded raw-name completion and checked folder/file selection exist. GIO URI navigation retains native errors; add URI completion, authentication and broader path-bar preferences. |
 | Tabs | Partial | Native stable-key labels, active state, close controls, scrolling overflow and pointer/keyboard reorder exist; dynamic tabs retain independent raw routes/history/selection/focus/scroll. Add detached windows and persistent sessions. |
 | Split view | Partial | Local dual panes use a native draggable divider with independent tabs, navigation, selection, scrolling and settings, shared clipboard and explicit active-pane actions. Collapse retains the other pane in memory; add persistent layout and remote providers. |
-| Open With and default apps | Partial | Files delegate to `kryon/open_uri`; add application chooser, MIME database and defaults. |
+| Open With and default apps | Partial | Context menus list GIO's applications as Thunar does; Open With Other Application and Set Default Application use a list chooser with "Use as default". Add the chooser's custom command entry and grouped recommended/other headings. |
 | MIME handling | Partial | GIO supplies localized MIME descriptions and theme-resolved file icons with inheritance; add MIME application/default editing. |
 | Copy, move and links | Partial | Recursive copy/cut/paste, duplicate and symbolic links work; add progress, pause/cancel and conflict resolution. |
 | Trash | Partial | XDG Trash/files plus `.trashinfo`, deletion timestamps, restore, Delete and confirmed Shift+Delete work; add empty trash, size and age columns. |
-| Drag and drop | Missing | Add internal/file-list drag payloads, drop targets and drop-menu semantics. |
+| Drag and drop | Partial | XDND drag source (Kryon `DragSourceLinux`): `text/uri-list` plus text fallbacks, copy/move/link, file icon, 8-pixel threshold. Drops on own folders, Places, Tree and pane backgrounds follow Thunar's move/copy rule; foreign drops land in the active folder. Add drop positions for foreign drops, the Alt/middle-button ask menu, tab drop targets and spring-loaded folders. |
 | Clipboard | Partial | Desktop X11/XWayland copy/cut/paste uses text/uri-list and x-special/gnome-copied-files, with local URI validation and internal fallback when transport is unavailable. Native Wayland and clipboard-manager persistence remain; foreign identical same-window cut generations cannot be distinguished. |
 | Properties and permissions | Partial | Alt+Enter displays read-only path/name/type/size/date/owner metadata; add aggregate usage and permission/ownership editing. |
 | File search | Partial | Case-insensitive recursive filename search; add filtering, content search, cancellation and result navigation. |
@@ -30,10 +30,10 @@ specific so each missing row can become an independent implementation task.
 | Remote locations | Partial | GIO-backed URI enumeration and checked navigation participate in history, tabs and panes. Add authentication, mounting, URI completion and remote writes. |
 | Thumbnails and preview | Partial | Common-image grid thumbnails, large image preview with fit/zoom/pan/browse, bounded UTF-8 text preview and file metadata exist; add persistent Tumbler-equivalent cache, document/media providers and animated playback. |
 | System theme | Partial | GTK CSS, Pango fonts, native measurements, themed icons and overlay scrollbars follow the active desktop settings. Private tests compare the complete default details window with installed Thunar; broader preferences and feature parity remain. |
-| Bulk rename | Missing | Add pattern/number renaming, preview, undoable batches and conflict handling. |
-| Custom actions | Missing | Add UCA discovery, command templates, execution contexts and output handling. |
-| Send To | Missing | Add destination providers, file contracts and extensible menu. |
-| Archive integration | Missing | Add create/extract/inspect flows through an explicit archive service. |
+| Bulk rename | Missing | The multi-file Bulk Rename... entry starts Thunar's own renamer (`thunar --bulk-rename`). Add a native renamer with patterns, numbering, preview and undoable batches. |
+| Custom actions | Partial | `uca.xml` actions appear with Thunar's matching (patterns, types, ranges, submenus) and run through `sh -c` with Thunar's `%f %F %u %U %d %D %n %N` expansion and working folder. Add the action editor and keyboard shortcuts for actions. |
+| Send To | Partial | Side Pane bookmark, Desktop links, mounted devices and Thunar's `Thunar/sendto` handlers work as in Thunar. |
+| Archive integration | Partial | With thunar-archive-plugin installed, Extract Here, Extract To and Create Archive run its tap wrapper for the default archive manager. Add the archive manager choice dialog. |
 | FileManager1 D-Bus interfaces | Missing | Implement `org.freedesktop.FileManager1` and `org.xfce.FileManager`. |
 | Keyboard shortcuts | Partial | Standard navigation, selection, file operations, Undo/Redo, tab/window, zoom, sidebar/menubar, Help/Properties and keypad aliases work. Menus switch on hover and keyboard navigation; add shortcut remapping and bindings for future features. |
 | Preferences | Missing | Add persistent view, behavior, shortcuts, privacy and service preferences. |

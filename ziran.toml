@@ -8,11 +8,11 @@ links = ["xcb", "gtk-3", "gdk-3", "gio-2.0", "gobject-2.0", "glib-2.0", "pango-1
 
 [toolchain]
 git = "https://github.com/ziranlang/ziran.git"
-ref = "919bb6fe3c58cf703fb1179c2926b655e35ab97b"
+ref = "6582e55febc6c6f60d1e6570ae9b81b41444fe25"
 
 [dependencies.kryon]
 git = "https://github.com/kryonlabs/kryon.git"
-ref = "73ff84637aeeb57a1b5250ed122140b1056eb755"
+ref = "9e5c5c2d6e5980375dc73f7b6254002aa9a72769"
 
 [exports]
 model = "src/model.zi"

@@ -113,7 +113,10 @@ def main():
                 owned.append(extra)
                 xdo('windowfocus','--sync',extra);xdo('key','--window',extra,'ctrl+q')
             xdo('windowfocus','--sync',window)
-            key('ctrl+q');assert process.wait(timeout=10)==0
+            # Real (XTEST) input to the focused window: Kryon's key delivery
+            # does not act on a synthetic --window event after the steps above.
+            subprocess.run(['xdotool','key','--clearmodifiers','ctrl+q'],capture_output=True,timeout=5)
+            assert process.wait(timeout=10)==0
             (OUTPUT/'report.json').write_text(json.dumps({'status':'passed','menu_hover':True,'keyboard_menus':True,'text_focus_delete':True,'trash_delete':True,'keypad_delete':True,'permanent_confirmation_cancel':True,'create_folder_shortcut':True,'new_window':True,'close_own_window':True},indent=2))
             print('Explorer private interaction local tests passed')
         finally:

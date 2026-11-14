@@ -2,6 +2,30 @@
 
 ## [Unreleased]
 
+- Drag files out like Thunar: a primary-button drag past GTK's 8-pixel
+  threshold offers the selection to other applications through XDND as
+  `text/uri-list` (with plain-path text fallbacks), copy, move or link, with
+  the file's icon under the pointer. Browsers' upload areas, Thunar and other
+  file managers, the desktop and editors receive the files. Drops on
+  Explorer's own folder rows, Places and Tree rows, or a pane's background
+  copy, move or link them with Thunar's rule (same filesystem moves; Control
+  copies, Shift moves, Control+Shift links). Files another application drops
+  on the window go to the active folder.
+- Right-click (or Shift+F10) opens Thunar 4.20's context menus, entry for entry
+  and in Thunar's order: files, several files, folders, a folder's background
+  in every view, Places rows and Tree rows. Open, Open With (the desktop's
+  applications, Open With Other Application and Set Default Application), Send
+  To (bookmarks, desktop links, mounted devices and Thunar's Send To
+  handlers), Cut, Copy, Paste, Paste Into Folder, Move to Trash, Delete, Empty
+  Trash, Rename, Restore, Remove from Recent, Create Folder, Create Document
+  with the Templates folder, the configured custom actions (`uca.xml`), the
+  archive and wallpaper plugins' entries, Arrange Items, Zoom and Properties
+  follow Thunar's visibility and enabled rules and perform the same actions.
+  The menus are drawn by GTK, including separators, radio and check rows and
+  submenu arrows.
+- Build against Kryon's per-widget packages (`kryon/box`, `kryon/text`, …)
+  now that the `kryon/Widgets` facade is gone, and import the desktop host as
+  `kryon/desktop_runtime`.
 - Sort directory entries in O(n log n), size visible details before offscreen
   rows, and allocate file descriptions according to their text length. Submit
   completed location edits before drawing the destination.

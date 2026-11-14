@@ -1,0 +1,117 @@
+// Dragging files out of Explorer, as Thunar's views do: primary-button
+// drags past GTK's threshold offer text/uri-list (copy, move or link) with the
+// first file's icon. Explorer's own windows handle the drop themselves.
+#scope_module
+Model :: #import "model";
+Files :: #import "file_clipboard";
+Gtk :: #import "kryon/GtkStyleLinux";
+Native :: #import "native_ui";
+using Drag :: #import "kryon/DragSourceLinux";
+using Bytes :: #import "std/byte_text_linux";
+
+#scope_export
+DragState :: struct {
+    // A press on an item that may become a drag.
+    candidate: bool
+    pane: s32
+    index: s32
+    key: u64
+    x: float32
+    y: float32
+    // A drag is in progress (or waiting for the target to finish).
+    active: bool
+    source_pane: s32
+    paths: Vec(Text)
+    // The pointer is over this window and the drop belongs to Explorer.
+    local: bool
+    action: u32
+    modifiers: s32
+}
+
+// GTK's default gtk-dnd-drag-threshold.
+THRESHOLD :: 8.0;
+
+Exceeded :: (state: *DragState, x: float32, y: float32) -> bool {
+    dx := x - state.x; dy := y - state.y
+    if dx < 0.0 { dx = -dx }
+    if dy < 0.0 { dy = -dy }
+    return dx > THRESHOLD || dy > THRESHOLD
+}
+
+Views :: (state: *DragState, output: *Vec(string)) {
+    VecClear(output.*)
+    for * path: state.paths { unused VecPush(output.*, TextView(path.*)) }
+}
+
+// Starts the drag of these local paths. False leaves nothing in progress.
+Begin :: (state: *DragState, paths: []string, icon_size: s32) -> bool {
+    VecFree(state.paths)
+    clipboard: Model.Clipboard
+    for path: paths {
+        if Model.IsUri(path) { continue }
+        owned: Text = TextCopy(path)
+        complete := owned.bytes.count == path.count
+        if !complete || !VecPush(clipboard.text, owned) { Files.Release(*clipboard); return false }
+        if !VecPush(clipboard.paths, TextView(clipboard.text[clipboard.text.count - 1])) { Files.Release(*clipboard); return false }
+    }
+    if clipboard.paths.count == 0 { Files.Release(*clipboard); return false }
+    clipboard.mode = .ClipboardCopy
+    uris: Text = Files.Encode(*clipboard, Files.URI_LIST)
+    if uris.bytes.count == 0 { Files.Release(*clipboard); return false }
+    // Text fallbacks carry the plain paths, one per line, for editors and terminals.
+    text: Vec(u8)
+    for path, n: clipboard.paths {
+        if n > 0 { unused VecPush(text, 10) }
+        unused BuilderAppend(text, path)
+    }
+    payloads := DragSourcePayload.[
+        .{.mime = Files.URI_LIST, .bytes = uris.bytes[:uris.bytes.count]},
+        .{.mime = "text/plain;charset=utf-8", .bytes = text[:text.count]},
+        .{.mime = "UTF8_STRING", .bytes = text[:text.count]},
+        .{.mime = "text/plain", .bytes = text[:text.count]}]
+    size := icon_size
+    if size < 16 { size = 16 }
+    if size > 256 { size = 256 }
+    nodes := Native.Nodes("image")
+    bitmap := Gtk.GtkFileIconRaster(clipboard.paths[0], size, 1, nodes[:])
+    icon := DragSourceIcon.{bitmap.width, bitmap.height, bitmap.rgba, 0, 0}
+    started := DragSourceBegin(payloads[:], DRAG_ACTION_COPY | DRAG_ACTION_MOVE | DRAG_ACTION_LINK, icon)
+    Gtk.GtkStyleBitmapRelease(*bitmap)
+    VecFree(text)
+    if started {
+        for path: clipboard.paths { unused VecPush(state.paths, TextCopy(path)) }
+        state.active = true
+        state.local = false
+    }
+    Files.Release(*clipboard)
+    state.candidate = false
+    return started
+}
+
+// Follows the drag. Returns its state; Local means Explorer must drop.
+Update :: (state: *DragState) -> DragSourceState {
+    result := DragSourceUpdate()
+    state.local = result.local
+    state.action = result.action
+    state.modifiers = result.modifiers
+    return result
+}
+
+Cancel :: (state: *DragState) { DragSourceCancel() }
+
+Finish :: (state: *DragState) {
+    DragSourceEnd()
+    state.active = false
+    state.candidate = false
+    state.local = false
+    VecFree(state.paths)
+}
+
+// The model action (0 move, 1 copy, 2 link) for a drop on a local folder:
+// modifiers pick copy, move or link; otherwise Thunar's same-filesystem move.
+DropAction :: (state: *DragState, paths: []string, directory: string) -> s32 {
+    if state.action == DRAG_ACTION_LINK { return 2 }
+    if state.action == DRAG_ACTION_MOVE { return 0 }
+    if (state.modifiers & 2) != 0 { return 1 }
+    return Model.DropAction(paths, directory, 1)
+}

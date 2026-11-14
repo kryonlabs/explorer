@@ -1,0 +1,1447 @@
+// Thunar 4.20 context menus. Which entries appear, their order, labels and
+// enabled state follow thunar-menu.c, thunar-action-manager.c,
+// thunar-standard-view.c, thunar-shortcuts-view.c, thunar-tree-view.c, the
+// UCA, wallpaper and archive plugins. GIO supplies content types, writability,
+// applications and handlers, so the entries match the same desktop setup.
+#scope_module
+using Bytes :: #import "std/byte_text_linux";
+using CString :: #import "std/c_string";
+Files :: #import "std/file_tree_linux";
+WholeFiles :: #import "std/file";
+Model :: #import "model";
+gio :: #system_library "gio-2.0";
+glib :: #system_library "glib-2.0";
+gobject :: #system_library "gobject-2.0";
+gtk :: #system_library "gtk-3";
+libc :: #system_library "c";
+GError :: struct { domain: u32; code: s32; message: *u8; }
+List :: struct { data: *void; next: *List; previous: *List; }
+FilePath :: (path: *u8) -> *void #foreign gio "g_file_new_for_path";
+FileUri :: (uri: *u8) -> *void #foreign gio "g_file_new_for_uri";
+FileGetUri :: (file: *void) -> *u8 #foreign gio "g_file_get_uri";
+FileGetPath :: (file: *void) -> *u8 #foreign gio "g_file_get_path";
+FileParent :: (file: *void) -> *void #foreign gio "g_file_get_parent";
+QueryInfo :: (file: *void, attributes: *u8, flags: s32, cancel: *void, error: **GError) -> *void #foreign gio "g_file_query_info";
+InfoType :: (info: *void) -> s32 #foreign gio "g_file_info_get_file_type";
+InfoContent :: (info: *void) -> *u8 #foreign gio "g_file_info_get_content_type";
+InfoName :: (info: *void) -> *u8 #foreign gio "g_file_info_get_name";
+InfoDisplay :: (info: *void) -> *u8 #foreign gio "g_file_info_get_display_name";
+InfoBool :: (info: *void, attribute: *u8) -> s32 #foreign gio "g_file_info_get_attribute_boolean";
+InfoHas :: (info: *void, attribute: *u8) -> s32 #foreign gio "g_file_info_has_attribute";
+InfoU32 :: (info: *void, attribute: *u8) -> u32 #foreign gio "g_file_info_get_attribute_uint32";
+CanExecuteType :: (content: *u8) -> s32 #foreign gio "g_content_type_can_be_executable";
+ContentEquals :: (left: *u8, right: *u8) -> s32 #foreign gio "g_content_type_equals";
+ContentIsA :: (content: *u8, kind: *u8) -> s32 #foreign gio "g_content_type_is_a";
+AppsForType :: (content: *u8) -> *List #foreign gio "g_app_info_get_all_for_type";
+AllApps :: () -> *List #foreign gio "g_app_info_get_all";
+DefaultForType :: (content: *u8, uris: s32) -> *void #foreign gio "g_app_info_get_default_for_type";
+DefaultHandler :: (file: *void, cancel: *void, error: **GError) -> *void #foreign gio "g_file_query_default_handler";
+AppEqual :: (left: *void, right: *void) -> s32 #foreign gio "g_app_info_equal";
+AppName :: (app: *void) -> *u8 #foreign gio "g_app_info_get_name";
+AppSupportsUris :: (app: *void) -> s32 #foreign gio "g_app_info_supports_uris";
+AppLaunch :: (app: *void, files: *List, context: *void, error: **GError) -> s32 #foreign gio "g_app_info_launch";
+AppSetDefault :: (app: *void, content: *u8, error: **GError) -> s32 #foreign gio "g_app_info_set_as_default_for_type";
+AppShowIn :: (app: *void, desktop: *u8) -> s32 #foreign gio "g_desktop_app_info_get_show_in";
+AppFromKeyFile :: (file: *void) -> *void #foreign gio "g_desktop_app_info_new_from_keyfile";
+KeyFileNew :: () -> *void #foreign glib "g_key_file_new";
+KeyFileLoad :: (file: *void, path: *u8, flags: s32, error: **GError) -> s32 #foreign glib "g_key_file_load_from_file";
+KeyFileStrings :: (file: *void, group: *u8, key: *u8, length: *u64, error: **GError) -> **u8 #foreign glib "g_key_file_get_string_list";
+KeyFileFree :: (file: *void) #foreign glib "g_key_file_free";
+StringsFree :: (strings: **u8) #foreign glib "g_strfreev";
+SpecialDir :: (kind: s32) -> *u8 #foreign glib "g_get_user_special_dir";
+UserDataDir :: () -> *u8 #foreign glib "g_get_user_data_dir";
+SystemDataDirs :: () -> **u8 #foreign glib "g_get_system_data_dirs";
+UserConfigDir :: () -> *u8 #foreign glib "g_get_user_config_dir";
+SystemConfigDirs :: () -> **u8 #foreign glib "g_get_system_config_dirs";
+PatternMatch :: (pattern: *u8, value: *u8) -> s32 #foreign glib "g_pattern_match_simple";
+ShellQuote :: (value: *u8) -> *u8 #foreign glib "g_shell_quote";
+FilenameFromUri :: (uri: *u8, host: **u8, error: **GError) -> *u8 #foreign glib "g_filename_from_uri";
+SpawnAsync :: (directory: *u8, argv: **u8, environment: **u8, flags: s32, setup: *void, data: *void, child: *s32, error: **GError) -> s32 #foreign glib "g_spawn_async";
+ListAppend :: (list: *List, data: *void) -> *List #foreign glib "g_list_append";
+ListFree :: (list: *List) #foreign glib "g_list_free";
+Free :: (memory: *u8) #foreign glib "g_free";
+ErrorFree :: (error: *GError) #foreign glib "g_error_free";
+Unref :: (object: *void) #foreign gobject "g_object_unref";
+Ref :: (object: *void) -> *void #foreign gobject "g_object_ref";
+RecentDefault :: () -> *void #foreign gtk "gtk_recent_manager_get_default";
+RecentRemove :: (manager: *void, uri: *u8, error: **GError) -> s32 #foreign gtk "gtk_recent_manager_remove_item";
+Access :: (path: *u8, mode: s32) -> s32 #foreign libc "access";
+
+ATTRIBUTES :: "standard::type,standard::content-type,standard::name,standard::display-name,access::can-write,access::can-execute,access::can-trash,trash::item-count";
+
+#scope_export
+// Which widget opened the menu, as Thunar's ThunarMenuType.
+MenuKind :: enum { View; Shortcuts; Tree; }
+// What a side-pane row stands for.
+MenuSide :: enum { None; Folder; Bookmark; Special; Device; Header; }
+
+MenuAction :: enum {
+    None; Open; OpenWithApp; OpenWithDefaults; Execute; EditLauncher; OpenInTab; OpenInWindow
+    OpenLocation; OpenWithOther; SetDefaultApp; SendBookmark; SendDesktop; SendDevice; SendApp
+    Cut; Copy; PasteIntoFolder; Paste; Trash; Delete; EmptyTrash; Rename; BulkRename; Restore
+    RestoreShow; RemoveRecent; Custom; Wallpaper; ExtractHere; ExtractTo; CreateArchive; Mount
+    Unmount; Eject; Properties; CreateFolder; CreateDocument; CreateEmpty; SortName; SortSize
+    SortType; SortModified; SortDeleted; SortAscending; SortDescending; SortReverse
+    ConfigureColumns; ExpandableFolders; ZoomIn; ZoomOut; ZoomReset; RemoveShortcut
+    RenameShortcut; ToggleRow
+}
+
+FileMenuItem :: struct {
+    // Its id is its index plus one; submenu rows hold children naming them.
+    parent: s32
+    label: string
+    text: s32
+    separator: bool
+    submenu: bool
+    enabled: bool
+    // 0 none, 1 check box, 2 radio option.
+    check: s32
+    checked: bool
+    action: MenuAction
+    payload: s32
+}
+
+MenuTarget :: struct {
+    location: Text
+    path: Text
+    uri: Text
+    name: Text
+    content_type: Text
+    directory: bool
+    writable: bool
+    executable: bool
+    desktop_file: bool
+    trashable: bool
+    trashed: bool
+    local: bool
+    trash_root: bool
+    recent: bool
+    special: bool
+    item_count: u32
+    valid: bool
+}
+
+MenuDevice :: struct { name: string; root: string; }
+// One GAppInfo or GFile reference; Vec(*void) element casts do not build in C yet.
+AppRef :: struct { app: *void; }
+
+UcaAction :: struct {
+    name: Text
+    command: Text
+    submenu: Text
+    patterns: Text
+    range: Text
+    types: s32
+    multiple: bool
+}
+
+MenuContext :: struct {
+    kind: MenuKind
+    side: MenuSide
+    // Selected paths or URIs; empty for the folder's background.
+    selection: []string
+    // The folder this menu belongs to (for side panes, the row itself).
+    current: string
+    // The window's folder, which the tree pane keeps as its current folder.
+    window_folder: string
+    trash_folder: string
+    view_mode: Model.ViewMode
+    sort_mode: Model.SortMode
+    sort_reverse: bool
+    zoom: s32
+    zoom_levels: s32
+    can_paste: bool
+    searching: bool
+    shortcut_pane: bool
+    devices: []MenuDevice
+    device_mounted: bool
+    device_ejectable: bool
+    show_delete: bool
+}
+
+FileMenu :: struct {
+    items: Vec(FileMenuItem)
+    texts: Vec(Text)
+    // Selection (or the folder) first, then the current folder and its parent.
+    targets: Vec(MenuTarget)
+    count: s32
+    current: s32
+    parent: s32
+    has_parent: bool
+    apps: Vec(AppRef)
+    handlers: Vec(AppRef)
+    templates: Vec(Text)
+    custom: Vec(UcaAction)
+    devices: Vec(Text)
+    selected: bool
+    n_files: s32
+    n_directories: s32
+    all_executable: bool
+    trashable: bool
+    single_directory: bool
+    folder_target: bool
+}
+
+FileMenuLabel :: (menu: *FileMenu, index: s32) -> string {
+    if index < 0 || index >= menu.items.count { return "" }
+    return menu.items[index].label
+}
+
+FileMenuRelease :: (menu: *FileMenu) {
+    for ref: menu.apps { if ref.app != null { Unref(ref.app) } }
+    for ref: menu.handlers { if ref.app != null { Unref(ref.app) } }
+    VecFree(menu.items); VecFree(menu.texts); VecFree(menu.targets)
+    VecFree(menu.apps); VecFree(menu.handlers); VecFree(menu.templates)
+    VecFree(menu.custom); VecFree(menu.devices)
+    menu.count = 0; menu.current = 0; menu.parent = 0
+    menu.has_parent = false; menu.selected = false
+    menu.n_files = 0; menu.n_directories = 0
+}
+
+#scope_module
+Copied :: (value: *u8) -> Text {
+    if value == null { return .{} }
+    return TextCopy(TextFromCString(value))
+}
+Taken :: (value: *u8) -> Text {
+    if value == null { return .{} }
+    result: Text = TextCopy(TextFromCString(value))
+    Free(value)
+    return result
+}
+WithC :: (value: string, buffer: []u8) -> *u8 {
+    if !CopyCString(value, buffer) { buffer[0] = 0 }
+    return *buffer[0]
+}
+IsUri :: (value: string) -> bool { return Model.IsUri(value) }
+
+Probe :: (location: string, trash_folder: string) -> MenuTarget {
+    target: MenuTarget
+    target.location = TextCopy(location)
+    buffer: [8192]u8
+    file: *void = ifx IsUri(location) then FileUri(WithC(location, buffer[:])) else FilePath(WithC(location, buffer[:]))
+    info: *void
+    if file != null {
+        target.uri = Taken(FileGetUri(file))
+        target.path = Taken(FileGetPath(file))
+        attributes: [256]u8
+        error: *GError
+        info = QueryInfo(file, WithC(ATTRIBUTES, attributes[:]), 0, null, *error)
+        if error != null { ErrorFree(error) }
+        Unref(file)
+    }
+    target.local = target.path.bytes.count > 0
+    if true {
+        uri := TextView(target.uri)
+        target.trash_root = uri == "trash:///" || (trash_folder != "" && location == trash_folder)
+        target.trashed = (uri.count >= 6 && uri[0:6] == "trash:" && uri != "trash:///") ||
+            (trash_folder != "" && Files.PathParent(location) == trash_folder)
+        target.recent = uri.count >= 7 && uri[0:7] == "recent:"
+        target.special = uri == "computer:///" || uri == "network:///" || target.trash_root
+    }
+    // Thunar sees the Trash through trash:/// locations without local paths.
+    if target.trash_root || target.trashed { target.local = false }
+    if info == null { target.name = TextCopy(Files.PathName(location)) }
+    else {
+        target.valid = true
+        kind := InfoType(info)
+        target.directory = kind == 2 || kind == 6 || kind == 7
+        target.content_type = Copied(InfoContent(info))
+        target.name = Copied(InfoName(info))
+        name_buffer: [64]u8
+        if InfoHas(info, WithC("access::can-write", name_buffer[:])) == 0 { target.writable = true }
+        else { target.writable = InfoBool(info, WithC("access::can-write", name_buffer[:])) != 0 }
+        if InfoHas(info, WithC("access::can-trash", name_buffer[:])) != 0 {
+            target.trashable = InfoBool(info, WithC("access::can-trash", name_buffer[:])) != 0
+        }
+        target.item_count = InfoU32(info, WithC("trash::item-count", name_buffer[:]))
+        if target.trash_root && !IsUri(location) {
+            names: Vec(string)
+            if Files.ListDirectory(location, *names) { target.item_count = cast(u32)names.count }
+            Files.FreeDirectoryNames(*names)
+        }
+        content := TextView(target.content_type)
+        name := TextView(target.name)
+        content_buffer: [256]u8
+        other: [64]u8
+        c := WithC(content, content_buffer[:])
+        target.desktop_file = content != "" && ContentIsA(c, WithC("application/x-desktop", other[:])) != 0 &&
+            name.count > 8 && name[name.count - 8:] == ".desktop"
+        // thunar_file_can_execute: the execute bit, an executable content type,
+        // never plain text, JSON or XML, and scripts only by preference (never).
+        target.executable = !target.directory && InfoBool(info, WithC("access::can-execute", name_buffer[:])) != 0 &&
+            content != "" && CanExecuteType(c) != 0 &&
+            ContentEquals(c, WithC("text/plain", other[:])) == 0 &&
+            ContentEquals(c, WithC("application/json", other[:])) == 0 &&
+            ContentEquals(c, WithC("application/xml", other[:])) == 0 &&
+            ContentIsA(c, WithC("text/plain", other[:])) == 0
+        Unref(info)
+    }
+    if target.trash_root {
+        // Thunar reads the item count GIO's trash:/// reports for every
+        // filesystem's trash, and treats the Trash itself as writable.
+        trash: [16]u8
+        root := FileUri(WithC("trash:///", trash[:]))
+        if root != null {
+            count_attribute: [32]u8
+            error: *GError
+            details := QueryInfo(root, WithC("trash::item-count", count_attribute[:]), 0, null, *error)
+            if error != null { ErrorFree(error) }
+            if details != null { target.item_count = InfoU32(details, WithC("trash::item-count", count_attribute[:])); Unref(details) }
+            Unref(root)
+        }
+        target.valid = true
+        target.writable = true
+        target.directory = true
+    }
+    return target
+}
+
+Writable :: (target: *MenuTarget) -> bool { return target.valid && target.writable }
+Current :: (menu: *FileMenu) -> *MenuTarget { return *menu.targets[menu.current] }
+ParentTarget :: (menu: *FileMenu) -> *MenuTarget { return *menu.targets[menu.parent] }
+
+KeepText :: (menu: *FileMenu, value: string) -> s32 {
+    owned: Text = TextCopy(value)
+    if !VecPush(menu.texts, owned) { return -1 }
+    return cast(s32)menu.texts.count - 1
+}
+Add :: (menu: *FileMenu, parent: s32, label: string, action: MenuAction, enabled: bool = true, payload: s32 = -1) -> s32 {
+    item: FileMenuItem
+    item.parent = parent; item.label = label; item.text = -1; item.enabled = enabled
+    item.action = action; item.payload = payload
+    if !VecPush(menu.items, item) { return 0 }
+    return cast(s32)menu.items.count
+}
+AddOwned :: (menu: *FileMenu, parent: s32, label: string, action: MenuAction, enabled: bool = true, payload: s32 = -1) -> s32 {
+    id := Add(menu, parent, "", action, enabled, payload)
+    if id > 0 {
+        text := KeepText(menu, label)
+        menu.items[id - 1].text = text
+        if text >= 0 { menu.items[id - 1].label = TextView(menu.texts[text]) }
+    }
+    return id
+}
+Submenu :: (menu: *FileMenu, parent: s32, label: string, enabled: bool = true) -> s32 {
+    id := Add(menu, parent, label, .None, enabled)
+    if id > 0 { menu.items[id - 1].submenu = true }
+    return id
+}
+Toggle :: (menu: *FileMenu, parent: s32, label: string, action: MenuAction, checked: bool, radio: bool, enabled: bool = true) -> s32 {
+    id := Add(menu, parent, label, action, enabled)
+    if id > 0 { menu.items[id - 1].check = ifx radio then 2 else 1; menu.items[id - 1].checked = checked }
+    return id
+}
+Separator :: (menu: *FileMenu, parent: s32) {
+    item: FileMenuItem
+    item.parent = parent; item.text = -1; item.separator = true; item.enabled = true
+    unused VecPush(menu.items, item)
+}
+
+// The applications that open every target, the default first.
+Applications :: (menu: *FileMenu, targets: []MenuTarget) -> Vec(AppRef) {
+    result: Vec(AppRef)
+    previous: s64 = -1
+    first := true
+    for * target, position: targets {
+        current := TextView(target.content_type)
+        buffer: [256]u8
+        other: [256]u8
+        if previous >= 0 && current != "" && TextView(targets[previous].content_type) != "" &&
+            ContentEquals(WithC(TextView(targets[previous].content_type), buffer[:]), WithC(current, other[:])) != 0 { continue }
+        previous = position
+        list: Vec(AppRef)
+        if current != "" {
+            c := WithC(current, buffer[:])
+            all: *List = AppsForType(c)
+            preferred: *void = DefaultForType(c, 0)
+            if preferred != null { unused VecPush(list, AppRef.{preferred}) }
+            node := all
+            while node != null {
+                if preferred != null && AppEqual(node.data, preferred) != 0 { Unref(node.data) }
+                else { unused VecPush(list, AppRef.{node.data}) }
+                node = node.next
+            }
+            ListFree(all)
+        }
+        if first {
+            for ref: list { unused VecPush(result, ref) }
+            first = false
+        } else {
+            kept: Vec(AppRef)
+            for ref: result {
+                found := false
+                for candidate: list { if AppEqual(ref.app, candidate.app) != 0 { found = true; break } }
+                if found { unused VecPush(kept, ref) } else { Unref(ref.app) }
+            }
+            for candidate: list { Unref(candidate.app) }
+            VecClear(result)
+            for ref: kept { unused VecPush(result, ref) }
+            VecFree(kept)
+        }
+        VecFree(list)
+        if result.count == 0 { break }
+    }
+    shown: Vec(AppRef)
+    for ref: result {
+        if AppShowIn(ref.app, null) != 0 { unused VecPush(shown, ref) } else { Unref(ref.app) }
+    }
+    VecFree(result)
+    return shown
+}
+
+KeepApp :: (menu: *FileMenu, app: *void) -> s32 {
+    if !VecPush(menu.apps, AppRef.{app}) { Unref(app); return -1 }
+    return cast(s32)menu.apps.count - 1
+}
+
+OpenSection :: (menu: *FileMenu, context: *MenuContext, tabs: bool, change_directory: bool, force: bool) -> bool {
+    if !menu.selected && !force { return false }
+    apps := Applications(menu, menu.targets[0:menu.count])
+    defer VecFree(apps)
+    at: s64 = 0
+    if menu.all_executable {
+        unused Add(menu, 0, "Execute", .Execute)
+        if menu.n_files == 1 && menu.targets[0].desktop_file {
+            Separator(menu, 0)
+            unused Add(menu, 0, "Edit Launcher", .EditLauncher)
+        }
+    } else if menu.n_directories >= 1 {
+        if change_directory { unused Add(menu, 0, "Open", .Open) }
+    } else if apps.count > 0 {
+        label: Vec(u8)
+        BuilderPrint(*label, "Open With \"%\"", TextFromCString(AppName(apps[0].app)))
+        index := KeepApp(menu, apps[0].app)
+        unused AddOwned(menu, 0, TextView(label[:label.count]), .OpenWithApp, true, index)
+        VecFree(label)
+        at = 1
+    } else if menu.n_files > 1 {
+        unused Add(menu, 0, "Open With Default Applications", .OpenWithDefaults)
+    }
+    if menu.n_files == menu.n_directories && menu.n_directories >= 1 {
+        n := menu.n_files
+        if tabs {
+            if n == 1 { unused Add(menu, 0, "Open in new Tab", .OpenInTab) }
+            else { label: Vec(u8); BuilderPrint(*label, "Open in % New Tabs", n); unused AddOwned(menu, 0, TextView(label[:label.count]), .OpenInTab); VecFree(label) }
+        }
+        if n == 1 { unused Add(menu, 0, "Open in new Window", .OpenInWindow) }
+        else { label: Vec(u8); BuilderPrint(*label, "Open in % New Windows", n); unused AddOwned(menu, 0, TextView(label[:label.count]), .OpenInWindow); VecFree(label) }
+    }
+    if at < apps.count {
+        Separator(menu, 0)
+        sub := Submenu(menu, 0, "Open With")
+        while at < apps.count {
+            index := KeepApp(menu, apps[at].app)
+            unused AddOwned(menu, sub, TextFromCString(AppName(menu.apps[index].app)), .OpenWithApp, true, index)
+            at += 1
+        }
+        if menu.n_files == 1 {
+            Separator(menu, sub)
+            unused Add(menu, sub, "Open With Other Application...", .OpenWithOther)
+            Separator(menu, sub)
+            unused Add(menu, sub, "Set Default Application...", .SetDefaultApp)
+        }
+    } else if menu.n_files == 1 {
+        unused Add(menu, 0, "Open With Other Application...", .OpenWithOther)
+        Separator(menu, 0)
+        unused Add(menu, 0, "Set Default Application...", .SetDefaultApp)
+    }
+    if menu.n_files > 0 && (context.searching || Current(menu).recent) {
+        if !menu.targets[0].recent && context.kind != .Tree {
+            Separator(menu, 0)
+            unused Add(menu, 0, "Open Item Location", .OpenLocation)
+        }
+    }
+    return true
+}
+
+DataDirectories :: () -> Vec(Text) {
+    result: Vec(Text)
+    unused VecPush(result, Copied(UserDataDir()))
+    dirs: **u8 = SystemDataDirs()
+    index: s64 = 0
+    while dirs != null && dirs[index] != null { unused VecPush(result, Copied(dirs[index])); index += 1 }
+    return result
+}
+
+// Thunar/sendto/*.desktop from the XDG data directories, the first of each
+// name winning, sorted by name.
+SendtoHandlers :: (menu: *FileMenu) {
+    seen: Vec(Text)
+    defer VecFree(seen)
+    roots: Vec(Text) = DataDirectories()
+    defer VecFree(roots)
+    for * root: roots {
+        directory: Vec(u8)
+        BuilderPrint(*directory, "%/Thunar/sendto", TextView(root.*))
+        names: Vec(string)
+        if Files.ListDirectory(TextView(directory[:directory.count]), *names) {
+            for name: names {
+                if name.count < 9 || name[name.count - 8:] != ".desktop" { continue }
+                duplicate := false
+                for * known: seen { if TextView(known) == name { duplicate = true; break } }
+                if duplicate { continue }
+                unused VecPush(seen, TextCopy(name))
+                path: Vec(u8)
+                BuilderPrint(*path, "%/%", TextView(directory[:directory.count]), name)
+                buffer: [4096]u8
+                key_file := KeyFileNew()
+                error: *GError
+                if KeyFileLoad(key_file, WithC(TextView(path[:path.count]), buffer[:]), 0, *error) != 0 {
+                    app := AppFromKeyFile(key_file)
+                    if app != null {
+                        // Insert sorted by name; matching walks it in order.
+                        at: s64 = 0
+                        name_text: Text = Copied(AppName(app))
+                        while at < menu.handlers.count && Model.TextCompare(TextFromCString(AppName(menu.handlers[at].app)), TextView(name_text)) <= 0 { at += 1 }
+                        unused VecPush(menu.handlers, AppRef.{app})
+                        index := menu.handlers.count - 1
+                        while index > at { menu.handlers[index] = menu.handlers[index - 1]; index -= 1 }
+                        menu.handlers[at] = AppRef.{app}
+                    }
+                } else if error != null { ErrorFree(error) }
+                KeyFileFree(key_file)
+                VecFree(path)
+            }
+        }
+        Files.FreeDirectoryNames(*names)
+        VecFree(directory)
+    }
+}
+
+HandlerMatches :: (menu: *FileMenu, app: *void) -> bool {
+    if AppSupportsUris(app) == 0 {
+        for * target: menu.targets[0:menu.count] { if !target.local { return false } }
+    }
+    return true
+}
+
+SendtoSection :: (menu: *FileMenu, context: *MenuContext) -> bool {
+    if !menu.selected { return false }
+    sub := Submenu(menu, 0, "Send To")
+    n := menu.n_files
+    if menu.n_directories > 0 && menu.n_directories == menu.n_files && context.shortcut_pane {
+        unused Add(menu, sub, ifx n == 1 then "Side Pane (Add Bookmark)" else "Side Pane (Add Bookmarks)", .SendBookmark)
+    }
+    linkable := true
+    for * target: menu.targets[0:menu.count] { if target.trashed { linkable = false } }
+    if linkable { unused Add(menu, sub, ifx n == 1 then "Desktop (Create Link)" else "Desktop (Create Links)", .SendDesktop) }
+    Separator(menu, sub)
+    for device, index: context.devices {
+        unused VecPush(menu.devices, TextCopy(device.root))
+        unused AddOwned(menu, sub, device.name, .SendDevice, true, cast(s32)menu.devices.count - 1)
+    }
+    Separator(menu, sub)
+    SendtoHandlers(menu)
+    kept: Vec(AppRef)
+    for ref: menu.handlers {
+        if HandlerMatches(menu, ref.app) {
+            unused VecPush(kept, ref)
+            unused AddOwned(menu, sub, TextFromCString(AppName(ref.app)), .SendApp, true, cast(s32)kept.count - 1)
+        } else { Unref(ref.app) }
+    }
+    VecClear(menu.handlers)
+    for ref: kept { unused VecPush(menu.handlers, ref) }
+    VecFree(kept)
+    return true
+}
+
+PluginInstalled :: (name: string) -> bool {
+    path: Vec(u8)
+    BuilderPrint(*path, "/usr/lib/x86_64-linux-gnu/thunarx-3/%", name)
+    query := Files.PathQuery(TextView(path[:path.count]))
+    found := query.valid
+    VecFree(path)
+    if found { return true }
+    path2: Vec(u8)
+    BuilderPrint(*path2, "/usr/lib/thunarx-3/%", name)
+    found = Files.PathQuery(TextView(path2[:path2.count])).valid
+    VecFree(path2)
+    return found
+}
+
+// uca.xml: the user's file, else the first system configuration directory.
+UcaFile :: () -> Text {
+    found: Vec(u8)
+    BuilderPrint(*found, "%/Thunar/uca.xml", TextFromCString(UserConfigDir()))
+    if !Files.PathQuery(TextView(found[:found.count])).valid {
+        VecClear(found)
+        dirs: **u8 = SystemConfigDirs()
+        index: s64 = 0
+        while dirs != null && dirs[index] != null && found.count == 0 {
+            BuilderPrint(*found, "%/Thunar/uca.xml", TextFromCString(dirs[index]))
+            if !Files.PathQuery(TextView(found[:found.count])).valid { VecClear(found) }
+            index += 1
+        }
+    }
+    return BuilderFinish(found)
+}
+
+Unescape :: (value: string) -> Text {
+    out: Vec(u8)
+    at: s64 = 0
+    while at < value.count {
+        if value[at] == #char "&" {
+            rest := value[at:]
+            if rest.count >= 6 && rest[0:6] == "&quot;" { unused VecPush(out, #char "\""); at += 6; continue }
+            if rest.count >= 5 && rest[0:5] == "&amp;" { unused VecPush(out, #char "&"); at += 5; continue }
+            if rest.count >= 4 && rest[0:4] == "&lt;" { unused VecPush(out, #char "<"); at += 4; continue }
+            if rest.count >= 4 && rest[0:4] == "&gt;" { unused VecPush(out, #char ">"); at += 4; continue }
+            if rest.count >= 6 && rest[0:6] == "&apos;" { unused VecPush(out, #char "'"); at += 6; continue }
+        }
+        unused VecPush(out, value[at])
+        at += 1
+    }
+    return BuilderFinish(out)
+}
+
+// The untranslated value of <tag>...</tag> in one action, or "".
+Element :: (action: string, tag: string) -> string {
+    open: Vec(u8); BuilderPrint(*open, "<%>", tag)
+    close: Vec(u8); BuilderPrint(*close, "</%>", tag)
+    o := TextView(open[:open.count]); c := TextView(close[:close.count])
+    result := ""
+    at: s64 = 0
+    while at + o.count <= action.count {
+        if action[at:at + o.count] == o {
+            start := at + o.count
+            end := start
+            while end + c.count <= action.count && action[end:end + c.count] != c { end += 1 }
+            if end + c.count <= action.count { result = action[start:end] }
+            break
+        }
+        at += 1
+    }
+    VecFree(open); VecFree(close)
+    return result
+}
+Contains :: (value: string, needle: string) -> bool {
+    if needle.count == 0 { return true }
+    at: s64 = 0
+    while at + needle.count <= value.count { if value[at:at + needle.count] == needle { return true }; at += 1 }
+    return false
+}
+
+LoadCustom :: (menu: *FileMenu) {
+    path: Text = UcaFile()
+    if path.bytes.count == 0 { return }
+    names: Vec(u8)
+    contents: Vec(u8)
+    defer VecFree(contents)
+    if !WholeFiles.ReadFileInto(TextView(path), *contents) || contents.count > 1048576 { return }
+    document := TextView(contents[:contents.count])
+    at: s64 = 0
+    while at < document.count {
+        start := at
+        while start + 8 <= document.count && document[start:start + 8] != "<action>" { start += 1 }
+        if start + 8 > document.count { break }
+        end := start
+        while end + 9 <= document.count && document[end:end + 9] != "</action>" { end += 1 }
+        if end + 9 > document.count { break }
+        body := document[start + 8:end]
+        action: UcaAction
+        action.name = Unescape(Element(body, "name"))
+        action.command = Unescape(Element(body, "command"))
+        action.submenu = Unescape(Element(body, "submenu"))
+        action.patterns = Unescape(Element(body, "patterns"))
+        action.range = Unescape(Element(body, "range"))
+        if Contains(body, "<directories/>") || Contains(body, "<directories>") { action.types |= 1 }
+        if Contains(body, "<audio-files/>") || Contains(body, "<audio-files>") { action.types |= 2 }
+        if Contains(body, "<image-files/>") || Contains(body, "<image-files>") { action.types |= 4 }
+        if Contains(body, "<other-files/>") || Contains(body, "<other-files>") { action.types |= 8 }
+        if Contains(body, "<text-files/>") || Contains(body, "<text-files>") { action.types |= 16 }
+        if Contains(body, "<video-files/>") || Contains(body, "<video-files>") { action.types |= 32 }
+        if true {
+            command := TextView(action.command)
+            action.multiple = Contains(command, "%F") || Contains(command, "%U") || Contains(command, "%D") || Contains(command, "%N")
+        }
+        if action.patterns.bytes.count == 0 { unused VecPush(action.patterns.bytes, #char "*") }
+        unused VecPush(menu.custom, action)
+        at = end + 9
+    }
+    VecFree(names)
+}
+
+UcaType :: (content: string, directory: bool) -> s32 {
+    if directory || content == "inode/directory" { return 1 }
+    if content.count >= 6 && content[0:6] == "audio/" { return 2 }
+    if content.count >= 6 && content[0:6] == "image/" { return 4 }
+    if content.count >= 5 && content[0:5] == "text/" { return 16 }
+    if content.count >= 6 && content[0:6] == "video/" { return 32 }
+    if content.count >= 12 && content[0:12] == "application/" {
+        rest := content[12:]
+        if rest == "javascript" || rest == "x-awk" || rest == "x-csh" || rest == "xhtml+xml" || rest == "xml" { return 16 }
+        if rest == "ogg" { return 2 }
+    }
+    return 8
+}
+
+UcaMatches :: (action: *UcaAction, targets: []MenuTarget) -> bool {
+    n := cast(s32)targets.count
+    for * target: targets { if !target.local { return false } }
+    lower := n; upper := n
+    range := TextView(action.range)
+    if range != "" {
+        dash: s64 = -1
+        for byte, index: range { if byte == #char "-" { dash = index; break } }
+        if dash >= 0 {
+            lower = 0; upper = 0
+            for byte: range[0:dash] { if byte >= #char "0" && byte <= #char "9" { lower = lower * 10 + cast(s32)(byte - #char "0") } }
+            for byte: range[dash + 1:] { if byte >= #char "0" && byte <= #char "9" { upper = upper * 10 + cast(s32)(byte - #char "0") } }
+        }
+    }
+    if n > upper || n < lower { return false }
+    if !action.multiple && n > 1 { return false }
+    for * target: targets {
+        if (UcaType(TextView(target.content_type), target.directory) & action.types) == 0 { return false }
+        matched := false
+        patterns := TextView(action.patterns)
+        start: s64 = 0
+        while start <= patterns.count && !matched {
+            end := start
+            while end < patterns.count && patterns[end] != #char ";" { end += 1 }
+            pattern_buffer: [1024]u8
+            name_buffer: [1024]u8
+            if PatternMatch(WithC(patterns[start:end], pattern_buffer[:]), WithC(TextView(target.name), name_buffer[:])) != 0 { matched = true }
+            start = end + 1
+        }
+        if !matched { return false }
+    }
+    return true
+}
+
+IsArchive :: (content: string) -> bool {
+    kinds := string.["application/x-7z-compressed", "application/x-7z-compressed-tar", "application/x-ar",
+    "application/x-arj", "application/x-bzip", "application/x-bzip-compressed-tar", "application/x-bzip2",
+    "application/x-bzip2-compressed-tar", "application/x-bzip3", "application/x-bzip3-compressed-tar",
+    "application/x-cd-image", "application/x-compress", "application/x-compressed-tar", "application/x-deb",
+    "application/x-gtar", "application/x-gzip", "application/x-jar", "application/x-java-archive",
+    "application/x-lha", "application/x-lhz", "application/x-lrzip", "application/x-lrzip-compressed-tar",
+    "application/x-lz4", "application/x-lz4-compressed-tar", "application/x-lzip", "application/x-lzip-compressed-tar",
+    "application/x-lzma", "application/x-lzma-compressed-tar", "application/x-lzop", "application/x-rar",
+    "application/x-rar-compressed", "application/x-rpm", "application/x-tar", "application/x-xz",
+    "application/x-xz-compressed-tar", "application/x-zip", "application/x-zip-compressed", "application/x-zoo",
+    "application/x-zstd-compressed-tar", "application/zip"]
+    for kind: kinds { if IsA(content, kind) { return true } }
+    return false
+}
+
+IsA :: (content: string, kind: string) -> bool {
+    if content == "" { return false }
+    left: [256]u8; right: [256]u8
+    return ContentIsA(WithC(content, left[:]), WithC(kind, right[:])) != 0
+}
+
+ParentWritable :: (path: string) -> bool {
+    buffer: [4096]u8
+    return Access(WithC(Files.PathParent(path), buffer[:]), 2) == 0
+}
+
+// UCA, then the wallpaper plugin, then the archive plugin, the order their
+// providers are listed on this system.
+CustomSection :: (menu: *FileMenu, context: *MenuContext) -> bool {
+    added := false
+    folder := !menu.selected
+    if PluginInstalled("thunar-uca.so") {
+        LoadCustom(menu)
+        for index: cast(s64)0..menu.custom.count - 1 {
+            if !UcaMatches(*menu.custom[index], menu.targets[0:menu.count]) { continue }
+            parent: s32 = 0
+            submenu := TextView(menu.custom[index].submenu)
+            if submenu != "" {
+                // One level per path element, shared by actions naming it.
+                start: s64 = 0
+                while start < submenu.count {
+                    end := start
+                    while end < submenu.count && submenu[end] != #char "/" { end += 1 }
+                    label := submenu[start:end]
+                    found: s32 = 0
+                    for item, at: menu.items {
+                        if item.submenu && item.parent == parent && FileMenuLabel(menu, cast(s32)at) == label { found = cast(s32)at + 1 }
+                    }
+                    if found == 0 {
+                        found = AddOwned(menu, parent, label, .None)
+                        if found > 0 { menu.items[found - 1].submenu = true }
+                    }
+                    parent = found
+                    start = end + 1
+                }
+            }
+            unused AddOwned(menu, parent, TextView(menu.custom[index].name), .Custom, true, cast(s32)index)
+            added = true
+        }
+    }
+    if menu.selected && menu.n_files == 1 && PluginInstalled("thunar-wallpaper-plugin.so") {
+        target := *menu.targets[0]
+        content := TextView(target.content_type)
+        if target.local && !target.directory && content.count >= 6 && content[0:6] == "image/" &&
+            (IsA(content, "image/jpeg") || IsA(content, "image/png") || IsA(content, "image/svg+xml") || IsA(content, "image/svg+xml-compressed")) {
+            unused Add(menu, 0, "Set as wallpaper", .Wallpaper)
+            added = true
+        }
+    }
+    if menu.selected && PluginInstalled("thunar-archive-plugin.so") {
+        local := true; archives := true; writable := true
+        for * target: menu.targets[0:menu.count] {
+            if TextView(target.uri).count < 5 || TextView(target.uri)[0:5] != "file:" || target.trashed { local = false }
+            if !IsArchive(TextView(target.content_type)) { archives = false }
+            if !ParentWritable(TextView(target.path)) { writable = false }
+        }
+        if local {
+            if archives {
+                if writable { unused Add(menu, 0, "Extract Here", .ExtractHere) }
+                unused Add(menu, 0, "Extract To...", .ExtractTo)
+            }
+            unused Add(menu, 0, "Create Archive...", .CreateArchive)
+            added = true
+        }
+    }
+    return added
+}
+
+TemplatesDirectory :: () -> Text {
+    special := SpecialDir(3)
+    home := Model.HomePath()
+    if special != null {
+        value := TextFromCString(special)
+        if value != "" && value != home { return TextCopy(value) }
+    }
+    path: Vec(u8)
+    BuilderPrint(*path, "%/Templates", home)
+    return BuilderFinish(path)
+}
+
+// Folders first, then names, below the templates directory; each folder is a submenu.
+TemplateItems :: (menu: *FileMenu, directory: string, parent: s32, budget: *s32) -> bool {
+    names: Vec(string)
+    if !Files.ListDirectory(directory, *names) { return false }
+    defer Files.FreeDirectoryNames(*names)
+    order: Vec(s32)
+    defer VecFree(order)
+    for name, index: names {
+        if name.count == 0 || name[0] == #char "." { continue }
+        unused VecPush(order, cast(s32)index)
+    }
+    // Insertion sort: folders, then case-sensitive names.
+    for i: cast(s64)1..order.count - 1 {
+        j := i
+        while j > 0 {
+            a := names[order[j - 1]]; b := names[order[j]]
+            path_a: Vec(u8); BuilderPrint(*path_a, "%/%", directory, a)
+            path_b: Vec(u8); BuilderPrint(*path_b, "%/%", directory, b)
+            dir_a := Files.PathQuery(TextView(path_a[:path_a.count])).info.kind == .Directory
+            dir_b := Files.PathQuery(TextView(path_b[:path_b.count])).info.kind == .Directory
+            VecFree(path_a); VecFree(path_b)
+            swap := (dir_b && !dir_a) || (dir_a == dir_b && Model.TextCompare(b, a) < 0)
+            if !swap { break }
+            t := order[j]; order[j] = order[j - 1]; order[j - 1] = t
+            j -= 1
+        }
+    }
+    any := false
+    for index: order {
+        if budget[0] <= 0 { break }
+        budget[0] -= 1
+        name := names[index]
+        path: Vec(u8)
+        BuilderPrint(*path, "%/%", directory, name)
+        full := TextView(path[:path.count])
+        if Files.PathQuery(full).info.kind == .Directory {
+            sub := AddOwned(menu, parent, name, .None)
+            if sub > 0 { menu.items[sub - 1].submenu = true }
+            unused TemplateItems(menu, full, sub, budget)
+        } else {
+            unused VecPush(menu.templates, TextCopy(full))
+            unused AddOwned(menu, parent, name, .CreateDocument, true, cast(s32)menu.templates.count - 1)
+        }
+        any = true
+        VecFree(path)
+    }
+    return any
+}
+
+CreateSection :: (menu: *FileMenu, context: *MenuContext, force: bool) -> bool {
+    added := false
+    parent := Current(menu)
+    if context.kind == .Tree && menu.selected && menu.single_directory { parent = *menu.targets[0] }
+    if parent.trash_root { return false }
+    enabled := Writable(parent) && !context.searching
+    unused Add(menu, 0, "Create Folder...", .CreateFolder, enabled)
+    added = true
+    if context.kind == .View {
+        sub := Submenu(menu, 0, "Create Document", enabled)
+        directory: Text = TemplatesDirectory()
+        budget: s32 = 100
+        if !TemplateItems(menu, TextView(directory), sub, *budget) {
+            label: Vec(u8)
+            BuilderPrint(*label, "No templates installed in\n\"%\"", TextView(directory))
+            unused AddOwned(menu, sub, TextView(label[:label.count]), .None, false)
+            VecFree(label)
+        }
+        Separator(menu, sub)
+        unused Add(menu, sub, "Empty File", .CreateEmpty)
+        if budget == 0 {
+            Separator(menu, sub)
+            unused Add(menu, sub, "The maximum number of templates was exceeded.\nAdjust 'misc-max-number-of-templates' if required.", .None)
+        }
+    }
+    return added
+}
+
+ShowTrash :: (menu: *FileMenu) -> bool {
+    if !menu.has_parent { return false }
+    return !Writable(ParentTarget(menu)) || (!ParentTarget(menu).trashed && !ParentTarget(menu).trash_root && menu.trashable)
+}
+
+// thunar_menu_add_sections, with the same fixed section order.
+CREATE :: 1; OPEN :: 2; SENDTO :: 4; CUT :: 8; COPY_PASTE :: 16; TRASH_DELETE :: 32
+EMPTY_TRASH :: 64; RENAME :: 128; RESTORE :: 256; REMOVE_RECENT :: 512; CUSTOM :: 1024
+MOUNTABLE :: 2048; ZOOM :: 4096; PROPERTIES :: 8192;
+
+Sections :: (menu: *FileMenu, context: *MenuContext, sections: s32, force_open: bool) {
+    force := context.kind != .View
+    if (sections & CREATE) != 0 {
+        if CreateSection(menu, context, force) { Separator(menu, 0) }
+    }
+    if (sections & OPEN) != 0 {
+        if OpenSection(menu, context, true, true, force_open) { Separator(menu, 0) }
+    }
+    if (sections & SENDTO) != 0 {
+        if SendtoSection(menu, context) { Separator(menu, 0) }
+    }
+    added := false
+    parent_writable := menu.has_parent && Writable(ParentTarget(menu))
+    if (sections & CUT) != 0 && (menu.selected || force) {
+        unused Add(menu, 0, "Cut", .Cut, menu.selected && parent_writable); added = true
+    }
+    if (sections & COPY_PASTE) != 0 {
+        if menu.selected || force { unused Add(menu, 0, "Copy", .Copy, menu.selected); added = true }
+        if menu.single_directory && menu.selected {
+            unused Add(menu, 0, "Paste Into Folder", .PasteIntoFolder, context.can_paste && Writable(*menu.targets[0]))
+            added = true
+        } else if !added {
+            unused Add(menu, 0, "Paste", .Paste, context.can_paste && Writable(Current(menu)) && !context.searching)
+            added = true
+        }
+    }
+    if added { Separator(menu, 0) }
+    if (sections & TRASH_DELETE) != 0 {
+        added = false
+        show_trash := ShowTrash(menu)
+        if show_trash && (menu.selected || force) {
+            unused Add(menu, 0, "Move to Trash", .Trash, menu.selected && parent_writable); added = true
+        }
+        if (!show_trash || context.show_delete) && (menu.selected || force) {
+            unused Add(menu, 0, "Delete", .Delete, menu.selected && parent_writable); added = true
+        }
+        if added { Separator(menu, 0) }
+    }
+    if (sections & EMPTY_TRASH) != 0 && menu.single_directory {
+        folder := ifx menu.selected then *menu.targets[0] else Current(menu)
+        if folder.trash_root {
+            unused Add(menu, 0, "Empty Trash", .EmptyTrash, folder.item_count > 0)
+            Separator(menu, 0)
+        }
+    }
+    if (sections & RENAME) != 0 {
+        show := Writable(Current(menu)) && menu.selected && !Current(menu).trash_root
+        if show || force {
+            unused Add(menu, 0, ifx menu.n_files == 1 then "Rename..." else "Bulk Rename...",
+                ifx menu.n_files == 1 then MenuAction.Rename else MenuAction.BulkRename, show && parent_writable)
+            Separator(menu, 0)
+        }
+    }
+    if (sections & RESTORE) != 0 && menu.selected && Current(menu).trash_root {
+        unused Add(menu, 0, "Restore", .Restore, Writable(Current(menu)))
+        unused Add(menu, 0, "Restore and Show", .RestoreShow, Writable(Current(menu)))
+        Separator(menu, 0)
+    }
+    if (sections & REMOVE_RECENT) != 0 && menu.selected && Current(menu).recent {
+        unused Add(menu, 0, "Remove from Recent", .RemoveRecent)
+        Separator(menu, 0)
+    }
+    if (sections & CUSTOM) != 0 {
+        if CustomSection(menu, context) { Separator(menu, 0) }
+    }
+    if (sections & MOUNTABLE) != 0 && context.side == .Device {
+        if context.device_mounted { unused Add(menu, 0, "Unmount", .Unmount) }
+        else { unused Add(menu, 0, "Mount", .Mount) }
+        if context.device_ejectable { unused Add(menu, 0, "Eject", .Eject) }
+        Separator(menu, 0)
+    }
+    if (sections & ZOOM) != 0 {
+        unused Add(menu, 0, "Zoom In", .ZoomIn, context.zoom < context.zoom_levels - 1)
+        unused Add(menu, 0, "Zoom Out", .ZoomOut, context.zoom > 0)
+        unused Add(menu, 0, "Normal Size", .ZoomReset)
+        Separator(menu, 0)
+    }
+    if (sections & PROPERTIES) != 0 {
+        unused Add(menu, 0, "Properties...", .Properties, context.side != .Device || context.device_mounted)
+    }
+}
+
+ArrangeItems :: (menu: *FileMenu, context: *MenuContext) {
+    sub := Submenu(menu, 0, "Arrange Items")
+    unused Toggle(menu, sub, "By Name", .SortName, context.sort_mode == .SortName, true)
+    unused Toggle(menu, sub, "By Size", .SortSize, context.sort_mode == .SortSize, true)
+    unused Toggle(menu, sub, "By Type", .SortType, context.sort_mode == .SortType, true)
+    unused Toggle(menu, sub, "By Modification Date", .SortModified, context.sort_mode == .SortModified, true)
+    if Current(menu).trash_root { unused Toggle(menu, sub, "By Deletion Date", .SortDeleted, false, true, false) }
+    Separator(menu, sub)
+    unused Toggle(menu, sub, "Ascending", .SortAscending, !context.sort_reverse, true)
+    unused Toggle(menu, sub, "Descending", .SortDescending, context.sort_reverse, true)
+    Separator(menu, sub)
+    unused Toggle(menu, sub, "Reversed Order", .SortReverse, context.sort_reverse, false)
+    if context.view_mode == .ViewList {
+        // Explorer has no column editor or expandable folders yet.
+        unused Add(menu, 0, "Configure Columns...", .ConfigureColumns, false)
+        unused Toggle(menu, 0, "Expandable Folders", .ExpandableFolders, false, false, false)
+    }
+}
+
+#scope_export
+// Builds the menu Thunar shows for this context. False only on allocation failure.
+FileMenuBuild :: (menu: *FileMenu, context: *MenuContext) -> bool {
+    FileMenuRelease(menu)
+    menu.selected = context.selection.count > 0
+    if menu.selected {
+        for location: context.selection { unused VecPush(menu.targets, Probe(location, context.trash_folder)) }
+    } else {
+        unused VecPush(menu.targets, Probe(context.current, context.trash_folder))
+    }
+    menu.count = cast(s32)menu.targets.count
+    unused VecPush(menu.targets, Probe(context.current, context.trash_folder))
+    menu.current = menu.count
+    menu.parent = menu.count
+    menu.n_files = menu.count
+    menu.all_executable = true
+    menu.trashable = true
+    for index: cast(s32)0..menu.count - 1 {
+        if menu.targets[index].directory { menu.n_directories += 1; menu.all_executable = false }
+        else if !menu.targets[index].executable && !menu.targets[index].desktop_file { menu.all_executable = false }
+        if !menu.targets[index].trashable { menu.trashable = false }
+    }
+    menu.single_directory = menu.n_directories == 1 && menu.n_files == 1
+    first: Text = TextCopy(TextView(menu.targets[0].location))
+    location := TextView(first)
+    if IsUri(location) {
+        buffer: [8192]u8
+        file := FileUri(WithC(location, buffer[:]))
+        if file != null {
+            parent := FileParent(file)
+            if parent != null {
+                uri: Text = Taken(FileGetUri(parent))
+                unused VecPush(menu.targets, Probe(TextView(uri), context.trash_folder))
+                menu.parent = cast(s32)menu.targets.count - 1
+                menu.has_parent = true
+                Unref(parent)
+            }
+            Unref(file)
+        }
+    } else if location != "/" && location != "" {
+        unused VecPush(menu.targets, Probe(Files.PathParent(location), context.trash_folder))
+        menu.parent = cast(s32)menu.targets.count - 1
+        menu.has_parent = true
+    }
+    if context.side == .Header { return true }
+    if context.kind == .View {
+        if menu.selected {
+            Sections(menu, context, OPEN | SENDTO | CUT | COPY_PASTE | TRASH_DELETE | EMPTY_TRASH |
+                RENAME | RESTORE | REMOVE_RECENT | CUSTOM | PROPERTIES, false)
+        } else {
+            Sections(menu, context, CREATE | COPY_PASTE | EMPTY_TRASH | CUSTOM, false)
+            ArrangeItems(menu, context)
+            Separator(menu, 0)
+            Sections(menu, context, ZOOM | PROPERTIES, false)
+        }
+        return true
+    }
+    if context.side == .Special {
+        unused Add(menu, 0, "Open", .Open)
+        unused Add(menu, 0, "Open in new Tab", .OpenInTab)
+        unused Add(menu, 0, "Open in new Window", .OpenInWindow)
+        Separator(menu, 0)
+        Sections(menu, context, EMPTY_TRASH, true)
+        Sections(menu, context, MOUNTABLE | PROPERTIES, true)
+        return true
+    }
+    if context.kind == .Tree {
+        Sections(menu, context, OPEN | SENDTO, true)
+        Sections(menu, context, CREATE | CUT | COPY_PASTE | TRASH_DELETE | RENAME | CUSTOM, true)
+    } else {
+        Sections(menu, context, OPEN | SENDTO, true)
+        Sections(menu, context, CREATE | COPY_PASTE | CUSTOM, true)
+    }
+    Sections(menu, context, MOUNTABLE | PROPERTIES, true)
+    if context.side == .Bookmark {
+        Separator(menu, 0)
+        unused Add(menu, 0, "Remove Shortcut", .RemoveShortcut)
+        unused Add(menu, 0, "Rename Shortcut", .RenameShortcut)
+    }
+    return true
+}
+
+// The visible rows of a menu panel, with GTK's semantics: every separator is
+// drawn, including adjacent ones, exactly as the oracle shows them.
+FileMenuChildren :: (menu: *FileMenu, parent: s32, output: *Vec(s32)) {
+    VecClear(output.*)
+    for index: cast(s32)0..cast(s32)menu.items.count - 1 { if menu.items[index].parent == parent { unused VecPush(output.*, index) } }
+}
+
+// Launches the given locations with an application kept by this menu.
+MenuLaunchApp :: (app: *void, locations: []string) -> bool {
+    if app == null { return false }
+    list: *List
+    files: Vec(AppRef)
+    for location: locations {
+        buffer: [8192]u8
+        file := ifx IsUri(location) then FileUri(WithC(location, buffer[:])) else FilePath(WithC(location, buffer[:]))
+        if file != null { unused VecPush(files, AppRef.{file}); list = ListAppend(list, file) }
+    }
+    error: *GError
+    ok := AppLaunch(app, list, null, *error) != 0
+    if error != null { ErrorFree(error) }
+    ListFree(list)
+    for file: files { Unref(file.app) }
+    VecFree(files)
+    return ok
+}
+
+// Opens each location with its own default application, as Thunar groups them.
+MenuOpenDefaults :: (locations: []string) -> bool {
+    ok := true
+    for location: locations {
+        buffer: [8192]u8
+        file := ifx IsUri(location) then FileUri(WithC(location, buffer[:])) else FilePath(WithC(location, buffer[:]))
+        if file == null { ok = false; continue }
+        target := Probe(location, "")
+        app: *void
+        if TextView(target.content_type) != "" {
+            content: [256]u8
+            app = DefaultForType(WithC(TextView(target.content_type), content[:]), ifx target.local then 0 else 1)
+        }
+        if app == null { error: *GError; app = DefaultHandler(file, null, *error); if error != null { ErrorFree(error) } }
+        Unref(file)
+        if app == null { ok = false; continue }
+        single := string.[location]
+        ok = MenuLaunchApp(app, single[:]) && ok
+        Unref(app)
+    }
+    return ok
+}
+
+MenuSetDefault :: (app: *void, content_type: string) -> bool {
+    if app == null || content_type == "" { return false }
+    buffer: [256]u8
+    error: *GError
+    ok := AppSetDefault(app, WithC(content_type, buffer[:]), *error) != 0
+    if error != null { ErrorFree(error) }
+    return ok
+}
+
+// Every application GIO knows, recommended ones for the type first, for the
+// application chooser. The caller releases the vector with ReleaseApps.
+ChooserApps :: (content_type: string, output: *Vec(AppRef)) -> s32 {
+    VecClear(output.*)
+    recommended: s32 = 0
+    if content_type != "" {
+        buffer: [256]u8
+        list := AppsForType(WithC(content_type, buffer[:]))
+        node := list
+        while node != null {
+            if AppShowIn(node.data, null) != 0 { unused VecPush(output.*, AppRef.{node.data}); recommended += 1 } else { Unref(node.data) }
+            node = node.next
+        }
+        ListFree(list)
+    }
+    all := AllApps()
+    node := all
+    while node != null {
+        known := false
+        index: s64 = 0
+        while index < output.count { if AppEqual(output.*[index].app, node.data) != 0 { known = true; break }; index += 1 }
+        if known || AppShowIn(node.data, null) == 0 { Unref(node.data) } else { unused VecPush(output.*, AppRef.{node.data}) }
+        node = node.next
+    }
+    ListFree(all)
+    // Names within each group, as GTK's app chooser lists them.
+    SortByName(output, 0, cast(s64)recommended)
+    SortByName(output, cast(s64)recommended, output.count)
+    return recommended
+}
+SortByName :: (apps: *Vec(AppRef), first: s64, end: s64) {
+    i := first + 1
+    while i < end {
+        j := i
+        while j > first {
+            right: Text = LowerName(apps.*[j].app)
+            left: Text = LowerName(apps.*[j - 1].app)
+            if Model.TextCompare(TextView(right), TextView(left)) >= 0 { break }
+            t := apps.*[j]; apps.*[j] = apps.*[j - 1]; apps.*[j - 1] = t
+            j -= 1
+        }
+        i += 1
+    }
+}
+LowerName :: (app: *void) -> Text {
+    name := TextFromCString(AppName(app))
+    out: Vec(u8)
+    for byte: name { unused VecPush(out, ifx byte >= #char "A" && byte <= #char "Z" then byte + 32 else byte) }
+    return BuilderFinish(out)
+}
+AppLabel :: (app: *void) -> string { return TextFromCString(AppName(app)) }
+ReleaseApps :: (apps: *Vec(AppRef)) {
+    index: s64 = 0
+    while index < apps.count { if apps.*[index].app != null { Unref(apps.*[index].app) }; index += 1 }
+    VecFree(apps.*)
+}
+
+// sh -c with Thunar's UCA expansion: %d %D %n %N quoted first, then the
+// desktop-entry codes %f %F %u %U %%; the first file's folder (or a folder
+// action's own folder) is the working directory.
+MenuRunCustom :: (menu: *FileMenu, index: s32) -> bool {
+    if index < 0 || index >= menu.custom.count || menu.targets.count == 0 { return false }
+    command := TextView(menu.custom[index].command)
+    if command == "" { return false }
+    line: Vec(u8)
+    defer VecFree(line)
+    at: s64 = 0
+    while at < command.count {
+        if command[at] == #char "%" && at + 1 < command.count {
+            code := command[at + 1]
+            at += 2
+            if code == #char "d" || code == #char "D" || code == #char "n" || code == #char "N" {
+                for * target, n: menu.targets[0:menu.count] {
+                    if (code == #char "d" || code == #char "n") && n > 0 { break }
+                    if n > 0 { unused VecPush(line, #char " ") }
+                    value := ifx code == #char "d" || code == #char "D" then Files.PathParent(TextView(target.path)) else TextView(target.name)
+                    Quoted(*line, value)
+                }
+            } else {
+                unused VecPush(line, #char "%"); unused VecPush(line, code)
+            }
+            continue
+        }
+        unused VecPush(line, command[at]); at += 1
+    }
+    expanded: Vec(u8)
+    defer VecFree(expanded)
+    first := TextView(line[:line.count])
+    at = 0
+    while at < first.count {
+        if first[at] == #char "%" && at + 1 < first.count {
+            code := first[at + 1]
+            at += 2
+            if code == #char "f" || code == #char "F" || code == #char "u" || code == #char "U" {
+                for * target, n: menu.targets[0:menu.count] {
+                    if (code == #char "f" || code == #char "u") && n > 0 { break }
+                    if n > 0 { unused VecPush(expanded, #char " ") }
+                    Quoted(*expanded, ifx code == #char "f" || code == #char "F" then TextView(target.path) else TextView(target.uri))
+                }
+            } else if code == #char "%" { unused VecPush(expanded, #char "%") }
+            continue
+        }
+        unused VecPush(expanded, first[at]); at += 1
+    }
+    directory := ifx !menu.selected then TextView(menu.targets[0].path) else Files.PathParent(TextView(menu.targets[0].path))
+    arguments := string.["/bin/sh", "-c", TextView(expanded[:expanded.count])]
+    return MenuSpawn(directory, arguments[:])
+}
+Quoted :: (output: *Vec(u8), value: string) {
+    buffer: Vec(u8)
+    unused BuilderAppend(buffer, value); unused VecPush(buffer, 0)
+    quoted := ShellQuote(*buffer[0])
+    if quoted != null { unused BuilderAppend(output.*, TextFromCString(quoted)); Free(quoted) }
+    VecFree(buffer)
+}
+MenuSpawn :: (directory: string, arguments: []string) -> bool {
+    storage: Vec(Vec(u8))
+    pointers: Vec(CPointer)
+    for argument: arguments {
+        bytes: Vec(u8)
+        unused BuilderAppend(bytes, argument); unused VecPush(bytes, 0)
+        unused VecPush(storage, bytes)
+    }
+    for i: cast(s64)0..storage.count - 1 { unused VecPush(pointers, CPointer.{*storage[i][0]}) }
+    unused VecPush(pointers, CPointer.{null})
+    folder: [4096]u8
+    error: *GError
+    ok := SpawnAsync(ifx directory == "" then null else WithC(directory, folder[:]), cast(**u8)*pointers[0], null, 4, null, null, null, *error) != 0
+    if error != null { ErrorFree(error) }
+    VecFree(pointers); VecFree(storage)
+    return ok
+}
+// One C string pointer; Vec(*u8) element casts do not build in C yet.
+CPointer :: struct { value: *u8; }
+
+// The archive plugin's tap wrapper for the default archive manager.
+MenuRunArchive :: (menu: *FileMenu, action: string) -> bool {
+    if menu.targets.count == 0 { return false }
+    types: Vec(string)
+    defer VecFree(types)
+    if action == "create" {
+        unused VecPush(types, "application/x-compressed-tar"); unused VecPush(types, "application/x-tar")
+        unused VecPush(types, "application/x-zip"); unused VecPush(types, "application/zip")
+    } else {
+        for * target: menu.targets[0:menu.count] { unused VecPush(types, TextView(target.content_type)) }
+    }
+    // Applications handling every type; the first with a tap wrapper runs.
+    candidates: Vec(AppRef)
+    for kind, n: types {
+        buffer: [256]u8
+        list := AppsForType(WithC(kind, buffer[:]))
+        node := list
+        if n == 0 {
+            while node != null { unused VecPush(candidates, AppRef.{node.data}); node = node.next }
+        } else {
+            kept: Vec(AppRef)
+            for ref: candidates {
+                found := false
+                other := list
+                while other != null { if AppEqual(ref.app, other.data) != 0 { found = true; break }; other = other.next }
+                if found { unused VecPush(kept, ref) } else { Unref(ref.app) }
+            }
+            while node != null { Unref(node.data); node = node.next }
+            VecClear(candidates)
+            for ref: kept { unused VecPush(candidates, ref) }
+            VecFree(kept)
+        }
+        ListFree(list)
+    }
+    wrapper: Vec(u8)
+    for ref: candidates {
+        if wrapper.count == 0 { Wrapper(ref.app, *wrapper) }
+        Unref(ref.app)
+    }
+    VecFree(candidates)
+    if wrapper.count == 0 { return false }
+    arguments: Vec(string)
+    defer VecFree(arguments)
+    folder := Files.PathParent(TextView(menu.targets[0].path))
+    unused VecPush(arguments, TextView(wrapper[:wrapper.count])); unused VecPush(arguments, action); unused VecPush(arguments, folder)
+    for * target: menu.targets[0:menu.count] { unused VecPush(arguments, TextView(target.path)) }
+    ok := MenuSpawn(folder, arguments[:])
+    VecFree(wrapper)
+    return ok
+}
+AppId :: (app: *void) -> *u8 #foreign gio "g_app_info_get_id";
+Wrapper :: (app: *void, output: *Vec(u8)) {
+    id := TextFromCString(AppId(app))
+    if id == "" { return }
+    base := id
+    for byte, index: id { if byte == #char "/" { base = id[index + 1:] } }
+    dot: s64 = -1
+    for byte, index: base { if byte == #char "." { dot = index } }
+    if dot >= 0 { base = base[0:dot] }
+    for root: 0..1 {
+        candidate: Vec(u8)
+        BuilderPrint(*candidate, "%/%.tap", ifx root == 0 then "/usr/libexec/thunar-archive-plugin" else "/usr/lib/thunar-archive-plugin", base)
+        buffer: [4096]u8
+        found := Access(WithC(TextView(candidate[:candidate.count]), buffer[:]), 1) == 0
+        if found && output.count == 0 { unused BuilderAppend(output.*, TextView(candidate[:candidate.count])) }
+        VecFree(candidate)
+    }
+}
+
+// The wallpaper plugin's XFCE settings, written with xfconf-query.
+MenuSetWallpaper :: (path: string, monitor: string, workspace: s32) -> bool {
+    first := string.["xfconf-query", "-c", "xfce4-desktop", "-p", "/backdrop/screen0/monitor0/image-path", "-n", "-t", "string", "-s", path]
+    ok := MenuSpawn("", first[:])
+    second := string.["xfconf-query", "-c", "xfce4-desktop", "-p", "/backdrop/screen0/monitor0/image-show", "-n", "-t", "bool", "-s", "true"]
+    ok = MenuSpawn("", second[:]) && ok
+    property: Vec(u8)
+    if monitor != "" { BuilderPrint(*property, "/backdrop/screen0/monitor%/workspace%/last-image", monitor, workspace) }
+    else { BuilderPrint(*property, "/backdrop/screen0/monitor0/workspace%/last-image", workspace) }
+    third := string.["xfconf-query", "-c", "xfce4-desktop", "-p", TextView(property[:property.count]), "-n", "-t", "string", "-s", path]
+    ok = MenuSpawn("", third[:]) && ok
+    VecFree(property)
+    return ok
+}
+
+MenuRemoveRecent :: (uri: string) -> bool {
+    manager := RecentDefault()
+    if manager == null { return false }
+    buffer: [8192]u8
+    error: *GError
+    ok := RecentRemove(manager, WithC(uri, buffer[:]), *error) != 0
+    if error != null { ErrorFree(error) }
+    return ok
+}
+
+#scope_module
+Enumerate :: (file: *void, attributes: *u8, flags: s32, cancel: *void, error: **GError) -> *void #foreign gio "g_file_enumerate_children";
+NextFile :: (enumerator: *void, cancel: *void, error: **GError) -> *void #foreign gio "g_file_enumerator_next_file";
+FileChild :: (file: *void, name: *u8) -> *void #foreign gio "g_file_get_child";
+FileDelete :: (file: *void, cancel: *void, error: **GError) -> s32 #foreign gio "g_file_delete";
+EnclosingMount :: (file: *void, cancel: *void, error: **GError) -> *void #foreign gio "g_file_find_enclosing_mount";
+MountUnmount :: (mount: *void, flags: s32, operation: *void, cancel: *void, callback: *void, data: *void) #foreign gio "g_mount_unmount_with_operation";
+MountEject :: (mount: *void, flags: s32, operation: *void, cancel: *void, callback: *void, data: *void) #foreign gio "g_mount_eject_with_operation";
+
+#scope_export
+// The GIO content type of a location, as Thunar's chooser uses it.
+MenuContentType :: (location: string) -> Text {
+    target: MenuTarget = Probe(location, "")
+    return TextCopy(TextView(target.content_type))
+}
+
+// Thunar empties every filesystem's trash through trash:///. Without GVfs the
+// user's own XDG Trash is emptied directly.
+MenuEmptyTrash :: () -> bool {
+    uri: [16]u8
+    root := FileUri(WithC("trash:///", uri[:]))
+    if root == null { return false }
+    attributes: [32]u8
+    error: *GError
+    enumerator := Enumerate(root, WithC("standard::name", attributes[:]), 1, null, *error)
+    ok := true
+    if enumerator == null {
+        if error != null { ErrorFree(error) }
+        for folder: 0..1 {
+            directory: Text = Model.TrashDirectory(folder == 1)
+            names: Vec(string)
+            if Files.ListDirectory(TextView(directory), *names) {
+                for name: names {
+                    path: Vec(u8)
+                    BuilderPrint(*path, "%/%", TextView(directory), name)
+                    if !Files.RemoveTree(TextView(path[:path.count])) { ok = false }
+                    VecFree(path)
+                }
+            }
+            Files.FreeDirectoryNames(*names)
+        }
+    } else {
+        while true {
+            next_error: *GError
+            info := NextFile(enumerator, null, *next_error)
+            if next_error != null { ErrorFree(next_error); ok = false }
+            if info == null { break }
+            name: [4096]u8
+            child := FileChild(root, WithC(TextFromCString(InfoName(info)), name[:]))
+            if child != null {
+                delete_error: *GError
+                if FileDelete(child, null, *delete_error) == 0 { ok = false }
+                if delete_error != null { ErrorFree(delete_error) }
+                Unref(child)
+            }
+            Unref(info)
+        }
+        Unref(enumerator)
+    }
+    Unref(root)
+    return ok
+}
+
+// Unmounts (or ejects) the mount holding a location, asynchronously as Thunar does.
+MenuUnmount :: (location: string, eject: bool) -> bool {
+    buffer: [8192]u8
+    file := ifx IsUri(location) then FileUri(WithC(location, buffer[:])) else FilePath(WithC(location, buffer[:]))
+    if file == null { return false }
+    error: *GError
+    mount := EnclosingMount(file, null, *error)
+    if error != null { ErrorFree(error) }
+    Unref(file)
+    if mount == null { return false }
+    if eject { MountEject(mount, 0, null, null, null, null) } else { MountUnmount(mount, 0, null, null, null, null) }
+    Unref(mount)
+    return true
+}

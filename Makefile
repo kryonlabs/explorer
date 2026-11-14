@@ -6,7 +6,7 @@ SOURCES := $(wildcard src/*.zi) $(wildcard tests/*.zi) ziran.toml ziran.lock scr
 NATIVE_FLAGS := -std=c99 -O2 -ffunction-sections -fdata-sections -Wl,--gc-sections
 HOST_TEST_ENV := python3 tests/private_desktop.py --headless env -u GTK_THEME HOME=$(CURDIR)/build/host-test-fixture XDG_CONFIG_HOME=$(CURDIR)/build/host-test-fixture/config XDG_DATA_HOME=$(CURDIR)/build/host-test-fixture/data-home
 
-.PHONY: test-native-status test-native-theme test-locations test-thunar test-split test-split-native test-tabs test-tabs-native build check test test-ui test-installed test-file-clipboard test-filenames test-bookmarks test-bookmarks-native test-tree test-tree-native test-location test-location-native run install clean test-saved
+.PHONY: test-context-menu test-drag-menu test-native-status test-native-theme test-locations test-thunar test-split test-split-native test-tabs test-tabs-native build check test test-ui test-installed test-file-clipboard test-filenames test-bookmarks test-bookmarks-native test-tree test-tree-native test-location test-location-native run install clean test-saved
 
 build:
 	build-queue -- $(ZIRAN) build
@@ -180,3 +180,16 @@ test-split: build test-split-native
 .PHONY: test-operation-history
 test-operation-history:
 	build-queue -- python3 tests/operation_history_test.py
+
+build/context-menu-probe: $(SOURCES)
+	build-queue -- $(ZIRAN) build --project --target=c --exe --entry context_menu_probe:main -o build/context-menu-probe-c tests/context_menu_probe.zi
+	cp build/context-menu-probe-c/context_menu_probe build/context-menu-probe
+
+# Installed Thunar is the oracle: its real menus (AT-SPI) against Explorer's.
+test-context-menu: build/context-menu-probe
+	EXPLORER_OWNER_HOME=$(HOME) EXPLORER_MENU_PROBE=$(CURDIR)/build/context-menu-probe-c/context_menu_probe \
+		python3 tests/private_desktop.py python3 tests/context_menu_oracle.py
+
+# XDND drags to a python-xlib target, Thunar and Chromium; menu actions.
+test-drag-menu: build build/context-menu-probe
+	python3 tests/private_desktop.py python3 tests/drag_menu_test.py

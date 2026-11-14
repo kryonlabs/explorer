@@ -32,10 +32,41 @@ Poll :: () { unused Native.MimeClipboardPump(32) }
 Copy :: (state: *State, manager: *Model.Manager, cut: bool) -> bool {
     pending: Model.Clipboard
     if !Model.SnapshotSelection(manager, cut, *pending) { return false }
+    return Publish(state, manager, *pending)
+}
+
+// Copy or cut explicit locations, such as a side-pane folder.
+CopyPaths :: (state: *State, manager: *Model.Manager, paths: []string, cut: bool) -> bool {
+    pending: Model.Clipboard
+    for path: paths {
+        if Model.IsUri(path) { Model.SetError(manager, "This item has no local path for file operations"); return false }
+        owned: Text = TextCopy(path)
+        complete := owned.bytes.count == path.count
+        if !complete || !VecPush(pending.text, owned) {
+            Model.SetError(manager, "Cannot retain the complete file selection"); return false
+        }
+        if !VecPush(pending.paths, TextView(pending.text[pending.text.count - 1])) {
+            Model.SetError(manager, "Cannot retain the complete file selection"); return false
+        }
+    }
+    if pending.paths.count == 0 { return false }
+    pending.mode = ifx cut then Model.ClipboardMode.ClipboardCut else Model.ClipboardMode.ClipboardCopy
+    return Publish(state, manager, *pending)
+}
+
+// Thunar enables Paste when the clipboard owner offers GNOME file targets.
+CanPaste :: (state: *State) -> bool {
+    if !Native.MimeClipboardOpen() { return state.clipboard.mode != .ClipboardNone && state.clipboard.paths.count > 0 }
+    buffer: [512]u8
+    result := Native.MimeClipboardRead(Files.GNOME_FILES, buffer[:], 300)
+    return result.status == .Ok || result.status == .TooLarge
+}
+
+Publish :: (state: *State, manager: *Model.Manager, pending: *Model.Clipboard) -> bool {
     available := Native.MimeClipboardOpen()
     if available {
-        uris: Text = Files.Encode(*pending, Files.URI_LIST)
-        gnome: Text = Files.Encode(*pending, Files.GNOME_FILES)
+        uris: Text = Files.Encode(pending, Files.URI_LIST)
+        gnome: Text = Files.Encode(pending, Files.GNOME_FILES)
         if uris.bytes.count == 0 || gnome.bytes.count == 0 {
             Model.SetError(manager, "File selection cannot be represented on the desktop clipboard")
             return false
@@ -57,8 +88,8 @@ Copy :: (state: *State, manager: *Model.Manager, cut: bool) -> bool {
     return true
 }
 
-Paste :: (state: *State, manager: *Model.Manager) -> bool {
-    if !Native.MimeClipboardOpen() { return Model.PasteClipboard(manager, *state.clipboard, *state.changed) }
+Paste :: (state: *State, manager: *Model.Manager, directory: string = "") -> bool {
+    if !Native.MimeClipboardOpen() { return Model.PasteClipboard(manager, *state.clipboard, *state.changed, directory) }
     buffer: Vec(u8)
     if !VecResize(buffer, Files.MAX_PAYLOAD) {
         Model.SetError(manager, "Cannot allocate desktop file clipboard buffer"); return false
@@ -98,7 +129,7 @@ Paste :: (state: *State, manager: *Model.Manager) -> bool {
         Model.SetError(manager, "This cut selection has already been pasted"); return false
     }
     cut := state.clipboard.mode == .ClipboardCut
-    ok := Model.PasteClipboard(manager, *state.clipboard, *state.changed)
+    ok := Model.PasteClipboard(manager, *state.clipboard, *state.changed, directory)
     if cut && state.clipboard.paths.count == 0 && state.owned == result.owner {
         unused Native.MimeClipboardRelease(state.owned)
         state.owned = 0

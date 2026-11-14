@@ -17,6 +17,7 @@ using Options :: #import "std/option";
 libc :: #system_library "c";
 SymbolicLinkRaw :: (target: *u8, path: *u8) -> s32 #foreign libc "symlink";
 MatchPattern :: (pattern: *u8, name: *u8, flags: s32) -> s32 #foreign libc "fnmatch";
+AccessRaw :: (path: *u8, mode: s32) -> s32 #foreign libc "access";
 
 #scope_export
 MAX_ENTRIES :: 4096;
@@ -78,6 +79,7 @@ PromptKind :: enum {
     PromptBookmarkRename :: 6
     PromptDelete :: 7
     PromptSelectPattern :: 8
+    PromptEmptyTrash :: 9
 }
 
 #scope_export
@@ -1418,15 +1420,17 @@ Paste :: (manager: *Manager) -> bool {
     return PasteClipboard(manager, *manager.clipboard)
 }
 
-PasteClipboard :: (manager: *Manager, clipboard: *Clipboard, changed: *u64 = null) -> bool {
-    if !LocalDestination(manager) || clipboard.paths.count == 0 { return false }
+PasteClipboard :: (manager: *Manager, clipboard: *Clipboard, changed: *u64 = null, directory: string = "") -> bool {
+    if directory == "" && !LocalDestination(manager) { return false }
+    if clipboard.paths.count == 0 { return false }
+    destination := ifx directory == "" then manager.cwd else directory
     batch: Operations.Batch
     if !BeginOperation(manager, *batch, clipboard.paths.count) { return false }
     ok := true
     completed: s64 = 0
     failed_path := ""
     for path: clipboard.paths {
-        target: Text = UniquePath(manager.cwd, Files.PathName(path))
+        target: Text = UniquePath(destination, Files.PathName(path))
         if !PerformOperation(*batch, path, target, ifx clipboard.mode == .ClipboardCut then 0 else 1) {
             failed_path = path; ok = false; break
         }
@@ -1455,6 +1459,88 @@ CopyOrLinkSelection :: (manager: *Manager, link: bool) -> bool {
         if !PerformOperation(*batch, path, target, ifx link then 2 else 1) {
             return FinishOperation(manager, *batch, false, path)
         }
+    }
+    return FinishOperation(manager, *batch, true)
+}
+
+// Explicit-location operations for drops, Send To and side-pane menus.
+// action: 0 move, 1 copy, 2 link, as PerformOperation. Moving an item onto
+// its own folder is a no-op, and a folder never enters itself.
+TransferInto :: (manager: *Manager, paths: []string, directory: string, action: s32, changed: *bool = null) -> bool {
+    if paths.count == 0 || directory == "" || IsUri(directory) { SetError(manager, "This location has no local destination for file operations"); return false }
+    batch: Operations.Batch
+    if !BeginOperation(manager, *batch, paths.count * 2) { return false }
+    for path: paths {
+        if IsUri(path) { return FinishOperation(manager, *batch, false, path) }
+        if action == 0 && Files.PathParent(path) == directory { continue }
+        if action != 2 && Files.PathQuery(path, false).info.kind == .Directory && IsWithin(directory, path) {
+            SetError(manager, "A folder cannot be moved or copied into itself")
+            Operations.Finish(*manager.operations, *batch)
+            return false
+        }
+        target: Text = UniquePath(directory, Files.PathName(path))
+        if target.bytes.count == 0 || !PerformOperation(*batch, path, target, action) { return FinishOperation(manager, *batch, false, path) }
+        if changed != null { changed[0] = true }
+    }
+    return FinishOperation(manager, *batch, true)
+}
+
+// Thunar's drop rule: an unmodified copy becomes a move when every source
+// folder is writable and on the destination's filesystem.
+DropAction :: (paths: []string, directory: string, suggested: s32) -> s32 {
+    if suggested != 1 { return suggested }
+    destination := Files.PathQuery(directory)
+    if !destination.valid { return 1 }
+    for path: paths {
+        if IsUri(path) { return 1 }
+        parent := Files.PathParent(path)
+        info := Files.PathQuery(path, false)
+        if !info.valid || !PathWritable(parent) { return 1 }
+        if info.info.device_major != destination.info.device_major || info.info.device_minor != destination.info.device_minor { return 1 }
+    }
+    return 0
+}
+PathWritable :: (path: string) -> bool {
+    buffer: [4096]u8
+    if !Strings.CopyCString(path, buffer[:]) { return false }
+    return AccessRaw(*buffer[0], 2) == 0
+}
+
+CreateIn :: (manager: *Manager, directory: string, name: string, folder: bool, template: string = "", changed: *bool = null) -> bool {
+    if directory == "" || IsUri(directory) { SetError(manager, "This location has no local destination for file operations"); return false }
+    if !ValidName(name) { SetError(manager, "Enter a file name without slashes"); return false }
+    batch: Operations.Batch
+    if !BeginOperation(manager, *batch, 1) { return false }
+    path: Text = OperationPath(directory, name)
+    action: s32 = ifx folder then 3 else 4
+    ok := ifx template != "" then PerformOperation(*batch, template, path, 1) else PerformOperation(*batch, "", path, action)
+    if changed != null && batch.steps.count > 0 { changed[0] = true }
+    return FinishOperation(manager, *batch, ok, path)
+}
+
+RenamePathTo :: (manager: *Manager, path: string, name: string, changed: *bool = null) -> bool {
+    if IsUri(path) || !ValidName(name) { SetError(manager, "Enter a file name without slashes"); return false }
+    if Files.PathName(path) == name { return true }
+    batch: Operations.Batch
+    if !BeginOperation(manager, *batch, 1) { return false }
+    target: Text = OperationPath(Files.PathParent(path), name)
+    ok := PerformOperation(*batch, path, target, 0)
+    if changed != null && ok { changed[0] = true }
+    return FinishOperation(manager, *batch, ok, target)
+}
+
+// Permanent deletion outside Explorer's journal (emptying the Trash) is a history barrier.
+CloseHistory :: (manager: *Manager) { Operations.Close(*manager.operations) }
+
+DeletePaths :: (manager: *Manager, paths: []string, use_trash: bool) -> bool {
+    if paths.count == 0 { return false }
+    batch: Operations.Batch
+    if use_trash && !BeginOperation(manager, *batch, paths.count * 2) { return false }
+    if !use_trash { Operations.Close(*manager.operations) }
+    for path: paths {
+        if IsUri(path) { return FinishOperation(manager, *batch, false, path) }
+        ok := ifx use_trash then TrashRecorded(*batch, path) else Files.RemoveTree(path)
+        if !ok { return FinishOperation(manager, *batch, false, path) }
     }
     return FinishOperation(manager, *batch, true)
 }

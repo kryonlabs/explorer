@@ -165,6 +165,26 @@ clipboard exchange require actual local paths; they never treat a remote URI
 as a local filename. URI completion, authenticated mounts and remote writes are
 not implemented.
 
+Drag a file (or the selection) out of the view to another application:
+browsers' upload areas, Thunar or another file manager, the desktop and
+editors receive it through XDND as `text/uri-list` file URIs (with the plain
+paths as text). The drag starts after the pointer moves 8 pixels, so a plain
+click still selects; copy, move and link are offered and Control, Shift and
+Control+Shift choose one, as in GTK. Dropping on one of Explorer's folders,
+Places or Tree rows, or on a pane's background, copies, moves or links there
+with Thunar's rule: on the same filesystem an unmodified drag moves. Files
+another application drops on the window go to the active folder.
+
+Right-click a file, a selection, a folder, a folder's background, a Places row
+or a Tree row (or press Shift+F10) for Thunar 4.20's context menu: the same
+entries, order, enabled states and actions, including Open With and its
+chooser, Send To, Create Document from Templates, custom actions from
+`~/.config/Thunar/uca.xml`, the archive and wallpaper plugins' entries when
+installed, Arrange Items and Zoom. `make test-context-menu` compares every case
+with the installed Thunar's real menus; Configure Columns... and Expandable
+Folders appear disabled because Explorer has neither feature yet, and Bulk
+Rename... opens Thunar's renamer.
+
 Places remains the default side pane. Tree opens the local Home/File System
 tree; Ctrl+E toggles Tree visibility, and Ctrl+B toggles Places visibility.
 Either shortcut switches to its pane when the other pane is visible
@@ -187,8 +207,8 @@ directories, disappearing entries, symlink ancestor cycles and resource limits
 report an error while retaining the prior branch. Limits are 4096 cached rows,
 64 levels, 4095 path bytes and 65536 scanned entries per directory. The tree
 does not watch filesystem changes automatically; refresh explicitly. Long labels
-can be explored with horizontal scrolling. Remote locations, devices and
-drag/drop remain pending; switching panes preserves bookmark records.
+can be explored with horizontal scrolling. Tree rows accept dropped files.
+Remote locations and devices remain pending; switching panes preserves bookmark records.
 
 Copy, Cut and Paste (also Ctrl+C/X/V outside prompts) exchange local file
 selections with desktop file managers on X11/XWayland. Explorer publishes both
@@ -211,7 +231,7 @@ to prevent repeated moves. Re-copying identical bytes from the same foreign
 owner window cannot be distinguished from retrying that cut; copy again with
 a changed selection to reset it. Partial local cuts keep the original desktop
 offer until completion; other applications may encounter already moved paths.
-Native Wayland clipboard access and drag/drop are not implemented here.
+Native Wayland clipboard access and Wayland-native drag and drop are not implemented here.
 
 List shows resizable Name, Size, Type and Date Modified columns. GTK measures
 the headers and actual cell text; columns grow with their contents and Name
@@ -250,6 +270,8 @@ make test-native-status # installed Thunar footer oracle, locales and live metad
 make test-native-window # actual native cursors, themed window icon and scrollbar gestures
 make test-window-lifecycle # source/saved close-all authentication and private window shortcuts
 make test-interactions # real menu-hover, Delete/keypad, editor and window shortcuts
+make test-context-menu # every context menu against the installed Thunar's (AT-SPI)
+make test-drag-menu  # XDND drops on a probe, Thunar and Chromium; menu actions
 make install
 make test-installed
 ```

@@ -16,6 +16,10 @@ def main():
     root = Path(tempfile.mkdtemp(prefix="private-desktop-", dir=build))
     try:
         env = os.environ.copy()
+        # Keep the user's Python packages (python-xlib for XDND probes)
+        # importable after HOME moves to the private directory.
+        import site
+        env.setdefault("PYTHONUSERBASE", site.getuserbase())
         for key in ("DISPLAY", "WAYLAND_DISPLAY", "WAYLAND_SOCKET", "XAUTHORITY",
                     "DBUS_SESSION_BUS_ADDRESS", "SESSION_MANAGER", "ICEAUTHORITY"):
             env.pop(key, None)
@@ -32,9 +36,14 @@ def main():
         if command[0] == "--headless":
             command = command[1:]
         else:
-            command = ["unshare", "--user", "--map-current-user", "--keep-caps", "--mount",
-                       "--propagation", "private", "dbus-run-session", "--", "xvfb-run", "-a",
-                       "-s", "-screen 0 1600x1200x24", *command]
+            private = ["dbus-run-session", "--", "xvfb-run", "-a", "-s", "-screen 0 1600x1200x24", *command]
+            namespace = ["unshare", "--user", "--map-current-user", "--keep-caps", "--mount",
+                         "--propagation", "private"]
+            # Some supervised shells forbid changing mount propagation. The
+            # private bus, Xvfb display and scrubbed environment stay the same.
+            probe = subprocess.run([*namespace, "true"], env=env, stdout=subprocess.DEVNULL,
+                                   stderr=subprocess.DEVNULL)
+            command = [*namespace, *private] if probe.returncode == 0 else private
         return subprocess.run(command, env=env).returncode
     finally:
         # D-Bus-activated test services can finish their final state writes just
