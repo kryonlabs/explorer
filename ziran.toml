@@ -7,12 +7,12 @@ tool = "kryon"
 links = ["xcb", "gtk-3", "gdk-3", "gio-2.0", "gobject-2.0", "glib-2.0", "pango-1.0", "pangocairo-1.0", "cairo", "gdk_pixbuf-2.0"]
 
 [toolchain]
-git = "https://github.com/ziranlang/ziran.git"
-ref = "6582e55febc6c6f60d1e6570ae9b81b41444fe25"
+git = "https://git.waozi.xyz/ziranlang/ziran.git"
+ref = "5db3d3c39425d5dfe4bfe4a84e6f6e2e5a810ad0"
 
 [dependencies.kryon]
-git = "https://github.com/kryonlabs/kryon.git"
-ref = "9e5c5c2d6e5980375dc73f7b6254002aa9a72769"
+git = "https://git.waozi.xyz/kryonlabs/kryon.git"
+ref = "54e5b07fc9e8d97f3a1fdb2a269dcf8c70c88572"
 
 [exports]
 model = "src/model.zi"
@@ -41,5 +41,5 @@ comment = "Ziran file manager"
 categories = "Utility;FileManager;Core;"
 
 [dependencies.data_views]
-git = "https://github.com/kryonlabs/data-views.git"
-ref = "942fea7809063407e2b4fa9611a2247ab6b3b894"
+git = "https://git.waozi.xyz/kryonlabs/data-views.git"
+ref = "27914331912026561572f4bce277cf78e854cb8b"
