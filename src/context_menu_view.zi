@@ -111,6 +111,7 @@ PanelInsets :: () -> GtkStyleInsets {
 Layout :: struct {
     rows: Vec(s32)
     toggles: bool
+    icons: bool
     arrows: bool
     width: float32
     height: float32
@@ -124,11 +125,12 @@ Measure :: (menu: *FileMenu, parent: s32, layout: *Layout, separator: float32) {
     insets := PanelInsets()
     widest: s32 = 0
     layout.height = cast(float32)(insets.top + insets.bottom)
-    layout.toggles = false; layout.arrows = false
+    layout.toggles = false; layout.arrows = false; layout.icons = false
     for index: layout.rows {
         layout.height += RowHeight(menu, index, separator)
         if menu.items[index].separator { continue }
         if menu.items[index].check != 0 { layout.toggles = true }
+        if menu.items[index].icon != "" { layout.icons = true }
         if menu.items[index].submenu { layout.arrows = true }
         text := GtkTextMeasure(item[:], FileMenuLabel(menu, index), 0, 1)
         if text.width > widest { widest = text.width }
@@ -136,6 +138,7 @@ Measure :: (menu: *FileMenu, parent: s32, layout: *Layout, separator: float32) {
     width := widest + style.padding.left + style.padding.right + style.border.left + style.border.right +
         insets.left + insets.right + 40
     if layout.toggles { width += 22 }
+    if layout.icons { width += 22 }
     if layout.arrows { width += 22 }
     layout.width = cast(float32)width
 }
@@ -295,6 +298,13 @@ DrawMenuView :: (state: *MenuViewState, menu: *FileMenu, session: Session, p: *G
                     indicator := MenuNodes(ifx item.check == 2 then "radio" else "check",
                         gtk_state | (ifx item.checked then cast(u32)GtkStyleChecked else cast(u32)0))
                     GtkPainterPaint(p, indicator[:], .{left, row.y + (row.height - 16.0) * 0.5, 16.0, 16.0}, "", ifx item.check == 2 then 10 else 9)
+                }
+                left += 22.0
+            }
+            if layouts[level].icons {
+                if item.icon != "" {
+                    image_nodes := MenuNodes("image", gtk_state)
+                    GtkPainterPaint(p, image_nodes[:], .{left, row.y + (row.height - 16.0) * 0.5, 16.0, 16.0}, item.icon, 6)
                 }
                 left += 22.0
             }

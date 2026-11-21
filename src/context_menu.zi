@@ -38,6 +38,8 @@ DefaultForType :: (content: *u8, uris: s32) -> *void #foreign gio "g_app_info_ge
 DefaultHandler :: (file: *void, cancel: *void, error: **GError) -> *void #foreign gio "g_file_query_default_handler";
 AppEqual :: (left: *void, right: *void) -> s32 #foreign gio "g_app_info_equal";
 AppName :: (app: *void) -> *u8 #foreign gio "g_app_info_get_name";
+AppIcon :: (app: *void) -> *void #foreign gio "g_app_info_get_icon";
+IconString :: (icon: *void) -> *u8 #foreign gio "g_icon_to_string";
 AppSupportsUris :: (app: *void) -> s32 #foreign gio "g_app_info_supports_uris";
 AppLaunch :: (app: *void, files: *List, context: *void, error: **GError) -> s32 #foreign gio "g_app_info_launch";
 AppSetDefault :: (app: *void, content: *u8, error: **GError) -> s32 #foreign gio "g_app_info_set_as_default_for_type";
@@ -90,10 +92,13 @@ FileMenuItem :: struct {
     // Its id is its index plus one; submenu rows hold children naming them.
     parent: s32
     label: string
+    // Serialized native GIcon; owned by texts or a static theme identity.
+    icon: string
     text: s32
     separator: bool
     submenu: bool
     enabled: bool
+    paste_allowed: bool
     // 0 none, 1 check box, 2 radio option.
     check: s32
     checked: bool
@@ -185,6 +190,12 @@ FileMenu :: struct {
 FileMenuLabel :: (menu: *FileMenu, index: s32) -> string {
     if index < 0 || index >= menu.items.count { return "" }
     return menu.items[index].label
+}
+
+FileMenuUpdatePaste :: (menu: *FileMenu, can_paste: bool) {
+    for * item: menu.items {
+        if item.action == .Paste || item.action == .PasteIntoFolder { item.enabled = item.paste_allowed && can_paste }
+    }
 }
 
 FileMenuRelease :: (menu: *FileMenu) {
@@ -310,6 +321,7 @@ Add :: (menu: *FileMenu, parent: s32, label: string, action: MenuAction, enabled
     item: FileMenuItem
     item.parent = parent; item.label = label; item.text = -1; item.enabled = enabled
     item.action = action; item.payload = payload
+    if action == .Open || action == .OpenInTab || action == .OpenInWindow { item.icon = "system-file-manager" }
     if !VecPush(menu.items, item) { return 0 }
     return cast(s32)menu.items.count
 }
@@ -395,6 +407,18 @@ KeepApp :: (menu: *FileMenu, app: *void) -> s32 {
     return cast(s32)menu.apps.count - 1
 }
 
+AddApplication :: (menu: *FileMenu, parent: s32, label: string, index: s32) {
+    if index < 0 { return }
+    id := AddOwned(menu, parent, label, .OpenWithApp, true, index)
+    if id <= 0 { return }
+    icon := AppIcon(menu.apps[index].app)
+    if icon == null { menu.items[id - 1].icon = "application-x-executable"; return }
+    identity: Text = Taken(IconString(icon))
+    if identity.bytes.count == 0 { menu.items[id - 1].icon = "application-x-executable"; return }
+    text := KeepText(menu, TextView(identity))
+    if text >= 0 { menu.items[id - 1].icon = TextView(menu.texts[text]) }
+}
+
 OpenSection :: (menu: *FileMenu, context: *MenuContext, tabs: bool, change_directory: bool, force: bool) -> bool {
     if !menu.selected && !force { return false }
     apps := Applications(menu, menu.targets[0:menu.count])
@@ -412,7 +436,7 @@ OpenSection :: (menu: *FileMenu, context: *MenuContext, tabs: bool, change_direc
         label: Vec(u8)
         BuilderPrint(*label, "Open With \"%\"", TextFromCString(AppName(apps[0].app)))
         index := KeepApp(menu, apps[0].app)
-        unused AddOwned(menu, 0, TextView(label[:label.count]), .OpenWithApp, true, index)
+        AddApplication(menu, 0, TextView(label[:label.count]), index)
         VecFree(label)
         at = 1
     } else if menu.n_files > 1 {
@@ -432,7 +456,7 @@ OpenSection :: (menu: *FileMenu, context: *MenuContext, tabs: bool, change_direc
         sub := Submenu(menu, 0, "Open With")
         while at < apps.count {
             index := KeepApp(menu, apps[at].app)
-            unused AddOwned(menu, sub, TextFromCString(AppName(menu.apps[index].app)), .OpenWithApp, true, index)
+            if index >= 0 { AddApplication(menu, sub, TextFromCString(AppName(menu.apps[index].app)), index) }
             at += 1
         }
         if menu.n_files == 1 {
@@ -917,10 +941,14 @@ Sections :: (menu: *FileMenu, context: *MenuContext, sections: s32, force_open: 
     if (sections & COPY_PASTE) != 0 {
         if menu.selected || force { unused Add(menu, 0, "Copy", .Copy, menu.selected); added = true }
         if menu.single_directory && menu.selected {
-            unused Add(menu, 0, "Paste Into Folder", .PasteIntoFolder, context.can_paste && Writable(*menu.targets[0]))
+            allowed := Writable(*menu.targets[0])
+            id := Add(menu, 0, "Paste Into Folder", .PasteIntoFolder, context.can_paste && allowed)
+            if id > 0 { menu.items[id - 1].paste_allowed = allowed }
             added = true
         } else if !added {
-            unused Add(menu, 0, "Paste", .Paste, context.can_paste && Writable(Current(menu)) && !context.searching)
+            allowed := Writable(Current(menu)) && !context.searching
+            id := Add(menu, 0, "Paste", .Paste, context.can_paste && allowed)
+            if id > 0 { menu.items[id - 1].paste_allowed = allowed }
             added = true
         }
     }

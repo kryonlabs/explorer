@@ -184,6 +184,10 @@ installed, Arrange Items and Zoom. `make test-context-menu` compares every case
 with the installed Thunar's real menus; Configure Columns... and Expandable
 Folders appear disabled because Explorer has neither feature yet, and Bulk
 Rename... opens Thunar's renamer.
+Paste availability follows asynchronous clipboard format notifications, so
+opening a menu never waits for another application to transfer file data.
+Open and Open With entries show the application's native icon, including
+theme icons and icons supplied by desktop files.
 
 Places remains the default side pane. Tree opens the local Home/File System
 tree; Ctrl+E toggles Tree visibility, and Ctrl+B toggles Places visibility.

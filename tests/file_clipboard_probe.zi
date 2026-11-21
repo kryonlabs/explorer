@@ -2,6 +2,11 @@ Model :: #import "model";
 Files :: #import "file_clipboard";
 Desktop :: #import "desktop_file_clipboard";
 Native :: #import "kryon/MimeClipboardLinux";
+using Bytes :: #import "std/byte_text_linux";
+glib :: #system_library "glib-2.0";
+libc :: #system_library "c";
+Now :: () -> s64 #foreign glib "g_get_monotonic_time";
+Pause :: (microseconds: u32) -> s32 #foreign libc "usleep";
 
 // Native adapter test without a renderer: filenames may contain bytes that
 // cannot be represented as a UTF-8 URI. A failed publish must retain both lists.
@@ -10,6 +15,28 @@ main :: (argc: s32, argv: **u8) -> s32 {
     if !Native.MimeClipboardOpen() { return 1 }
     manager: Model.Manager
     state: Desktop.State
+    if argc > 1 && TextFromCString(argv[1]) == "--formats" {
+        start := Now()
+        available := false
+        while Now() - start < 200000 {
+            available = Desktop.CanPaste(*state)
+            if available { break }
+            unused Pause(1000)
+        }
+        if !available { return 8 }
+        print("file targets available without reading payload (% us)\n", Now() - start)
+        if argc > 2 {
+            // A GTK owner republishes plain text from its existing window.
+            owner := Native.MimeClipboardOwner()
+            deadline := Now() + 4000000
+            while Desktop.CanPaste(*state) && Now() < deadline { unused Pause(1000) }
+            if Desktop.CanPaste(*state) || Native.MimeClipboardOwner() != owner { return 9 }
+            print("same-window format replacement invalidates Paste\n")
+        }
+        Desktop.Close(*state)
+        Native.MimeClipboardClose()
+        return 0
+    }
     if !Files.Parse(*state.clipboard, Files.GNOME_FILES, "cut\nfile:///prior\n") { return 2 }
     raw := u8.[47, 255]
     if !Model.AppendEntry(*manager, "unsupported path", TextView(raw[:]), .{.kind = .File}) { return 3 }

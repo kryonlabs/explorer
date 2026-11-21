@@ -2867,6 +2867,8 @@ DrawContextMenu :: (host: *Host, session: Session, viewport: Rectangle, focused:
     if host.request.pending { OpenContextMenu(host, session) }
     if !host.context_view.open { return false }
     if !PopupOwnerValid(host) { CloseContextMenu(host); return false }
+    // The async clipboard format reply may arrive after the popup's first frame.
+    FileMenuUpdatePaste(*host.context_menu, FileClipboard.CanPaste(*host.file_clipboard))
     result := DrawMenuView(*host.context_view, *host.context_menu, session, *host.paint, viewport, key, focused)
     if result.activated >= 0 { RunContextAction(host, result.activated) }
     if !host.context_view.open { CloseContextMenu(host) }

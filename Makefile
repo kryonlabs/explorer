@@ -186,7 +186,8 @@ build/context-menu-probe: $(SOURCES)
 	cp build/context-menu-probe-c/context_menu_probe build/context-menu-probe
 
 # Installed Thunar is the oracle: its real menus (AT-SPI) against Explorer's.
-test-context-menu: build/context-menu-probe
+test-context-menu: build build/context-menu-probe
+	python3 tests/private_desktop.py python3 tests/context_menu_latency_test.py
 	EXPLORER_OWNER_HOME=$(HOME) EXPLORER_MENU_PROBE=$(CURDIR)/build/context-menu-probe-c/context_menu_probe \
 		python3 tests/private_desktop.py python3 tests/context_menu_oracle.py
 

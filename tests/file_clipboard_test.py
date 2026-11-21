@@ -56,6 +56,16 @@ def gtk_peer():
     gtk.gtk_clipboard_set_with_data.argtypes = [C.c_void_p, C.POINTER(Entry), C.c_uint,
                                                get_cb, clear_cb, C.c_void_p]
     assert gtk.gtk_clipboard_set_with_data(clipboard, entries, 1, get, clear, None)
+    if sys.argv[1] == '--replace-targets':
+        glib = C.CDLL('libglib-2.0.so.0')
+        timeout_cb = C.CFUNCTYPE(C.c_int, C.c_void_p)
+        gtk.gtk_clipboard_set_text.argtypes = [C.c_void_p, C.c_char_p, C.c_int]
+        @timeout_cb
+        def replace(_data):
+            gtk.gtk_clipboard_set_text(clipboard, b'ordinary text', -1)
+            return 0
+        glib.g_timeout_add.argtypes = [C.c_uint, timeout_cb, C.c_void_p]
+        glib.g_timeout_add(800, replace, None)
     print('READY', flush=True)
     gtk.gtk_main()
 
@@ -111,11 +121,12 @@ def main():
         key(window, 'Return')
         time.sleep(.4)
 
-    def offer(mime, payload, stall=False):
+    def offer(mime, payload, stall=False, replace=False):
         nonlocal peer
         payload_path = root / 'peer-payload'
         payload_path.write_bytes(payload)
-        new = subprocess.Popen([sys.executable, __file__, '--stall' if stall else '--offer', mime, str(payload_path)],
+        mode = '--replace-targets' if replace else '--stall' if stall else '--offer'
+        new = subprocess.Popen([sys.executable, __file__, mode, mime, str(payload_path)],
                                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         processes.append(new)
         assert new.stdout.readline() == b'READY\n'
@@ -125,6 +136,12 @@ def main():
         peer = new
 
     try:
+        for probe in (repo / 'build/file-clipboard-probe',
+                      repo / 'build/file-clipboard-probe-saved-c/file_clipboard_probe'):
+            offer('x-special/gnome-copied-files', b'copy\nfile:///format-test\n', stall=True)
+            subprocess.run([str(probe), '--formats'], check=True, timeout=10)
+            offer('x-special/gnome-copied-files', b'copy\nfile:///format-test\n', replace=True)
+            subprocess.run([str(probe), '--formats', '--replacement'], check=True, timeout=10)
         explorer = start([executable], 'explorer')
         thunar = start(['thunar', root], 'thunar')
         special = 'é 世界 space\n%#?.txt'
@@ -240,7 +257,7 @@ def main():
 
 
 if __name__ == '__main__':
-    if len(sys.argv) > 1 and sys.argv[1] in ('--offer', '--read', '--stall'):
+    if len(sys.argv) > 1 and sys.argv[1] in ('--offer', '--read', '--stall', '--replace-targets'):
         gtk_peer()
     else:
         main()

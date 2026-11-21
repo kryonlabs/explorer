@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- Open context menus without waiting for clipboard file data. Track offered
+  formats asynchronously, including changes while a menu is open, and show
+  actual application icons beside Open and Open With commands.
 - Drag files out like Thunar: a primary-button drag past GTK's 8-pixel
   threshold offers the selection to other applications through XDND as
   `text/uri-list` (with plain-path text fallbacks), copy, move or link, with

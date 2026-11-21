@@ -2,6 +2,69 @@
 Model :: #import "model";
 Files :: #import "file_clipboard";
 Native :: #import "kryon/MimeClipboardLinux";
+CString :: #import "std/c_string";
+gtk :: #system_library "gtk-3";
+gdk :: #system_library "gdk-3";
+glib :: #system_library "glib-2.0";
+gobject :: #system_library "gobject-2.0";
+GtkInit :: (argc: *s32, argv: ***u8) -> s32 #foreign gtk "gtk_init_check";
+Atom :: (name: *u8, only_exists: s32) -> *void #foreign gdk "gdk_atom_intern";
+GtkClipboard :: (selection: *void) -> *void #foreign gtk "gtk_clipboard_get";
+RequestTargets :: (clipboard: *void, callback: *void, data: *void) #foreign gtk "gtk_clipboard_request_targets";
+Connect :: (object: *void, signal: *u8, callback: *void, data: *void, destroy: *void, flags: s32) -> u64 #foreign gobject "g_signal_connect_data";
+Iterate :: (context: *void, block: s32) -> s32 #foreign glib "g_main_context_iteration";
+TargetsCallback :: #type (*void, **void, s32, *void) -> void #c_call;
+ChangedCallback :: #type (*void, *void, *void) -> void #c_call;
+
+// Observe formats, never transfer file contents just to enable a menu row.
+// Callbacks retain only process-lifetime module state, never a Host or State.
+targets_clipboard: *void;
+targets_atom: *void;
+targets_owner: u64;
+targets_serial: usize;
+targets_files: bool;
+targets_attempted: bool;
+
+TargetsReady :: (clipboard: *void, atoms: **void, count: s32, data: *void) {
+    if cast(usize)data != targets_serial { return }
+    targets_files = false
+    for i: cast(s32)0..count - 1 {
+        if atoms[i] == targets_atom { targets_files = true; break }
+    }
+}
+RefreshTargets :: () {
+    targets_files = false
+    targets_owner = Native.MimeClipboardOwner()
+    targets_serial += 1
+    if targets_owner == 0 { return }
+    callback: TargetsCallback = TargetsReady
+    raw := cast(**void)*callback
+    RequestTargets(targets_clipboard, raw.*, cast(*void)targets_serial)
+}
+OwnerChanged :: (clipboard: *void, event: *void, data: *void) { RefreshTargets() }
+PollTargets :: () {
+    if !targets_attempted {
+        targets_attempted = true
+        if GtkInit(null, null) != 0 {
+            selection: [16]u8
+            unused CString.CopyCString("CLIPBOARD", selection[:])
+            mime: [64]u8
+            unused CString.CopyCString(Files.GNOME_FILES, mime[:])
+            targets_atom = Atom(*mime[0], 0)
+            targets_clipboard = GtkClipboard(Atom(*selection[0], 0))
+            signal: [16]u8
+            unused CString.CopyCString("owner-change", signal[:])
+            callback: ChangedCallback = OwnerChanged
+            raw := cast(**void)*callback
+            unused Connect(targets_clipboard, *signal[0], raw.*, null, null, 0)
+            RefreshTargets()
+        }
+    }
+    if targets_clipboard == null { return }
+    // Bounded, nonblocking GTK dispatch also observes same-window republishes.
+    for i: 0..7 { if Iterate(null, 0) == 0 { break } }
+    if targets_owner != Native.MimeClipboardOwner() { RefreshTargets() }
+}
 
 #scope_export
 State :: struct {
@@ -27,7 +90,7 @@ Close :: (state: *State) {
     ForgetCut(state)
 }
 
-Poll :: () { unused Native.MimeClipboardPump(32) }
+Poll :: () { unused Native.MimeClipboardPump(32); PollTargets() }
 
 Copy :: (state: *State, manager: *Model.Manager, cut: bool) -> bool {
     pending: Model.Clipboard
@@ -57,9 +120,11 @@ CopyPaths :: (state: *State, manager: *Model.Manager, paths: []string, cut: bool
 // Thunar enables Paste when the clipboard owner offers GNOME file targets.
 CanPaste :: (state: *State) -> bool {
     if !Native.MimeClipboardOpen() { return state.clipboard.mode != .ClipboardNone && state.clipboard.paths.count > 0 }
-    buffer: [512]u8
-    result := Native.MimeClipboardRead(Files.GNOME_FILES, buffer[:], 300)
-    return result.status == .Ok || result.status == .TooLarge
+    if state.owned != 0 && state.owned == Native.MimeClipboardOwner() {
+        return state.clipboard.mode != .ClipboardNone && state.clipboard.paths.count > 0
+    }
+    PollTargets()
+    return targets_files
 }
 
 Publish :: (state: *State, manager: *Model.Manager, pending: *Model.Clipboard) -> bool {
