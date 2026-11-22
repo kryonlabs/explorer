@@ -1,0 +1,206 @@
+name: Explorer Linux release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Numeric version already recorded in CHANGELOG.md and VERSION
+        type: string
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: explorer-linux-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.ref == 'refs/heads/master'
+    runs-on: build-ubuntu24.04
+    timeout-minutes: 90
+    env:
+      RELEASE_VERSION: ${{ inputs.version }}
+      HARMONY_DESKTOP_RECOVERY: '0'
+      YUE_DESKTOP_RECOVERY: '0'
+      ZIRAN_PAR_THREADS: '1'
+    defaults:
+      run:
+        working-directory: kryonlabs/explorer
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
+        with:
+          path: kryonlabs/explorer
+          persist-credentials: false
+
+      - name: Verify the release version and revision
+        run: |
+          set -eu
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test ! -e ziran.local.toml
+          printf '%s\n' "$RELEASE_VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'
+          ./update_version.sh
+          test "$(cat VERSION)" = "$RELEASE_VERSION"
+          git diff --exit-code -- VERSION
+
+      - name: Verify native Build prerequisites
+        run: |
+          set -eu
+          test "$(uname -s):$(uname -m)" = Linux:x86_64
+          for tool in cc cmake curl desktop-file-validate dpkg-deb dpkg-shlibdeps file git import jq make pkg-config python3 readelf rg sha256sum tesseract timeout xauth xclip xdotool xwininfo xvfb-run; do
+            if ! command -v "$tool" >/dev/null; then
+              printf 'Missing Explorer Build prerequisite: %s\n' "$tool" >&2
+              exit 1
+            fi
+          done
+          python3 -c 'import PIL'
+          pkg-config --print-errors --exists cairo pangocairo fontconfig freetype2 glib-2.0 libwebpdemux libwebp gtk+-3.0 x11 xcb
+          printf 'XDG_CACHE_HOME=%s/explorer-cache\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+
+      - name: Verify public locked revisions on Gitea
+        run: |
+          set -euo pipefail
+          # Use the same public routes for the preflight and the package fetch.
+          export GIT_CONFIG_GLOBAL="$RUNNER_TEMP/explorer-gitconfig"
+          export GIT_CONFIG_NOSYSTEM=1 GIT_TERMINAL_PROMPT=0
+          while read -r upstream mirror; do
+            git config --global url."$mirror".insteadOf "$upstream"
+          done <<'MIRRORS'
+          https://github.com/ziranlang/ https://git.waozi.xyz/ziranlang/
+          https://github.com/kryonlabs/ https://git.waozi.xyz/kryonlabs/
+          https://github.com/AOMediaCodec/libavif.git https://git.waozi.xyz/vendor/aomediacodec-libavif.git
+          https://github.com/libsndfile/libsamplerate.git https://git.waozi.xyz/vendor/libsndfile-libsamplerate.git
+          https://github.com/libsdl-org/SDL.git https://git.waozi.xyz/vendor/libsdl-org-sdl.git
+          https://github.com/videolan/dav1d.git https://git.waozi.xyz/vendor/videolan-dav1d.git
+          https://github.com/webmproject/libwebp.git https://git.waozi.xyz/vendor/webmproject-libwebp.git
+          https://github.com/xiph/opus.git https://git.waozi.xyz/vendor/xiph-opus.git
+          https://aomedia.googlesource.com/aom https://git.waozi.xyz/vendor/aomedia-aom.git
+          MIRRORS
+          locked=$(jq -er '(.toolchain, .packages[]) | [.url, .commit] | @tsv' ziran.lock)
+          while IFS=$'\t' read -r url commit; do
+            remote=$(git ls-remote --get-url "$url")
+            if [[ ! "$remote" =~ ^https://git\.waozi\.xyz/[A-Za-z0-9_-]+/[A-Za-z0-9_.-]+\.git$ || ! "$commit" =~ ^[0-9a-f]{40}$ ]]; then
+              printf 'No canonical public route for locked source %s at %s\n' "$url" "$commit" >&2
+              exit 1
+            fi
+            repository=${remote#https://git.waozi.xyz/}
+            endpoint="https://git.waozi.xyz/api/v1/repos/${repository%.git}/git/commits/$commit"
+            # Thin vendor mirrors can advertise the exact commit over Git
+            # even when the REST commit endpoint cannot describe their tree.
+            refs=$(timeout 12s git -c credential.helper= ls-remote "$remote")
+            if ! awk -v commit="$commit" '$1 == commit { found = 1 } END { exit !found }' <<< "$refs" &&
+               ! curl -qfsS --connect-timeout 5 --max-time 12 "$endpoint" | jq -e --arg commit "$commit" '.sha == $commit' >/dev/null; then
+              printf 'Public locked revision is unavailable: %s at %s\n' "$repository" "$commit" >&2
+              exit 1
+            fi
+            printf 'Public lock verified: %s %s\n' "$repository" "$commit"
+          done <<< "$locked"
+          {
+            printf 'GIT_CONFIG_GLOBAL=%s\n' "$GIT_CONFIG_GLOBAL"
+            printf 'GIT_CONFIG_NOSYSTEM=1\nGIT_TERMINAL_PROMPT=0\n'
+          } >> "$GITHUB_ENV"
+
+      - name: Set up the locked compiler and packages
+        id: ziran
+        uses: https://git.waozi.xyz/ziranlang/ziran/.github/actions/setup@62d90ff97d10373f44f428bfff538f75185512e5
+        env:
+          # The setup action builds the lock's compiler before fetching sources.
+          ZIRAN_PINNED_LAUNCHER: '1'
+        with:
+          project: kryonlabs/explorer
+          path: ziranlang/ziran
+          fetch: true
+          jobs: 1
+
+      - name: Reuse the exact SDK in the locked package cache
+        env:
+          SDK_ROOT: ${{ steps.ziran.outputs.root }}
+          SDK_COMMIT: ${{ steps.ziran.outputs.commit }}
+          SDK_ORIGIN: ${{ steps.ziran.outputs.toolchain }}
+          SDK_COMPILED: ${{ steps.ziran.outputs.compiled }}
+        run: |
+          set -euo pipefail
+          test "$(jq -er .toolchain.commit ziran.lock)" = "$SDK_COMMIT"
+          test "$(git -C "$SDK_ROOT" rev-parse HEAD)" = "$SDK_COMMIT"
+          locked_root=$(ZIRAN_PINNED_LAUNCHER=1 "$SDK_ROOT/build/bin/ziran" pkg path ziran --offline --locked)
+          test "$(git -C "$locked_root" rev-parse HEAD)" = "$SDK_COMMIT"
+          if [ "$locked_root" != "$SDK_ROOT" ] &&
+             { ! diff -qr --no-dereference "$SDK_ROOT/build/bin" "$locked_root/build/bin" >/dev/null 2>&1 ||
+               ! cmp -s "$SDK_ROOT/build/libziran.a" "$locked_root/build/libziran.a"; }; then
+            install -d "$locked_root/build/bin"
+            cp -a --reflink=auto "$SDK_ROOT/build/bin/." "$locked_root/build/bin/"
+            install -m 0644 "$SDK_ROOT/build/libziran.a" "$locked_root/build/libziran.a"
+            printf 'Staged the exact SDK in the locked package checkout.\n'
+          fi
+          test -x "$locked_root/build/bin/ziran"
+          cmp "$SDK_ROOT/build/bin/ziran" "$locked_root/build/bin/ziran"
+          cmp "$SDK_ROOT/build/libziran.a" "$locked_root/build/libziran.a"
+          printf 'SDK %s from %s (%s C files compiled in setup); reused for the locked build\n' \
+            "$SDK_COMMIT" "$SDK_ORIGIN" "$SDK_COMPILED"
+          sha256sum ziran.lock "$locked_root/build/bin/ziran" "$locked_root/build/libziran.a"
+
+      - name: Build, test and package Explorer
+        env:
+          SHELL: /bin/sh
+          OMP_THREAD_LIMIT: '1'
+        run: |
+          set -eu
+          unset DISPLAY WAYLAND_DISPLAY WAYLAND_SOCKET XAUTHORITY DBUS_SESSION_BUS_ADDRESS ICEAUTHORITY SESSION_MANAGER XDG_RUNTIME_DIR XDG_SESSION_ID
+          taiji_sdk=$(scripts/ziran.sh pkg path taiji_sdk --offline --locked)
+          taiji_commit=$(jq -er '.packages[] | select(.name == "taiji_sdk") | .commit' ziran.lock)
+          test "$(git -C "$taiji_sdk" rev-parse HEAD)" = "$taiji_commit"
+          # Ziran requires explicit module paths outside its immutable package cache.
+          modules=$(mktemp -d "$RUNNER_TEMP/explorer-taiji.XXXXXXXX")
+          trap 'rm -r -- "$modules"' EXIT
+          mkdir "$modules/tcltk"
+          for module in taijios_io.zi taijios_stat.zi taijios_wm.zi tcltk/zx_surface.zi; do
+            source="$taiji_sdk/appl/cmd/$module"
+            git -C "$taiji_sdk" diff --exit-code HEAD -- "appl/cmd/$module"
+            test -s "$source"
+            install -m 0644 "$source" "$modules/$module"
+            cmp "$source" "$modules/$module"
+            sha256sum "$modules/$module"
+          done
+          make -j1 build test test-ui taiji TAIJIOS_MODULES="$modules"
+          scripts/package-deb.sh "$RELEASE_VERSION"
+          mkdir -p dist
+          install -m 644 build/explorer-linux-amd64.deb dist/explorer-linux-amd64.deb
+          install -m 644 build/explorer.zx dist/Explorer.zx
+          python3 -c 'import struct; f = open("dist/Explorer.zx", "rb"); assert struct.unpack("<4sI", f.read(8)) == (b"ZX\0\0", 28)'
+          test "$(dpkg-deb -f dist/explorer-linux-amd64.deb Package)" = explorer
+          test "$(dpkg-deb -f dist/explorer-linux-amd64.deb Architecture)" = amd64
+          test "$(dpkg-deb -f dist/explorer-linux-amd64.deb Version)" = "$RELEASE_VERSION"
+          (cd dist && sha256sum explorer-linux-amd64.deb Explorer.zx > SHA256SUMS && sha256sum -c SHA256SUMS)
+
+      - name: Publish the verified assets
+        env:
+          RELEASE_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test -n "$RELEASE_TOKEN"
+          endpoint="$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/releases"
+          tag=v$RELEASE_VERSION
+          notes=$(awk -v heading="## [$RELEASE_VERSION] - " '
+            index($0, heading) == 1 { found=1; next }
+            found && /^## / { exit }
+            found { print }
+          ' CHANGELOG.md)
+          test -n "$notes"
+          response=$(jq -cn --arg tag "$tag" --arg sha "$GITHUB_SHA" --arg body "$notes" \
+            '{tag_name:$tag, target_commitish:$sha, name:$tag, body:$body, draft:true}' |
+            curl --silent --show-error --fail-with-body \
+              --header "Authorization: token $RELEASE_TOKEN" --header 'Content-Type: application/json' \
+              --data-binary @- "$endpoint")
+          id=$(printf '%s' "$response" | jq -er --arg tag "$tag" '
+            select(.tag_name == $tag and .draft == true) | .id | select(type == "number")')
+          for asset in explorer-linux-amd64.deb Explorer.zx SHA256SUMS; do
+            expected_size=$(stat -c %s "dist/$asset")
+            curl --silent --show-error --fail-with-body --header "Authorization: token $RELEASE_TOKEN" \
+              --form "attachment=@dist/$asset" "$endpoint/$id/assets?name=$asset" |
+                jq -e --arg name "$asset" --argjson size "$expected_size" '.name == $name and .size == $size'
+          done
+          curl --silent --show-error --fail-with-body \
+            --header "Authorization: token $RELEASE_TOKEN" --header 'Content-Type: application/json' \
+            --request PATCH --data-binary '{"draft":false}' "$endpoint/$id" |
+              jq -e --arg tag "$tag" '.tag_name == $tag and .draft == false'

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-11-22
+
+- Ship Explorer as a Linux amd64 Debian package and a ZX 28 application for TaijiOS.
+
 - Run the shared Explorer frame and model in TaijiOS through typed guest
   filesystem and window adapters. Support location editing, navigation, sorting,
   scrolling, text preview, exclusive file and folder creation, regular-file copy,

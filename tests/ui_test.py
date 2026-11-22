@@ -468,8 +468,9 @@ def main():
             def theme_tests(system=False):
                 themed = fixture / "theme-files"
                 themed.mkdir()
+                # Multiple lines give antialiased glyphs enough solid foreground pixels to sample.
                 for index in range(3):
-                    (themed / f"note{index}.txt").write_text("Readable themed text\n")
+                    (themed / f"note{index}.txt").write_text("Readable themed text\n" * 5)
                 alpha_only = fixture / "theme-alpha"
                 alpha_only.mkdir()
                 Image.new("RGBA", (1600, 1000), (0, 0, 0, 0)).save(alpha_only / "alpha.png")
@@ -525,7 +526,7 @@ def main():
                     key("Home", "ctrl+p")
                     with Image.open(capture("theme-" + name.lower() + "-text")) as shot:
                         rendered = shot.convert("RGB")
-                        assert foreground_count(rendered, (12, 80, width // 2, 110), fg) > 8, (name, "preview text")
+                        assert foreground_count(rendered, (12, 80, width // 2, 180), fg) > 8, (name, "preview text")
                     key("Escape", "ctrl+l", "End")
                     with Image.open(capture("theme-" + name.lower() + "-prompt")) as shot:
                         rendered = shot.convert("RGB")

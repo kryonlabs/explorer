@@ -18,7 +18,7 @@ test-guest-files:
 .PHONY: test-context-menu test-drag-menu test-native-status test-native-theme test-locations test-thunar test-split test-split-native test-tabs test-tabs-native build check test test-ui test-installed test-file-clipboard test-filenames test-bookmarks test-bookmarks-native test-tree test-tree-native test-location test-location-native run install clean test-saved
 
 build:
-	build-queue -- $(ZIRAN) build
+	$(ZIRAN) build
 
 check:
 	build-queue -- $(ZIRAN) check
@@ -29,11 +29,11 @@ run:
 	build-queue -- $(ZIRAN) run
 
 build/model-test: $(SOURCES)
-	build-queue -- $(ZIRAN) build --project --target=c --exe --entry model_test:main -o build/model-test-c tests/model_test.zi
+	$(ZIRAN) build --project --target=c --exe --entry model_test:main -o build/model-test-c tests/model_test.zi
 	cp build/model-test-c/model_test build/model-test
 
 build/host-test: $(SOURCES)
-	build-queue -- $(ZIRAN) build --project --target=c --exe --entry host_test:main -o build/host-test-c tests/host_test.zi
+	$(ZIRAN) build --project --target=c --exe --entry host_test:main -o build/host-test-c tests/host_test.zi
 	cp build/host-test-c/host_test build/host-test
 
 test: build/model-test build/host-test test-operation-history
@@ -50,11 +50,11 @@ test-native-theme: build/host-test
 	python3 tests/private_desktop.py env G_DEBUG=fatal-criticals build/host-test-saved-c/host_test $(CURDIR)/build/native-theme-fixture --native-large
 
 test-saved:
-	build-queue -- $(ZIRAN) ir --project --entry model_test:main -o build/model-test-ir tests/model_test.zi
-	build-queue -- $(ZIRAN) build --project --target=c --exe --entry model_test:main -o build/model-test-saved-c build/model-test-ir/model_test.zir
+	$(ZIRAN) ir --project --entry model_test:main -o build/model-test-ir tests/model_test.zi
+	$(ZIRAN) build --project --target=c --exe --entry model_test:main -o build/model-test-saved-c build/model-test-ir/model_test.zir
 	python3 tests/private_desktop.py --headless env XDG_DATA_HOME=$(CURDIR)/build/model-test-fixture/data-home build/model-test-saved-c/model_test $(CURDIR)/build/model-test-fixture
-	build-queue -- $(ZIRAN) ir --project --entry host_test:main -o build/host-test-ir tests/host_test.zi
-	build-queue -- $(ZIRAN) build --project --target=c --exe --entry host_test:main -o build/host-test-saved-c build/host-test-ir/host_test.zir
+	$(ZIRAN) ir --project --entry host_test:main -o build/host-test-ir tests/host_test.zi
+	$(ZIRAN) build --project --target=c --exe --entry host_test:main -o build/host-test-saved-c build/host-test-ir/host_test.zir
 	$(HOST_TEST_ENV) build/host-test-saved-c/host_test $(CURDIR)/build/host-test-fixture
 
 test-ui: build
@@ -188,7 +188,7 @@ test-split: build test-split-native
 
 .PHONY: test-operation-history
 test-operation-history:
-	build-queue -- python3 tests/operation_history_test.py
+	python3 tests/operation_history_test.py
 
 build/context-menu-probe: $(SOURCES)
 	build-queue -- $(ZIRAN) build --project --target=c --exe --entry context_menu_probe:main -o build/context-menu-probe-c tests/context_menu_probe.zi
