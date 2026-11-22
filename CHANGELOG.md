@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+- Run the shared Explorer frame and model in TaijiOS through typed guest
+  filesystem and window adapters. Support location editing, navigation, sorting,
+  scrolling, text preview, exclusive file and folder creation, regular-file copy,
+  confirmed deletion, and window resizing with bounded listing and raster storage.
+  Report unavailable guest operations explicitly.
+
 - Open context menus without waiting for clipboard file data. Track offered
   formats asynchronously, including changes while a menu is open, and show
   actual application icons beside Open and Open With commands.

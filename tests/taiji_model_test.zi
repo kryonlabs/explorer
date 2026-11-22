@@ -1,0 +1,67 @@
+// Runs inside Taiji against the disposable test home's guest namespace.
+Model :: #import "model";
+Files :: #import "filesystem";
+Preview :: #import "preview";
+
+Require :: (test: bool, label: string, manager: *Model.Manager) -> bool {
+    if !test { print("FAIL %. Location: %  Error: %\n", label, manager.cwd, manager.error) }
+    return test
+}
+
+main :: () -> s32 {
+    home: Text = TextCopy(Model.HomePath())
+    root := TextView(home)
+    // Mutation tests require the explicitly created fixture directory.
+    prefix := "/build/zx-smoke/explorer-private-test-"
+    if root.count <= prefix.count || root[:prefix.count] != prefix { return 1 }
+    source: Text = Files.JoinPath(root, "sample.txt")
+    child: Text = Files.JoinPath(root, "target")
+    unicode: Text = Files.JoinPath(root, "世界.txt")
+    manager: Model.Manager
+    defer Model.Dispose(*manager)
+    Model.Init(*manager)
+    if !Require(manager.cwd == root && Model.EntryCount(*manager) >= 80, "guest home and listing", *manager) { return 2 }
+    if !Require(Model.OpenLocationTracked(*manager, TextView(unicode)) &&
+        Model.EntryName(*manager, manager.cursor) == "世界.txt", "UTF-8 file location", *manager) { return 3 }
+    escaped: Text = Files.JoinPath(root, "literal\\name.txt")
+    if !Require(Model.OpenLocationTracked(*manager, TextView(escaped)) &&
+        Model.EntryName(*manager, manager.cursor) == "literal\\name.txt" &&
+        Model.EntryCaption(*manager, manager.cursor) == "literal\\\\name.txt", "lossless escaped caption", *manager) { return 16 }
+    if !Require(Model.OpenLocationTracked(*manager, TextView(source)) &&
+        Model.CopySelection(*manager,false), "select a file and copy", *manager) { return 4 }
+    if !Require(Model.OpenPathTracked(*manager,TextView(child)) && Model.NavigateBack(*manager) && manager.cwd == root &&
+        Model.NavigateForward(*manager) && manager.cwd == TextView(child), "back and forward", *manager) { return 5 }
+    if !Require(Model.CreateFolder(*manager,"new-folder") && Model.CreateFile(*manager,"new-file") &&
+        !Model.CreateFile(*manager,"new-file"), "exclusive create", *manager) { return 6 }
+    if !Require(Model.Paste(*manager) && !Model.Paste(*manager), "copy and collision", *manager) { return 7 }
+    copied: Text = Files.JoinPath(TextView(child), "sample.txt")
+    preview: Preview.State
+    defer Preview.Close(*preview)
+    Preview.Open(*preview,TextView(copied))
+    if !Require(preview.kind == .Text && TextView(preview.body) == "Explorer guest preview content\n",
+        "copied bytes and preview", *manager) { return 8 }
+    if !Require(Model.OpenLocationTracked(*manager,TextView(copied)) && Model.DeleteSelection(*manager,false) &&
+        !Files.PathQuery(TextView(copied)).valid && Files.PathQuery(TextView(source)).valid,
+        "delete selected copy only", *manager) { return 9 }
+    if !Require(Model.NavigateUp(*manager) && manager.cwd == root, "parent navigation", *manager) { return 10 }
+    for attempt: 0..39 {
+        if !Require(Model.OpenPathTracked(*manager,TextView(child)) && Model.NavigateUp(*manager) &&
+            Model.Refresh(*manager) && manager.cwd == root, "repeat list and navigation", *manager) { return 11 }
+    }
+    if !Require(manager.back.count == 64, "bounded navigation history", *manager) { return 12 }
+    large: Text = Files.JoinPath(root, "large")
+    if !Require(Model.OpenPathTracked(*manager, TextView(large)) && Model.EntryCount(*manager) == 1024,
+        "large directory listing", *manager) { return 13 }
+    Model.SetSort(*manager, .SortName, true)
+    first_path: Text = Files.JoinPath(TextView(large), "entry-1023.txt")
+    last_path: Text = Files.JoinPath(TextView(large), "entry-0000.txt")
+    if !Require(Model.EntryName(*manager, 0) == "entry-1023.txt" && Model.EntryPath(*manager, 0) == TextView(first_path) &&
+        Model.EntryName(*manager, 1023) == "entry-0000.txt" && Model.EntryPath(*manager, 1023) == TextView(last_path),
+        "large directory sorting and path storage", *manager) { return 14 }
+    oversized: Text = Files.JoinPath(root, "oversized")
+    if !Require(!Model.OpenPathTracked(*manager, TextView(oversized)) && manager.cwd == TextView(large) &&
+        Model.EntryCount(*manager) == 1024 && Model.EntryName(*manager, 0) == "entry-1023.txt",
+        "oversized listing retains previous directory", *manager) { return 15 }
+    print("Explorer Taiji model local tests passed\n")
+    return 0
+}

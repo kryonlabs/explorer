@@ -1,0 +1,132 @@
+// Explorer filesystem facade over its typed guest provider.
+using Vectors :: #import "std/vec";
+using Guest :: #import "guest_files";
+Platform :: #import "platform_taiji";
+
+#scope_export
+PathKind :: enum u8 { Missing :: 0; File :: 1; Directory :: 2; Link :: 3; Other :: 4; }
+
+PathInfo :: struct {
+    kind: PathKind
+    // Numeric user ID of the owner, including when not following a link.
+    owner_uid: u32
+    // Permission bits, such as 0o644 written 420.
+    mode: s32
+    size: s64
+    // Seconds since 1970 UTC.
+    modified: s64
+    // Fractional nanoseconds of modified, 0 through 999999999; not total ns.
+    modified_nanoseconds: u32
+    // Fields shared with the native facade. Guest identity comes from Dir qids.
+    metadata_mask: u32
+    identity_valid: bool
+    inode: u64
+    changed: s64
+    changed_nanoseconds: u32
+    device_major: u32
+    device_minor: u32
+}
+
+JoinPath :: (directory: string, name: string) -> Text {
+    if directory.count == 0 || (name.count > 0 && name[0] == #char "/") { return TextCopy(name) }
+    result: Vec(u8)
+    separator := directory[directory.count - 1] != #char "/"
+    length := directory.count + name.count + (ifx separator then 1 else 0)
+    if length > Guest.PATH_LIMIT || !VecReserve(result, length) { return .{} }
+    if !BuilderAppend(result, directory) || (separator && !VecPush(result, #char "/")) ||
+        !BuilderAppend(result, name) { return .{} }
+    return BuilderFinish(result)
+}
+
+// The last part of PATH, after its final slash.
+PathName :: (path: string) -> string {
+    end := path.count
+    while end > 1 && path[end - 1] == #char "/" { end -= 1 }
+    at := end
+    while at > 0 && path[at - 1] != #char "/" { at -= 1 }
+    return path[at:end]
+}
+
+// PATH without its last part: "." for a bare name, "/" for a root entry.
+PathParent :: (path: string) -> string {
+    end := path.count
+    while end > 1 && path[end - 1] == #char "/" { end -= 1 }
+    at := end
+    while at > 0 && path[at - 1] != #char "/" { at -= 1 }
+    if at == 0 { return "." }
+    while at > 1 && path[at - 1] == #char "/" { at -= 1 }
+    return path[0:at]
+}
+
+// The name's extension with its dot, as Python's Path.suffix: ".png".
+PathSuffix :: (path: string) -> string {
+    name := PathName(path)
+    at := name.count - 1
+    while at > 0 {
+        if name[at] == #char "." { return name[at:name.count] }
+        at -= 1
+    }
+    return ""
+}
+
+// The name without its extension, as Python's Path.stem.
+PathStem :: (path: string) -> string {
+    name := PathName(path)
+    suffix := PathSuffix(path)
+    return name[0:name.count - suffix.count]
+}
+
+
+PathQueryResult :: struct { info: PathInfo; valid: bool; missing: bool; error: s32; }
+PathQuery :: (path: string, follow_links: bool = true) -> PathQueryResult {
+    info: Guest.Info
+    status := Platform.Query(path,*info)
+    if status != .Ok { return .{missing = status == .Missing, error = cast(s32)status} }
+    return .{valid = true, info = PathMetadata(info)}
+}
+PathMetadata :: (info: Guest.Info) -> PathInfo {
+    kind: PathKind = ifx info.kind == .Directory then .Directory else ifx info.kind == .File then .File else .Other
+    return .{kind = kind,
+        mode = cast(s32)(info.mode & 4095), size = info.size, modified = info.modified,
+        inode = info.inode, device_major = cast(u32)info.device,
+        device_minor = cast(u32)(info.device >> 32), changed = cast(s64)info.version,
+        identity_valid = true}
+}
+PathStatus :: (path: string, follow_links: bool = true) -> PathInfo { return PathQuery(path,follow_links).info }
+// Relative paths are resolved by the guest provider, never by host realpath.
+ResolvePath :: (path: string) -> Text {
+    absolute: Text = Guest.AbsolutePath(path,Platform.WorkingDirectory())
+    if absolute.bytes.count == 0 || !PathQuery(TextView(absolute)).valid { return .{} }
+    return absolute
+}
+DirectoryCursor :: struct {
+    provider: Guest.Provider
+    reader: Guest.DirectoryReader
+    buffer: [Guest.DIRECTORY_BUFFER]u8
+    valid: bool
+    failed: bool
+}
+DirectoryEntry :: struct { name: [256]u8; name_count: s64; valid: bool; info: PathInfo; }
+OpenDirectory :: (path: string) -> DirectoryCursor {
+    cursor: DirectoryCursor
+    cursor.provider = Platform.Filesystem()
+    cursor.reader = Guest.OpenDirectory(cursor.provider, path)
+    cursor.valid = cursor.reader.opened
+    return cursor
+}
+NextDirectoryEntry :: (cursor: *DirectoryCursor) -> DirectoryEntry {
+    if !cursor.valid { return .{} }
+    item := Guest.NextDirectoryEntry(cursor.provider, *cursor.reader, cursor.buffer[:])
+    cursor.failed = cursor.reader.status != .Ok
+    if !item.valid { return .{} }
+    entry: DirectoryEntry
+    for index: cast(s64)0..item.name.count-1 { entry.name[index] = item.name[index] }
+    entry.name_count = item.name.count
+    entry.info = PathMetadata(item.info)
+    entry.valid = true
+    return entry
+}
+CloseDirectory :: (cursor: *DirectoryCursor) -> bool {
+    cursor.valid = false
+    return Guest.CloseDirectory(cursor.provider, *cursor.reader) == .Ok
+}

@@ -1,0 +1,173 @@
+// Taiji owns the window and its display buffer. Draw the same Explorer frame
+// as the desktop host, using only a small raster strip in the ZX heap.
+App :: #import "app";
+Surface :: #import "kryon/host/surface";
+Taiji :: #import "zx_surface";
+Pixels :: #import "kryon/pixmap";
+Utf8 :: #import "std/utf8";
+#import "std/vec"
+#import "kryon/geometry"
+#import "kryon/frame_snapshot"
+#import "kryon/input_protocol"
+#import "kryon/paint_queue"
+#import "kryon/session"
+#import "kryon/tree"
+#import "kryon/tree_draw"
+#import "kryon/tree_input"
+
+using FrameStatus;
+
+STRIP_PIXELS :: 16384
+
+Draw :: (frame: Surface.Frame) {
+    session: Session = .{frame.slot, frame.epoch}
+    unused App.Frame(session, TreeRootBounds(session))
+}
+
+Raster :: struct {
+    pixels: Vec(u32)
+    rgba: Vec(u8)
+}
+
+PresentFrame :: (raster: *Raster, session: Session, width: s32, height: s32,
+    input: FrameInputSnapshot, expose: bool) -> bool {
+    rows: s32 = STRIP_PIXELS / width
+    if rows > Surface.SURFACE_STRIP_ROWS { rows = Surface.SURFACE_STRIP_ROWS }
+    if rows > height { rows = height }
+    count := cast(s64)width * rows
+    if !VecResizeBounded(raster.pixels, count, STRIP_PIXELS) ||
+        !VecResizeBounded(raster.rgba, count * 4, STRIP_PIXELS * 4) { return false }
+    if !Pixels.PixmapResumeRowsInto(width, height, 0, rows, raster.pixels[:]) { return false }
+    defer Pixels.PixmapEndInto()
+    if !Surface.SurfaceBeginInput(session, input) { return false }
+    defer FrameInputEnd(session)
+    if !Surface.SurfaceCompose(session, Draw, width, height) { return false }
+    defer PaintClear(session)
+    if expose { PaintSnapshotInvalidate(session) }
+    if Surface.SurfaceSnapshotFits(SessionIndex(session)) {
+        frame := CommitFrameDamaged(session)
+        if frame.status != cast(FrameStatus)FrameOk { return false }
+        if frame.paint_unchanged && !expose { return true }
+    } else {
+        PaintSnapshotInvalidate(session)
+        if CommitFrame(session) != cast(FrameStatus)FrameOk { return false }
+    }
+
+    first: s32 = 0
+    while first < height {
+        lines := ifx rows < height - first then rows else height - first
+        if !Pixels.PixmapBindRows(width, height, first, lines, raster.pixels[:]) { return false }
+        strip: Rectangle = .{0.0, cast(float32)first, cast(float32)width, cast(float32)lines}
+        Pixels.PixmapDamageBegin(strip, cast(u32)Pixels.PixmapBackground)
+        Surface.SurfaceReplayArea(session, strip)
+        Pixels.PixmapDamageEnd()
+        visible: Rectangle = .{0.0, 0.0, cast(float32)width, cast(float32)lines}
+        Surface.SurfaceConvert(width, raster.pixels[:], raster.rgba[:], visible)
+        if !Taiji.PresentOpaqueRows(width, height, first, TextView(raster.rgba[:width * lines * 4])) { return false }
+        first += lines
+    }
+    return true
+}
+
+// Complete each host event before requesting another one, keeping edits and
+// committed text in order without a second input queue in the guest.
+ApplyEvent :: (input: *FrameInputSnapshot, event: Surface.SurfaceEvent) -> s32 {
+    input.wheel = 0.0
+    if event.kind == Surface.KeyDown || event.kind == Surface.KeyUp {
+        input.modifiers = event.modifiers
+        if event.key <= 0 || event.key >= input.keys.count { return 0 }
+        if event.kind == Surface.KeyUp {
+            input.keys[event.key] = cast(u8)FrameKeyReleased
+            return 0
+        }
+        held := (input.keys[event.key] & cast(u8)FrameKeyHeld) != 0
+        input.keys[event.key] = cast(u8)(FrameKeyHeld | (ifx held then FrameKeyRepeated else FrameKeyPressed))
+        return ifx event.key >= 340 && event.key <= 347 then 0 else event.key
+    }
+    if (event.kind >= Surface.PointerMoved && event.kind <= Surface.ButtonUp) || event.kind == Surface.PointerWheel {
+        input.pointer.x = cast(float32)event.x
+        input.pointer.y = cast(float32)event.y
+    }
+    if event.kind == Surface.PointerWheel {
+        input.wheel = cast(float32)event.button / 1000.0
+    } else if event.kind == Surface.ButtonDown || event.kind == Surface.ButtonUp {
+        down := event.kind == Surface.ButtonDown
+        if event.button == 1 {
+            input.pointer.pressed = down && !input.pointer.down
+            input.pointer.released = !down && input.pointer.down
+            input.pointer.down = down
+        } else if event.button == 3 {
+            input.secondary.pressed = down && !input.secondary.down
+            input.secondary.released = !down && input.secondary.down
+            input.secondary.down = down
+        }
+    }
+    return 0
+}
+
+Run :: () -> s32 {
+    width: s32 = 420
+    height: s32 = 280
+    if !Surface.Open("Explorer", width, height) { return 1 }
+    defer Surface.Close()
+    session := SessionOpen()
+    if !SessionValid(session) { return 1 }
+    defer { unused CloseSession(session) }
+    raster: Raster
+    defer VecFree(raster.pixels)
+    defer VecFree(raster.rgba)
+    input: FrameInputSnapshot = .{.available = true, .focused = true}
+    event: Surface.SurfaceEvent = .{.kind = Surface.Redraw}
+    text_at: s32 = 0
+    followup := false
+    while event.kind != Surface.Closed {
+        if event.kind == Surface.Resized {
+            if !Surface.SurfaceSizeValid(event.width, event.height) { return 1 }
+            width = event.width
+            height = event.height
+        }
+        if event.kind == Surface.TextCommitted {
+            if event.text.count > 2147483647 { return 1 }
+            while text_at < event.text.count {
+                unit := Utf8.Decode(event.text, text_at)
+                if unit.value != 0 && !TypedCodepointSend(session, cast(s32)unit.value) { break }
+                text_at = unit.after
+            }
+        }
+        if event.kind != Surface.Idle || followup {
+            key := ApplyEvent(*input, event)
+            unused KeyboardSend(session, key)
+            unused KeyboardModifiersSend(session, input.modifiers)
+            input.sequence += cast(u64)1
+            expose := event.kind == Surface.Redraw || event.kind == Surface.Resized
+            if !PresentFrame(*raster, session, width, height, input, expose) { return 1 }
+            input.pointer.pressed = false
+            input.pointer.released = false
+            input.secondary.pressed = false
+            input.secondary.released = false
+            if (event.kind == Surface.KeyDown || event.kind == Surface.KeyUp) &&
+                event.key > 0 && event.key < cast(s32)input.keys.count {
+                input.keys[event.key] &= cast(u8)FrameKeyHeld
+            }
+            // Activation may change the view after its controls were drawn.
+            // Compose once more after the input queue settles, then stay idle.
+            if event.kind == Surface.Idle { followup = false }
+            else if event.kind == Surface.ButtonUp || event.kind == Surface.KeyDown ||
+                event.kind == Surface.TextCommitted || event.kind == Surface.PointerWheel { followup = true }
+        }
+        if event.kind == Surface.TextCommitted && text_at < event.text.count { continue }
+        text_at = 0
+        event = Surface.Event(ifx followup then 20 else 1000)
+    }
+    return 0
+}
+
+#program_export
+main :: () -> s32 {
+    defer App.Close()
+    if !App.Prepare() {
+        print("Explorer could not read an initial guest folder or allocate its model.\n")
+        return 1
+    }
+    return Run()
+}

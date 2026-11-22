@@ -1,8 +1,12 @@
 #scope_module
 using Bytes :: #import "std/byte_text_linux";
 using Texts :: #import "std/format";
-Files :: #import "std/file";
-Paths :: #import "std/file_tree_linux";
+#if #defined(EXPLORER_TAIJI) {
+    Platform :: #import "platform_taiji";
+} else {
+    Files :: #import "std/file";
+}
+Paths :: #import "filesystem";
 Utf8 :: #import "std/utf8";
 
 #scope_export
@@ -81,24 +85,59 @@ Open :: (state: *State, path: string) {
         return
     }
     if state.info.kind != .File { return }
-    file := Files.OpenRead(TextView(state.path))
-    if !file.valid {
+    #if #defined(EXPLORER_TAIJI) {
+        // A zero-length guest entry can be a stream, such as a device.
+        // Show its metadata without reading ahead for bytes it did not report.
+        if state.info.size == 0 { return }
+        file := Platform.OpenRead(TextView(state.path))
+        opened := file >= 0
+    } else {
+        file := Files.OpenRead(TextView(state.path))
+        opened := file.valid
+    }
+    if !opened {
         state.kind = .Error
-        Store(*state.body, "The file could not be read.")
+        #if #defined(EXPLORER_TAIJI) {
+            detail := Platform.LastError()
+            Store(*state.body, ifx detail == "" then "The file could not be read." else detail)
+        } else {
+            Store(*state.body, "The file could not be read.")
+        }
         return
     }
-    defer { unused Files.CloseFile(file) }
-    if ImagePath(TextView(state.path)) { state.kind = .Image; return }
-    if !VecResize(state.body.bytes, TEXT_LIMIT + 4) {
+    defer {
+        #if #defined(EXPLORER_TAIJI) {
+            unused Platform.Close(file)
+        } else {
+            unused Files.CloseFile(file)
+        }
+    }
+    #if !#defined(EXPLORER_TAIJI) {
+        if ImagePath(TextView(state.path)) { state.kind = .Image; return }
+    }
+    limit: s64 = TEXT_LIMIT + 4
+    #if #defined(EXPLORER_TAIJI) {
+        if state.info.size < limit { limit = state.info.size }
+    }
+    if !VecResize(state.body.bytes, limit) {
         state.kind = .Error
         return
     }
     count: s64 = 0
-    while count < TEXT_LIMIT + 4 {
-        read := Files.ReadAt(file, state.body.bytes[count:TEXT_LIMIT + 4], count)
-        if read < 0 {
+    while count < limit {
+        #if #defined(EXPLORER_TAIJI) {
+            read := cast(s64)Platform.Read(file, state.body.bytes[count:limit])
+        } else {
+            read := Files.ReadAt(file, state.body.bytes[count:limit], count)
+        }
+        if read < 0 || read > limit - count {
             VecClear(state.body.bytes)
-            Store(*state.body, "The file could not be read.")
+            #if #defined(EXPLORER_TAIJI) {
+                detail := Platform.LastError()
+                Store(*state.body, ifx detail == "" then "The file could not be read." else detail)
+            } else {
+                Store(*state.body, "The file could not be read.")
+            }
             state.kind = .Error
             return
         }

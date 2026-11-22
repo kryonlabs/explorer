@@ -1,6 +1,6 @@
 // Explorer's local directory policy. Transport and retained tree UI stay upstream.
 #scope_module
-Files :: #import "std/file_tree_linux";
+Files :: #import "filesystem";
 Display :: #import "file_display";
 Sort :: #import "std/sort";
 using Bytes :: #import "std/byte_text_linux";

@@ -1,0 +1,54 @@
+// Typed host boundary. These names resolve only inside the Taiji guest host;
+// host Linux paths and services are never used as substitutes.
+Guest :: #import "guest_files";
+Io :: #import "taijios_io";
+StatRecord :: #import "taijios_stat";
+
+#scope_export
+OpenRead :: (path: string) -> s32 { return Io.Open(path,0) }
+Read :: (handle: s32, bytes: []u8) -> s32 { return Io.Read(handle,bytes) }
+Write :: (handle: s32, bytes: string) -> s32 { return Io.Write(handle,bytes) }
+Close :: (handle: s32) -> s32 { return Io.Close(handle) }
+CreateNew :: (path: string, directory: bool) -> s32 {
+    if !Guest.ValidPath(path) { return -1 }
+    permissions: u32 = ifx directory then 0x800001ed else 420
+    return Io.CreateNew(path,ifx directory then 0 else 1,cast(s32)permissions)
+}
+Remove :: (path: string) -> Guest.Status {
+    if !Guest.ValidPath(path) { return .Invalid }
+    return ifx Io.Remove(path) >= 0 then .Ok else .Failed
+}
+WorkingDirectory :: () -> string { return Io.Cwd() }
+HomeDirectory :: () -> string { return Io.Home() }
+Query :: (path: string, info: *Guest.Info) -> Guest.Status {
+    if !Guest.ValidPath(path) { return .Invalid }
+    bytes: [8192]u8
+    count := Io.StatPacked(path,bytes[:])
+    return ReadInfo(bytes[:],count,info)
+}
+QueryHandle :: (handle: s32, info: *Guest.Info) -> Guest.Status {
+    bytes: [8192]u8
+    count := Io.FstatPacked(handle,bytes[:])
+    return ReadInfo(bytes[:],count,info)
+}
+ReadInfo :: (bytes: []u8, count: s32, info: *Guest.Info) -> Guest.Status {
+    // Do not invent ENOENT from a string error. A denied or failed stat must
+    // never authorize overwriting or creating a supposedly absent target.
+    if count < 49 || count > bytes.count { return .Failed }
+    record := StatRecord.Decode(bytes[:count])
+    if record.size != count || record.length < 0 { return .Failed }
+    info.kind = ifx (record.mode & 0x80000000) != 0 then .Directory else .File
+    info.mode = record.mode
+    info.size = record.length
+    info.modified = cast(s64)cast(u32)record.modified
+    info.device = record.identity.dev
+    info.inode = record.identity.qid
+    info.version = record.identity.version
+    return .Ok
+}
+Filesystem :: () -> Guest.Provider {
+    // Rename remains absent: guest wstat can replace an existing destination.
+    return .{open = OpenRead, create_new = CreateNew, read = Read, write = Write,
+        close = Close, stat = Query, fstat = QueryHandle, remove = Remove}
+}
+LastError :: () -> string { return Io.Error() }

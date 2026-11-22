@@ -1,9 +1,13 @@
 // Local file-manager paths and completion policy, independent of widget layout.
 #scope_module
-Files :: #import "std/file_tree_linux";
+Files :: #import "filesystem";
 Display :: #import "file_display";
 Model :: #import "model";
-DesktopLocations :: #import "desktop_locations";
+#if !#defined(EXPLORER_TAIJI) {
+    DesktopLocations :: #import "desktop_locations";
+} else {
+    GuestFiles :: #import "guest_files";
+}
 Sort :: #import "std/sort";
 Utf8 :: #import "std/utf8";
 using Bytes :: #import "std/byte_text_linux";
@@ -82,7 +86,11 @@ Absolute :: (raw: string, base: string, home: string) -> Value {
         else { result.text = Files.JoinPath(home, raw[2:]) }
     } else if raw[0] == #char "/" { result.text = TextCopy(raw) }
     else if base.count > 0 && base[0] == #char "/" { result.text = Files.JoinPath(base, raw) }
-    else if Model.IsUri(base) { result.text = DesktopLocations.ResolveUri(base,raw) }
+    else {
+        #if !#defined(EXPLORER_TAIJI) {
+            if Model.IsUri(base) { result.text = DesktopLocations.ResolveUri(base,raw) }
+        }
+    }
     result.valid = result.text.bytes.count > 0 && result.text.bytes.count < 4096
     return result
 }
@@ -134,6 +142,9 @@ Query :: (state: *State, input: string, escaped: bool) -> bool {
     defer { if open { unused Files.CloseDirectory(*cursor) } }
     pending: Vec(Candidate)
     scanned: s32 = 0
+    #if #defined(EXPLORER_TAIJI) {
+        path_bytes: s64
+    }
     while true {
         item := Files.NextDirectoryEntry(*cursor)
         if !item.valid { break }
@@ -144,19 +155,27 @@ Query :: (state: *State, input: string, escaped: bool) -> bool {
         if pending.count >= MAX_MATCHES { return Fail(state, "Completion match limit (4096) reached; type more of the name") }
         full: Text = Files.JoinPath(TextView(parent), name)
         if full.bytes.count == 0 || full.bytes.count >= 4096 { return Fail(state, "Completion path cannot be represented") }
-        query := Files.PathQuery(TextView(full))
-        info := query.info
-        if !query.valid {
-            link := Files.PathQuery(TextView(full), false)
-            if !query.missing || !link.valid || link.info.kind != .Link { return Fail(state, "Completion entry disappeared or is inaccessible") }
-            info = link.info
+        #if #defined(EXPLORER_TAIJI) {
+            path_bytes += full.bytes.count + name.count
+            if path_bytes > GuestFiles.LIST_PATH_BYTES_LIMIT { return Fail(state, "Completion exceeds the path memory limit; type more of the name") }
+            info := item.info
+            directory := info.kind == .Directory
+        } else {
+            query := Files.PathQuery(TextView(full))
+            info := query.info
+            if !query.valid {
+                link := Files.PathQuery(TextView(full), false)
+                if !query.missing || !link.valid || link.info.kind != .Link { return Fail(state, "Completion entry disappeared or is inaccessible") }
+                info = link.info
+            }
+            directory := query.valid && info.kind == .Directory
         }
         candidate: Candidate
         candidate.name = TextCopy(name); candidate.caption = Display.Caption(name)
         if candidate.name.bytes.count != name.count || candidate.caption.bytes.count == 0 {
             return Fail(state, "Cannot allocate completion text")
         }
-        candidate.path = full; candidate.info = info; candidate.directory = query.valid && info.kind == .Directory
+        candidate.path = full; candidate.info = info; candidate.directory = directory
         if !VecPush(pending, candidate) { return Fail(state, "Cannot allocate complete suggestion list") }
     }
     failed := cursor.failed

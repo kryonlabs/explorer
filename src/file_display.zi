@@ -12,6 +12,16 @@ NeedsEscapes :: (value: string) -> bool {
     return false
 }
 
+#if #defined(EXPLORER_TAIJI) {
+    // Guest directory records and resolved paths already require valid UTF-8.
+    GuestCaptionNeedsEscapes :: (value: string) -> bool {
+        for byte: value {
+            if byte < 32 || byte == 127 || byte == #char "\\" { return true }
+        }
+        return false
+    }
+}
+
 EditorText :: (value: string, escaped: bool) -> Text {
     if escaped { return Caption(value) }
     return TextCopy(value)

@@ -1,0 +1,7 @@
+// The model and its helpers select their filesystem at build time.
+#scope_export
+#if #defined(EXPLORER_TAIJI) {
+    using Guest :: #import "filesystem_taiji";
+} else {
+    using Native :: #import "std/file_tree_linux";
+}

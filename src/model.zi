@@ -1,31 +1,46 @@
 #scope_module
-Files :: #import "std/file_tree_linux";
+Files :: #import "filesystem";
+#if #defined(EXPLORER_TAIJI) {
+    GuestPlatform :: #import "platform_taiji";
+    GuestFiles :: #import "guest_files";
+}
+#if !#defined(EXPLORER_TAIJI) {
 Operations :: #import "operation_history";
 WholeFiles :: #import "std/file";
 DateTime :: #import "std/date_time_linux";
 Calendar :: #import "std/calendar";
 Env :: #import "std/environment_linux";
+}
 using Format :: #import "std/format";
 Number :: #import "std/number_text";
 Strings :: #import "std/c_string";
 Display :: #import "file_display";
+#if !#defined(EXPLORER_TAIJI) {
 using DesktopLocations :: #import "desktop_locations";
+}
 using Bytes :: #import "std/byte_text_linux";
 using TextBuffer :: #import "std/text_buffer";
 using Options :: #import "std/option";
 
+#if !#defined(EXPLORER_TAIJI) {
 libc :: #system_library "c";
 SymbolicLinkRaw :: (target: *u8, path: *u8) -> s32 #foreign libc "symlink";
 MatchPattern :: (pattern: *u8, name: *u8, flags: s32) -> s32 #foreign libc "fnmatch";
 AccessRaw :: (path: *u8, mode: s32) -> s32 #foreign libc "access";
 
+}
 #scope_export
 MAX_ENTRIES :: 4096;
 MAX_SELECTION :: 256;
 MAX_HISTORY :: 64;
 PATH_MAX :: 4096;
 History :: struct {
-    paths: [MAX_HISTORY][PATH_MAX]u8
+    #if #defined(EXPLORER_TAIJI) {
+        paths: [8192]u8
+        ends: [MAX_HISTORY]s32
+    } else {
+        paths: [MAX_HISTORY][PATH_MAX]u8
+    }
     count: s32
 }
 
@@ -89,9 +104,11 @@ Entry :: struct {
     path: string
     info: Files.PathInfo
     caption: string
-    icon_serialized: string
-    content_type: string
-    uri: string
+    #if !#defined(EXPLORER_TAIJI) {
+        icon_serialized: string
+        content_type: string
+        uri: string
+    }
 }
 
 PathKey :: (path: string) -> u64 {
@@ -119,7 +136,9 @@ Manager :: struct {
     tab_slots: Vec(s32)
     next_tab_key: u64
     operation_text: Vec(Text)
+    #if !#defined(EXPLORER_TAIJI) {
     operations: Operations.Journal
+    }
     cwd: string
     entries: Vec(Entry)
     selected: Vec(bool)
@@ -143,12 +162,18 @@ Manager :: struct {
     error: string
 }
 
+#if !#defined(EXPLORER_TAIJI) {
 Environment :: (name: string) -> string {
     return Env.EnvironmentText(name)
 }
 
+}
 HomePath :: () -> string {
-    return Environment("HOME")
+    #if #defined(EXPLORER_TAIJI) {
+        return GuestPlatform.HomeDirectory()
+    } else {
+        return Environment("HOME")
+    }
 }
 
 IsUri :: (path: string) -> bool {
@@ -165,14 +190,17 @@ PathParent :: (path: string) -> string {
     return Files.PathParent(path)
 }
 NavigateUp :: (manager: *Manager) -> bool {
+    #if !#defined(EXPLORER_TAIJI) {
     if IsUri(manager.cwd) {
         parent: Text=DesktopLocations.ParentUri(manager.cwd)
         if parent.bytes.count==0 { return false }
         return OpenPathTracked(manager,TextView(parent))
     }
+    }
     return OpenPathTracked(manager,PathParent(manager.cwd))
 }
 
+#if !#defined(EXPLORER_TAIJI) {
 DataHome :: () -> Text {
     value := Environment("XDG_DATA_HOME")
     if value != "" { return TextCopy(value) }
@@ -187,6 +215,7 @@ TrashDirectory :: (info: bool) -> Text {
     return OperationPath(root, ifx info then "Trash/info" else "Trash/files")
 }
 
+}
 SameText :: (left: string, right: string) -> bool {
     return left == right
 }
@@ -235,10 +264,12 @@ PathReadable :: (path: string) -> bool {
     return info.kind != .Missing
 }
 
+#if !#defined(EXPLORER_TAIJI) {
 RenamePath :: (source: string, target: string) -> bool {
     return WholeFiles.RenameNoReplace(source, target)
 }
 
+}
 SetError :: (manager: *Manager, message: string) {
     SetStoredText(*manager.error_text, message)
     manager.error = TextView(manager.error_text)
@@ -250,8 +281,11 @@ SetStoredText :: (owner: *Text, value: string) {
     VecSwap(owner.bytes, copy.bytes)
 }
 
+#if !#defined(EXPLORER_TAIJI) {
 FreeNames :: (names: *Vec(string)) {
     Files.FreeDirectoryNames(names)
+}
+
 }
 
 EntryBefore :: (manager: *Manager, left: *Entry, right: *Entry) -> bool {
@@ -364,6 +398,47 @@ ClearEntries :: (manager: *Manager) {
     manager.reveal_focus = true
 }
 
+#if #defined(EXPLORER_TAIJI) {
+    GUEST_PATH_CHUNK :: 4096;
+    GuestPathStorage :: struct { block: s64; used: s64; }
+
+    AppendGuestEntry :: (manager: *Manager, directory: string, name: string, separator: bool,
+        path_length: s64, storage: *GuestPathStorage, info: Files.PathInfo) -> bool {
+        entry: Entry
+        // Keep the path storage stable once any entry borrows from a block.
+        if storage.block < 0 || storage.used + path_length > GUEST_PATH_CHUNK {
+            block: Text
+            if !VecResizeBounded(block.bytes, GUEST_PATH_CHUNK, GUEST_PATH_CHUNK) { return false }
+            if !VecPush(manager.entry_text, block) { return false }
+            storage.block = manager.entry_text.count - 1
+            storage.used = 0
+        }
+        caption_index: s64 = -1
+        if Display.GuestCaptionNeedsEscapes(name) {
+            caption: Text = Display.Caption(name)
+            if caption.bytes.count == 0 { return false }
+            caption_index = manager.entry_text.count
+            if !VecPush(manager.entry_text, caption) { return false }
+        }
+        start := storage.used
+        end := start + path_length
+        block := *manager.entry_text[storage.block]
+        bytes := block.bytes[start:end]
+        for index: cast(s64)0..directory.count - 1 { bytes[index] = directory[index] }
+        if separator { bytes[directory.count] = #char "/" }
+        name_start := path_length - name.count
+        for index: cast(s64)0..name.count - 1 { bytes[name_start + index] = name[index] }
+        storage.used = end
+        entry.path = TextView(bytes)
+        entry.name = entry.path[entry.path.count-name.count:]
+        entry.caption = entry.name
+        if caption_index >= 0 { entry.caption = TextView(manager.entry_text[caption_index]) }
+        entry.key = PathKey(entry.path)
+        entry.info = info
+        if !VecPush(manager.entries, entry) { return false }
+        return VecPush(manager.selected, false)
+    }
+} else {
 AppendEntry :: (manager: *Manager, name: string, path: string,
     info: Files.PathInfo) -> bool {
     entry: Entry
@@ -381,6 +456,7 @@ AppendEntry :: (manager: *Manager, name: string, path: string,
     entry.info = info
     if !VecPush(manager.entries, entry) { return false }
     return VecPush(manager.selected, false)
+}
 }
 
 SyncSelectionSize :: (manager: *Manager) -> bool {
@@ -411,6 +487,7 @@ OpenPath :: (manager: *Manager, path: string) -> bool {
     return OpenPathChecked(manager, path)
 }
 
+#if !#defined(EXPLORER_TAIJI) {
 AppendDesktopEntry :: (pending: *Manager, item: DesktopLocationEntry) -> bool {
     target:=ifx item.target_uri!="" then item.target_uri else item.uri
     route:=ifx item.local_path!="" then item.local_path else target
@@ -460,24 +537,47 @@ OpenDesktopPath :: (manager: *Manager, uri: string) -> bool {
     return true
 }
 
+}
+
 OpenPathChecked :: (manager: *Manager, path: string, select_name: string = "",
     expected: Files.PathInfo = .{}, include_hidden: bool = false) -> bool {
     if path == "" { SetError(manager, "Enter a folder path or URI"); return false }
+    #if #defined(EXPLORER_TAIJI) {
+        if IsUri(path) { SetError(manager, "Enter a path in the Taiji namespace"); return false }
+    } else {
     if IsUri(path) {
         local: Text=DesktopLocations.PathForUri(path)
         if local.bytes.count>0 { return OpenPathChecked(manager,TextView(local),select_name,expected,include_hidden) }
         return OpenDesktopPath(manager,path)
     }
-    resolved: Text = Files.ResolvePath(path)
+    }
+    #if #defined(EXPLORER_TAIJI) {
+        resolved: Text = GuestFiles.AbsolutePath(path, GuestPlatform.WorkingDirectory())
+        if resolved.bytes.count == 0 { SetError(manager, "Invalid or unrepresentable Taiji path"); return false }
+        path_bytes: s64
+        storage: GuestPathStorage = .{.block = -1}
+        separator := resolved.bytes[resolved.bytes.count - 1] != #char "/"
+    } else {
+        resolved: Text = Files.ResolvePath(path)
+    }
     before := Files.PathQuery(resolved)
     if resolved.bytes.count == 0 || !before.valid || before.info.kind != .Directory || !before.info.identity_valid {
-        SetError(manager, path)
-        return false
+        #if #defined(EXPLORER_TAIJI) {
+            if before.valid { SetError(manager, "This path is not a folder"); return false }
+            return GuestFailure(manager, "Could not open folder")
+        } else {
+            SetError(manager, path)
+            return false
+        }
     }
     cursor := Files.OpenDirectory(resolved)
     if !cursor.valid {
-        SetError(manager, resolved)
-        return false
+        #if #defined(EXPLORER_TAIJI) {
+            return GuestFailure(manager, "Could not read the complete folder")
+        } else {
+            SetError(manager, resolved)
+            return false
+        }
     }
     open := true
     defer { if open { unused Files.CloseDirectory(*cursor) } }
@@ -491,6 +591,17 @@ OpenPathChecked :: (manager: *Manager, path: string, select_name: string = "",
         if !item.valid { break }
         name := TextView(item.name[:item.name_count])
         if name == "." || name == ".." || (!pending.show_hidden && name[0] == #char ".") { continue }
+        #if #defined(EXPLORER_TAIJI) {
+            path_length := resolved.bytes.count + name.count + (ifx separator then 1 else 0)
+            if path_length >= PATH_MAX {
+                SetError(manager, "Folder entry path cannot be represented; current location retained"); return false
+            }
+            path_bytes += path_length + name.count
+            if path_bytes > GuestFiles.LIST_PATH_BYTES_LIMIT {
+                SetError(manager, "Folder listing exceeds the path memory limit; current location retained"); return false
+            }
+            appended := AppendGuestEntry(*pending, TextView(resolved), name, separator, path_length, *storage, item.info)
+        } else {
         full: Text = Files.JoinPath(resolved, name)
         if full.bytes.count == 0 || full.bytes.count >= PATH_MAX {
             SetError(manager, "Folder entry path cannot be represented; current location retained"); return false
@@ -504,12 +615,19 @@ OpenPathChecked :: (manager: *Manager, path: string, select_name: string = "",
             }
             info = link.info; info.kind = .Other
         }
-        if !AppendEntry(*pending, name, full, info) {
+        appended := AppendEntry(*pending, name, full, info)
+        }
+        if !appended {
             SetError(manager, "Cannot allocate complete folder listing; current location retained"); return false
         }
     }
     failed := cursor.failed
     closed := Files.CloseDirectory(*cursor); open = false
+    #if #defined(EXPLORER_TAIJI) {
+        if cursor.reader.status == .Limit {
+            SetError(manager, "Folder listing exceeds the 4,096-entry limit; current location retained"); return false
+        }
+    }
     after := Files.PathQuery(resolved)
     if failed || !closed || !after.valid || !SameDirectorySnapshot(before.info, after.info) {
         SetError(manager, "Folder changed or could not be read completely; current location retained"); return false
@@ -561,10 +679,14 @@ SamePathIdentity :: (left: Files.PathInfo, right: Files.PathInfo) -> bool {
 
 // A typed file location selects the file in its parent; it never executes it.
 OpenLocationTracked :: (manager: *Manager, path: string) -> bool {
+    #if #defined(EXPLORER_TAIJI) {
+        if IsUri(path) { SetError(manager, "Enter a path in the Taiji namespace"); return false }
+    } else {
     if IsUri(path) {
         local: Text=DesktopLocations.PathForUri(path)
         if local.bytes.count>0 { return OpenLocationTracked(manager,TextView(local)) }
         return OpenPathTracked(manager,path)
+    }
     }
     query := Files.PathQuery(path)
     if !query.valid { SetError(manager, ifx query.missing then "Location does not exist" else "Location is inaccessible or cannot be represented"); return false }
@@ -589,6 +711,21 @@ SameDirectorySnapshot :: (left: Files.PathInfo, right: Files.PathInfo) -> bool {
 }
 
 PushHistory :: (history: *History, path: string) {
+    #if #defined(EXPLORER_TAIJI) {
+        required := cast(s32)path.count + 1
+        if required > PATH_MAX { return }
+        end := ifx history.count == 0 then 0 else history.ends[history.count-1]
+        while history.count >= MAX_HISTORY || end + required > history.paths.count {
+            first := history.ends[0]
+            for i: first..end-1 { history.paths[i-first] = history.paths[i] }
+            history.count -= 1
+            for i: 0..history.count-1 { history.ends[i] = history.ends[i+1] - first }
+            end -= first
+        }
+        if !Strings.CopyCString(path, history.paths[end:end+required]) { return }
+        history.ends[history.count] = end + required
+        history.count += 1
+    } else {
     if history.count >= MAX_HISTORY {
         index: s32 = 1
         while index < MAX_HISTORY {
@@ -599,11 +736,17 @@ PushHistory :: (history: *History, path: string) {
     }
     if !Strings.CopyCString(path, history.paths[history.count][:]) { return }
     history.count += 1
+    }
 }
 
 PopHistory :: (history: *History, output: []u8) -> bool {
     if history.count <= 0 { return false }
-    source := history.paths[history.count - 1]
+    #if #defined(EXPLORER_TAIJI) {
+        first := ifx history.count == 1 then 0 else history.ends[history.count-2]
+        source := history.paths[first:history.ends[history.count-1]]
+    } else {
+        source := history.paths[history.count - 1]
+    }
     length: s64 = 0
     while length < source.count && length < output.count && source[length] != 0 {
         output[length] = source[length]
@@ -651,6 +794,7 @@ NavigateForward :: (manager: *Manager) -> bool {
     return true
 }
 
+#if !#defined(EXPLORER_TAIJI) {
 SearchDirectory :: (manager: *Manager, directory: string, query: string,
     depth: s32) {
     if depth > 32 || manager.entries.count >= MAX_ENTRIES { return }
@@ -688,9 +832,11 @@ Search :: (manager: *Manager, query: string) -> bool {
     return true
 }
 
+}
+
 Refresh :: (manager: *Manager) -> bool {
-    if manager.search_active && manager.search_query != "" {
-        return Search(manager, manager.search_query)
+    #if !#defined(EXPLORER_TAIJI) {
+        if manager.search_active && manager.search_query != "" { return Search(manager, manager.search_query) }
     }
     return OpenPath(manager, manager.cwd)
 }
@@ -700,7 +846,13 @@ Init :: (manager: *Manager, start_path: string = "") {
     Dispose(manager)
     manager.sort_mode = .SortName
     path := ifx start_path != "" then start_path else HomePath()
-    if !OpenPath(manager, path) { unused OpenPath(manager, "/") }
+    #if #defined(EXPLORER_TAIJI) {
+        if !OpenPath(manager, path) && !OpenPath(manager, GuestPlatform.WorkingDirectory()) {
+            unused OpenPath(manager, "/")
+        }
+    } else {
+        if !OpenPath(manager, path) { unused OpenPath(manager, "/") }
+    }
     unused FirstTab(manager)
 }
 
@@ -731,7 +883,9 @@ FirstTab :: (manager: *Manager) -> bool {
 
 Dispose :: (manager: *Manager) {
     if manager == null { return }
-    Operations.Close(*manager.operations)
+    #if !#defined(EXPLORER_TAIJI) {
+        Operations.Close(*manager.operations)
+    }
     ClearEntries(manager)
     VecFree(manager.cwd_text.bytes)
     VecFree(manager.search_root_text.bytes)
@@ -836,9 +990,12 @@ RestoreTab :: (pending: *Manager, tab: *TabState) {
         for old: cast(s32)0..cast(s32)tab.entries.count - 1 {
             if !tab.selected[old] && old != tab.cursor && old != tab.anchor { continue }
             for index: cast(s32)0..cast(s32)pending.entries.count - 1 {
-                if tab.entries[old].path == pending.entries[index].path &&
-                    ((tab.entries[old].uri!="" && tab.entries[old].uri==pending.entries[index].uri) ||
-                    SamePathIdentity(tab.entries[old].info, pending.entries[index].info)) {
+                if tab.entries[old].path != pending.entries[index].path { continue }
+                same := SamePathIdentity(tab.entries[old].info, pending.entries[index].info)
+                #if !#defined(EXPLORER_TAIJI) {
+                    same = same || (tab.entries[old].uri!="" && tab.entries[old].uri==pending.entries[index].uri)
+                }
+                if same {
                     pending.selected[index] = tab.selected[old]
                     if old == tab.cursor { pending.cursor = index }
                     if old == tab.anchor { pending.anchor = index }
@@ -1031,6 +1188,7 @@ SelectAll :: (manager: *Manager) {
     }
 }
 
+#if !#defined(EXPLORER_TAIJI) {
 PathPresent :: (path: string) -> bool {
     return Files.PathStatus(path, false).kind != .Missing
 }
@@ -1069,6 +1227,8 @@ SelectPattern :: (manager: *Manager, pattern: string) -> bool {
         manager.selected[i]=Strings.CopyCString(manager.entries[i].name,native_name[:]) && MatchPattern(*native_pattern[0],*native_name[0],0)==0
     }
     return true
+}
+
 }
 
 SelectedPaths :: (manager: *Manager) -> Vec(string) {
@@ -1126,6 +1286,7 @@ OperationPath :: (directory: string, name: string) -> Text {
 }
 
 // One user action owns one batch, even if a later item fails.
+#if !#defined(EXPLORER_TAIJI) {
 BeginOperation :: (manager: *Manager, batch: *Operations.Batch, count: s64) -> bool {
     if Operations.Begin(*manager.operations, batch, count) { return true }
     SetError(manager, "Cannot allocate filesystem operation history"); return false
@@ -1365,6 +1526,8 @@ RestoreSelection :: (manager: *Manager) -> bool {
     return FinishOperation(manager, *batch, true)
 }
 
+}
+
 SnapshotSelection :: (manager: *Manager, cut: bool, clipboard: *Clipboard) -> bool {
     if !LocalSelection(manager) { return false }
     // Clipboard snapshots include the whole selection. The bounded operation
@@ -1393,6 +1556,14 @@ SnapshotSelection :: (manager: *Manager, cut: bool, clipboard: *Clipboard) -> bo
 }
 
 CopySelection :: (manager: *Manager, cut: bool) -> bool {
+    #if #defined(EXPLORER_TAIJI) {
+        if cut { SetError(manager, "Taiji does not provide a safe move operation"); return false }
+        for index: cast(s32)0..cast(s32)manager.entries.count-1 {
+            if manager.selected[index] && manager.entries[index].info.kind != .File {
+                SetError(manager, "Only regular files can be copied"); return false
+            }
+        }
+    }
     return SnapshotSelection(manager, cut, *manager.clipboard)
 }
 
@@ -1403,6 +1574,7 @@ IsWithin :: (directory: string, ancestor: string) -> bool {
         directory[ancestor.count] == #char "/"
 }
 
+#if !#defined(EXPLORER_TAIJI) {
 CopyPath :: (source: string, target: string) -> bool {
     kind := Files.PathStatus(source, false).kind
     if kind == .Link { return Files.CopySymbolicLink(source, target) }
@@ -1551,4 +1723,79 @@ CreateSymbolicLink :: (target: string, path: string) -> bool {
     if !Strings.CopyCString(target, target_bytes[:]) ||
         !Strings.CopyCString(path, path_bytes[:]) { return false }
     return SymbolicLinkRaw(*target_bytes[0], *path_bytes[0]) == 0
+}
+}
+
+#if #defined(EXPLORER_TAIJI) {
+GuestFailure :: (manager: *Manager, message: string) -> bool {
+    detail := GuestPlatform.LastError()
+    if detail == "" { SetError(manager, message); return false }
+    text: Vec(u8)
+    BuilderPrint(*text, "%. %", message, detail)
+    SetError(manager, TextView(text[:]))
+    return false
+}
+
+CreateGuestEntry :: (manager: *Manager, name: string, directory: bool, changed: *bool) -> bool {
+    if !GuestFiles.ValidName(name) { SetError(manager, "Enter a valid UTF-8 name without slashes"); return false }
+    path: Text = Files.JoinPath(manager.cwd, name)
+    if !GuestFiles.ValidPath(TextView(path)) { SetError(manager, "The destination path is too long"); return false }
+    fd := GuestPlatform.CreateNew(TextView(path), directory)
+    if fd < 0 { return GuestFailure(manager, "Could not create the entry") }
+    if changed != null { <<changed = true }
+    closed := GuestPlatform.Close(fd) >= 0
+    if !closed {
+        message: Text = TextCopy(GuestPlatform.LastError())
+        unused Refresh(manager)
+        SetError(manager, ifx message.bytes.count == 0 then "Created the entry, but closing it failed" else TextView(message))
+        return false
+    }
+    return Refresh(manager)
+}
+
+CreateFolder :: (manager: *Manager, name: string, changed: *bool = null) -> bool {
+    return CreateGuestEntry(manager, name, true, changed)
+}
+
+CreateFile :: (manager: *Manager, name: string, changed: *bool = null) -> bool {
+    return CreateGuestEntry(manager, name, false, changed)
+}
+
+Paste :: (manager: *Manager) -> bool {
+    if manager.clipboard.paths.count == 0 { return false }
+    if manager.clipboard.mode != .ClipboardCopy {
+        SetError(manager, "Taiji does not provide a safe move operation")
+        return false
+    }
+    for source: manager.clipboard.paths {
+        target: Text = Files.JoinPath(manager.cwd, Files.PathName(source))
+        status := GuestFiles.CopyNew(GuestPlatform.Filesystem(), source, TextView(target))
+        if status != .Ok {
+            detail: Text = TextCopy(GuestPlatform.LastError())
+            unused Refresh(manager)
+            if status == .Limit { SetError(manager, "File copy is limited to 16 MiB") }
+            else if status == .Unsupported { SetError(manager, "Only regular files can be copied") }
+            else if status == .CleanupFailed { SetError(manager, "Copy failed; the output could not be safely removed") }
+            else if status == .Invalid { SetError(manager, "Choose another destination folder") }
+            else { SetError(manager, ifx detail.bytes.count == 0 then "The file could not be copied" else TextView(detail)) }
+            return false
+        }
+    }
+    return Refresh(manager)
+}
+
+DeleteSelection :: (manager: *Manager, use_trash: bool) -> bool {
+    if use_trash { SetError(manager, "Taiji does not provide a Trash folder"); return false }
+    paths := SelectedPaths(manager)
+    if paths.count == 0 { return false }
+    for path: paths {
+        if GuestPlatform.Remove(path) != .Ok {
+            detail: Text = TextCopy(GuestPlatform.LastError())
+            unused Refresh(manager)
+            SetError(manager, ifx detail.bytes.count == 0 then "The entry could not be deleted" else TextView(detail))
+            return false
+        }
+    }
+    return Refresh(manager)
+}
 }

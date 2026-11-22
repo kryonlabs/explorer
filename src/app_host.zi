@@ -25,35 +25,49 @@ ImageWidget :: #import "kryon/image";
 using TextBuffer :: #import "std/text_buffer";
 Input :: #import "kryon/tree_input";
 ScrollDevice :: #import "kryon/scroll_device";
+#if !#defined(EXPLORER_TAIJI) {
 Opener :: #import "kryon/open_uri";
+}
 Keys :: #import "kryon/key_input";
 Number :: #import "std/number_text";
 Tables :: #import "data_views/TableView";
+#if !#defined(EXPLORER_TAIJI) {
 DateTime :: #import "std/date_time_linux";
 Calendar :: #import "std/calendar";
+}
 Preview :: #import "preview";
 using FormatText :: #import "std/format";
+#if !#defined(EXPLORER_TAIJI) {
 using Native :: #import "native_ui";
 using Status :: #import "native_status";
 using GtkPaint :: #import "kryon/GtkPainterLinux";
 Gtk :: #import "kryon/GtkStyleLinux";
 NativeScroll :: #import "kryon/GtkScrollLinux";
 SystemTheme :: #import "kryon/SystemThemeLinux";
+}
 Palettes :: #import "kryon/widget_palette";
+#if !#defined(EXPLORER_TAIJI) {
 FileClipboard :: #import "desktop_file_clipboard";
+}
 FileDisplay :: #import "file_display";
+#if !#defined(EXPLORER_TAIJI) {
 using DesktopLocations :: #import "desktop_locations";
 using Bookmarks :: #import "bookmarks";
+}
 using LocalTree :: #import "tree_sidebar";
 Trees :: #import "data_views/TreeView";
 using Location :: #import "location";
-TabPaths :: #import "std/file_tree_linux";
+TabPaths :: #import "filesystem";
 GridLayout :: #import "kryon/grid_multi";
 using Kinds :: #import "kryon/widget_kind";
 using WidgetKind;
+#if !#defined(EXPLORER_TAIJI) {
 using Menus :: #import "context_menu";
 using MenuView :: #import "context_menu_view";
+}
+#if !#defined(EXPLORER_TAIJI) {
 FileDrag :: #import "file_drag";
+}
 DragSource :: #import "kryon/DragSourceLinux";
 
 #scope_export
@@ -93,10 +107,12 @@ DetailsCells :: struct {
 
 PaneView :: struct {
     zoom: [3]s32
+    #if !#defined(EXPLORER_TAIJI) {
     native_scroll: u64
     native_scroll_props: NativeScroll.GtkScrollProps
     native_scroll_metrics: NativeScroll.GtkScrollMetrics
     native_scroll_origin: Vector2
+    }
     details_scroll_x: s32
     column_widths: [4]s32
     columns_resized: bool
@@ -173,14 +189,18 @@ Host :: struct {
     palette: Palettes.WidgetPalette
     palette_ms: s64
     palette_loaded: bool
+#if !#defined(EXPLORER_TAIJI) {
     file_clipboard: FileClipboard.State
+}
     escaped_editor: bool
+    #if !#defined(EXPLORER_TAIJI) {
     bookmarks: Bookmarks.State
     bookmark_items: Vec(ListBox.ListBoxItem)
     bookmark_flags: Vec(bool)
     bookmark_selected: s32
     bookmark_scroll: s32
     bookmarks_ms: s64
+    }
     location: Location.State
     ancestors: Location.Ancestors
     completion_items: Vec(ListBox.ListBoxItem)
@@ -193,11 +213,13 @@ Host :: struct {
     breadcrumb_open: bool
     actions_open: bool
     menu_index: s32
+    #if !#defined(EXPLORER_TAIJI) {
     paint: GtkPainter
     paint_active: bool
     free_path: u64
     free_ms: s64
     free_bytes: s64
+    }
     pathbar: bool
     sidebar_hidden: bool
     menubar_hidden: bool
@@ -210,9 +232,12 @@ Host :: struct {
     info_open: bool
     info_title: string
     info_body: Vec(u8)
+    #if !#defined(EXPLORER_TAIJI) {
     mounts: DesktopLocations.State
     mounts_ms: s64
     trash_icon: Text
+    }
+#if !#defined(EXPLORER_TAIJI) {
     // Thunar context menus: the built menu, its popup and what it acts on.
     context_menu: FileMenu
     context_view: MenuViewState
@@ -235,18 +260,22 @@ Host :: struct {
     chooser_recommended: s32
     chooser_paths: Vec(Text)
     chooser_type: Text
+}
     // Explicit targets for prompts opened from side-pane and tree menus.
     prompt_folder: Text
     prompt_template: Text
     rename_path: Text
+#if !#defined(EXPLORER_TAIJI) {
     drag: FileDrag.DragState
     drop_rows: Vec(DropRow)
     drop_key: u64
+}
     list_bounds: [2]Rectangle
     window_queue: Vec(Text)
     external_drops: Vec(Text)
 }
 
+#if !#defined(EXPLORER_TAIJI) {
 ContextRequest :: struct {
     pending: bool
     kind: MenuKind
@@ -267,6 +296,7 @@ DropRow :: struct {
     folder: bool
 }
 
+}
 PaneManager :: (host: *Host, index: s32 = -1) -> *Model.Manager {
     if index < 0 { index = host.active_pane }
     if index == 1 && host.secondary.count == 1 { return *host.secondary[0].manager }
@@ -293,7 +323,9 @@ InitPaneView :: (view: *PaneView) {
 }
 
 ReleasePaneView :: (view: *PaneView) {
+    #if !#defined(EXPLORER_TAIJI) {
     if view.native_scroll!=0 { unused NativeScroll.GtkScrollRelease(view.native_scroll); view.native_scroll=0 }
+    }
     for index: cast(s32)0..cast(s32)view.tab_labels.count - 1 {
         VecFree(view.tab_labels[index].bytes); VecFree(view.tab_paths[index].bytes)
     }
@@ -376,8 +408,12 @@ PopupOwnerValid :: (host: *Host) -> bool {
 }
 
 PaneLocked :: (host: *Host) -> bool {
-    return ActiveManager(host).prompt != .PromptNone || host.preview.opened || host.info_open ||
-        host.breadcrumb_open || host.actions_open || host.context_view.open || host.chooser_open
+    locked := ActiveManager(host).prompt != .PromptNone || host.preview.opened || host.info_open ||
+        host.breadcrumb_open || host.actions_open
+    #if !#defined(EXPLORER_TAIJI) {
+        locked = locked || host.context_view.open || host.chooser_open
+    }
+    return locked
 }
 
 ActivatePane :: (host: *Host, index: s32) -> bool {
@@ -467,6 +503,7 @@ NodePane :: (session: Session, index: s32, root: s32) -> s32 {
     return -1
 }
 
+#if !#defined(EXPLORER_TAIJI) {
 ResolvePaneInput :: (host: *Host, session: Session, viewport: Rectangle, focused: bool) {
     if !focused || !host.split || PaneLocked(host) { return }
     // The native retained focus route already processed a pointer press or Tab
@@ -498,6 +535,7 @@ ResolvePaneInput :: (host: *Host, session: Session, viewport: Rectangle, focused
     }
 }
 
+#if !#defined(EXPLORER_TAIJI) {
 PasteFiles :: (host: *Host) -> bool {
     before := host.file_clipboard.changed
     ok := FileClipboard.Paste(*host.file_clipboard, ActiveManager(host))
@@ -505,6 +543,8 @@ PasteFiles :: (host: *Host) -> bool {
     return ok
 }
 
+}
+}
 RefreshOtherPane :: (host: *Host) {
     if host.secondary.count == 0 { return }
     other := PaneManager(host, 1 - host.active_pane)
@@ -608,10 +648,13 @@ Prepare :: (host: *Host, start_path: string = "") -> bool {
     host.palette_loaded = false
     Model.Init(*host.manager, start_path)
     if host.manager.tabs.count == 0 { Model.Dispose(*host.manager); return false }
-    host.bookmark_selected = -1; host.bookmark_scroll = 0
+    #if !#defined(EXPLORER_TAIJI) {
+        host.bookmark_selected = -1; host.bookmark_scroll = 0
+    }
     host.places_key=0; host.places_route=0; host.location_without_slash=false
     host.sidebar_hidden=false; host.quit_requested=false; host.quit_all_requested=false; host.window_requested=false
     host.menubar_hidden=false; host.info_open=false
+    #if !#defined(EXPLORER_TAIJI) {
     host.bookmarks_ms = DateTime.UnixMilliseconds()
     if !Bookmarks.Init(*host.bookmarks) { Model.SetError(*host.manager, TextView(host.bookmarks.error)) }
     DesktopLocations.Init(*host.mounts)
@@ -620,15 +663,18 @@ Prepare :: (host: *Host, start_path: string = "") -> bool {
     initial_trash_icon: Text=DesktopLocations.IconForUri("trash:///")
     VecSwap(host.trash_icon.bytes,initial_trash_icon.bytes)
     VecFree(initial_trash_icon.bytes)
+    }
     host.started = true
     return true
 }
 
 Close :: (host: *Host) {
     if host == null { return }
+    #if !#defined(EXPLORER_TAIJI) {
     GtkPainterRelease(*host.paint)
     DesktopLocations.Release(*host.mounts)
     VecFree(host.trash_icon.bytes)
+    }
     ReleasePaneView(*host.view)
     if host.started { Model.Dispose(*host.manager) }
     if host.secondary.count > 0 {
@@ -643,14 +689,21 @@ Close :: (host: *Host) {
     VecFree(host.delete_keys); VecFree(host.delete_identities)
     VecFree(host.window_path.bytes)
     VecFree(host.info_body)
+    #if !#defined(EXPLORER_TAIJI) {
     CloseContextMenu(host); CloseChooser(host)
     VecFree(host.request.path.bytes); VecFree(host.context_current.bytes)
+    }
     VecFree(host.prompt_folder.bytes); VecFree(host.prompt_template.bytes); VecFree(host.rename_path.bytes)
+    #if !#defined(EXPLORER_TAIJI) {
     if host.drag.active { FileDrag.Finish(*host.drag) }
-    VecFree(host.drop_rows); VecFree(host.window_queue); VecFree(host.external_drops)
+    VecFree(host.drop_rows)
+    }
+    VecFree(host.window_queue); VecFree(host.external_drops)
     host.modal_tab = 0; host.popup_tab = 0
+    #if !#defined(EXPLORER_TAIJI) {
     FileClipboard.Close(*host.file_clipboard)
     Bookmarks.Release(*host.bookmarks); VecFree(host.bookmark_items); VecFree(host.bookmark_flags)
+    }
     Preview.Close(*host.preview)
     host.palette_loaded = false; host.started = false; host.active_pane = 0; host.split = false
     host.field.bytes = host.field_next[:]
@@ -701,9 +754,11 @@ OpenPrompt :: (host: *Host, prompt: Model.PromptKind) {
     if prompt == .PromptFile && host.prompt_folder.bytes.count > 0 {
         initial = ifx host.prompt_template.bytes.count > 0 then TabPaths.PathName(TextView(host.prompt_template)) else "New Empty File"
     }
+    #if !#defined(EXPLORER_TAIJI) {
     if prompt == .PromptBookmarkRename && host.bookmark_selected >= 0 &&
         host.bookmark_selected < host.bookmarks.document.rows.count {
         initial = host.bookmarks.document.rows[host.bookmark_selected].label
+    }
     }
     host.escaped_editor = FileDisplay.NeedsEscapes(initial)
     caption: Text = FileDisplay.EditorText(initial, host.escaped_editor)
@@ -755,10 +810,12 @@ FinishPromptInPane :: (host: *Host, view: *PaneView) {
     value := TextView(prompt_buffer[:value_length])
     prompt := manager.prompt
     if prompt == .PromptLocation {
-        if host.location.selected >= 0 && host.location.preview.bytes.count > 0 &&
-            value == TextView(host.location.preview) && host.escaped_editor == host.location.preview_escaped &&
-            !Location.Validate(*host.location, host.location.order[host.location.selected]) {
-            LocationError(host); return
+        #if !#defined(EXPLORER_TAIJI) {
+            if host.location.selected >= 0 && host.location.preview.bytes.count > 0 &&
+                value == TextView(host.location.preview) && host.escaped_editor == host.location.preview_escaped &&
+                !Location.Validate(*host.location, host.location.order[host.location.selected]) {
+                LocationError(host); return
+            }
         }
         if Location.Submit(*host.location, manager, value, host.escaped_editor) { host.location_without_slash=false; CancelLocation(host) }
         return
@@ -770,6 +827,12 @@ FinishPromptInPane :: (host: *Host, view: *PaneView) {
         return
     }
     if host.escaped_editor { value = TextView(decoded.value) }
+    #if #defined(EXPLORER_TAIJI) {
+        manager.prompt = .PromptNone
+        changed: bool
+        if prompt == .PromptFolder { unused Model.CreateFolder(manager, value, *changed) }
+        else if prompt == .PromptFile { unused Model.CreateFile(manager, value, *changed) }
+    } else {
     if prompt == .PromptBookmarkRename && !Bookmarks.Edit(*host.bookmarks, host.bookmark_selected, 0, value) {
         Model.SetError(manager, TextView(host.bookmarks.error))
         return
@@ -789,6 +852,7 @@ FinishPromptInPane :: (host: *Host, view: *PaneView) {
     VecClear(host.rename_path.bytes); VecClear(host.prompt_folder.bytes); VecClear(host.prompt_template.bytes)
     // The filesystem step may succeed even when the active listing refresh
     // fails. Sync the peer after that step, without touching this pane's error.
+    }
     if changed { RefreshOtherPane(host) }
     host.field.length = 0
     host.field.focused = false
@@ -869,6 +933,7 @@ CompletionWidget :: (host: *Host, session: Session, bounds: Rectangle, focused: 
     unused VecResize(host.completion_items, 0)
     return result.clicked_index
 }
+#if !#defined(EXPLORER_TAIJI) {
 LocationBreadcrumbWidget :: (host: *Host, session: Session, bounds: Rectangle,
     focused: bool, key: s32) -> s32 {
     manager := ActiveManager(host)
@@ -913,6 +978,7 @@ DrawLocationBreadcrumb :: (host: *Host, session: Session, bounds: Rectangle, foc
         unused Model.OpenPathTracked(manager, TextView(host.ancestors.rows[row].path))
     }
 }
+#if !#defined(EXPLORER_TAIJI) {
 DrawNarrowActions :: (host: *Host, session: Session, bounds: Rectangle, focused: bool, key: s32) -> bool {
     manager := ActiveManager(host)
 
@@ -955,11 +1021,16 @@ DrawNarrowActions :: (host: *Host, session: Session, bounds: Rectangle, focused:
     else if choice == 13 { host.actions_open = false; RequestPane(host, 1 - host.active_pane) }
     return true
 }
+}
+}
 DrawLocationEditor :: (host: *Host, session: Session, bounds: Rectangle,
     viewport: Rectangle, key: s32, modifiers: s32, typed_text: string, focused: bool) {
     manager := ActiveManager(host)
 
-    consumed := focused && LocationKey(host, key, modifiers)
+    consumed := false
+    #if !#defined(EXPLORER_TAIJI) {
+        consumed = focused && LocationKey(host, key, modifiers)
+    }
     unused CopyInto(host.field_value[:], TextView(host.field.bytes[:host.field.length]))
     props := TextFieldWidget.Props.{.key = cast(u64)222, .bounds = bounds,
         .value = TextView(host.field_value[:host.field.length]), .cursor = host.field.cursor,
@@ -976,6 +1047,7 @@ DrawLocationEditor :: (host: *Host, session: Session, bounds: Rectangle,
     }
     if edited.committed { FinishPrompt(host); return }
     if edited.escaped { CancelLocation(host); return }
+    #if !#defined(EXPLORER_TAIJI) {
     if edited.edit.changed && focused {
         host.completion_scroll = 0
         input: Text = TextCopy(TextView(host.field.bytes[:host.field.length]))
@@ -997,6 +1069,7 @@ DrawLocationEditor :: (host: *Host, session: Session, bounds: Rectangle,
             ApplyLocation(host, *value)
         }
     }
+    }
 }
 DrawLocationStatus :: (host: *Host, session: Session, viewport: Rectangle) {
     manager := ActiveManager(host)
@@ -1009,9 +1082,14 @@ DrawLocationStatus :: (host: *Host, session: Session, viewport: Rectangle) {
         error: Text = FileDisplay.Caption(manager.error)
         TextWidget.Draw(session, TextWidget.Props.{.key = cast(u64)228, .bounds = bounds, .text = TextView(error), .size = 14})
     } else {
+        #if #defined(EXPLORER_TAIJI) {
+            hint := "Enter opens · Esc cancels"
+        } else {
+            hint := "Tab completes · ↑↓ choose · Enter opens · Esc cancels"
+        }
         TextWidget.Draw(session, TextWidget.Props.{.key = cast(u64)225, .bounds = bounds,
             .text = ifx host.escaped_editor then "Byte escapes: \\xNN; \\\\ backslash" else
-                "Tab completes · ↑↓ choose · Enter opens · Esc cancels", .size = 14})
+                hint, .size = 14})
     }
 }
 ApplyFieldEdit :: (state: *FieldState, edit: TextFieldWidget.Edit) -> bool {
@@ -1040,10 +1118,13 @@ ApplyFieldEdit :: (state: *FieldState, edit: TextFieldWidget.Edit) -> bool {
 }
 
 Button :: (host: *Host, session: Session, key: s32, label: string, bounds: Rectangle, enabled: bool = true) -> bool {
+    #if !#defined(EXPLORER_TAIJI) {
     if host.paint_active { return Native.Control(*host.paint,cast(u64)key,bounds,label,"",enabled) }
+    }
     return ButtonWidget.Draw(session,ButtonWidget.Props.{.key=cast(u64)key,.id=key,.bounds=bounds,.label=label,.disabled= !enabled,.fit_content=true})==1
 }
 
+#if !#defined(EXPLORER_TAIJI) {
 BookmarkResult :: (host: *Host, ok: bool) {
     manager := ActiveManager(host)
 
@@ -1119,6 +1200,7 @@ TreeNavigation :: (key: s32) -> Trees.TreeViewNavigation {
     return .TreeViewNavigationNone
 }
 
+#if !#defined(EXPLORER_TAIJI) {
 DirectoryTreeWidget :: (host: *Host, session: Session, sidebar: Rectangle,
     enabled: bool, key: s32) -> Trees.TreeViewResult {
     if host.active_pane == 1 {
@@ -1252,6 +1334,7 @@ DrawDirectoryTreeInPane :: (host: *Host, view: *PaneView, session: Session, side
     return tree_focused && (TreeNavigation(key) != .TreeViewNavigationNone || key == KeyEnter || key == 32)
 }
 
+}
 DrawBookmarks :: (host: *Host, session: Session, sidebar: Rectangle, focused: bool) {
     manager := ActiveManager(host)
 
@@ -1315,6 +1398,7 @@ DrawBookmarks :: (host: *Host, session: Session, sidebar: Rectangle, focused: bo
     }
 }
 
+}
 ActivateEntry :: (host: *Host, row: s32) {
     if host.active_pane == 1 {
         ActivateEntryInPane(host, *host.secondary[0].view, row)
@@ -1329,7 +1413,11 @@ ActivateEntryInPane :: (host: *Host, view: *PaneView, row: s32) {
     if row < 0 || row >= manager.entries.count { return }
     if Model.EntryIsDirectory(manager, row) {
         unused Model.OpenPathTracked(manager, Model.EntryPath(manager, row))
-    } else if Model.IsUri(Model.EntryPath(manager,row)) {
+    } else {
+    #if #defined(EXPLORER_TAIJI) {
+        OpenPreview(host, Model.EntryPath(manager, row))
+    } else {
+    if Model.IsUri(Model.EntryPath(manager,row)) {
         if !Opener.OpenUri(Model.EntryPath(manager,row)) { Model.SetError(manager,"The default application could not be started.") }
     } else {
         OpenPreview(host, Model.EntryPath(manager, row))
@@ -1339,6 +1427,8 @@ ActivateEntryInPane :: (host: *Host, view: *PaneView, row: s32) {
                 Model.SetError(manager, "The default application could not be started.")
             }
         }
+    }
+    }
     }
     view.last_click_ms = 0
 }
@@ -1355,6 +1445,7 @@ OpenPreviewInPane :: (host: *Host, view: *PaneView, path: string) {
 
     if !CaptureModalOwner(host) { return }
     Preview.Open(*host.preview, path)
+    #if !#defined(EXPLORER_TAIJI) {
     // The canonical decoder also recognizes images with missing or misleading
     // extensions. A name hint for thumbnails is never reported as a MIME type.
     if host.preview.info.kind == .File && host.preview.kind != .Error &&
@@ -1364,7 +1455,8 @@ OpenPreviewInPane :: (host: *Host, view: *PaneView, path: string) {
             host.preview.kind = .Image
             VecClear(host.preview.body.bytes)
         }
-    }
+    }    }
+
 }
 
 EntryClick :: (host: *Host, row: s32, modifiers: s32) {
@@ -1379,6 +1471,7 @@ EntryClickInPane :: (host: *Host, view: *PaneView, row: s32, modifiers: s32) {
     manager := ActiveManager(host)
 
     if row < 0 || row >= manager.entries.count { return }
+    #if !#defined(EXPLORER_TAIJI) {
     now := DateTime.UnixMilliseconds()
     path := Model.EntryPath(manager, row)
     repeated := modifiers == 0 && view.last_click_ms > 0 &&
@@ -1387,7 +1480,8 @@ EntryClickInPane :: (host: *Host, view: *PaneView, row: s32, modifiers: s32) {
     Model.SetStoredText(*view.last_click_path, path)
     view.last_click_ms = ifx modifiers == 0 then now else 0
     view.last_click_view = manager.view_mode
-    if repeated { ActivateEntry(host, row) }
+    if repeated { ActivateEntry(host, row) }    }
+
 }
 
 SortColumn :: (mode: Model.SortMode) -> s32 {
@@ -1404,6 +1498,7 @@ SortForColumn :: (column: s32) -> Model.SortMode {
     return .SortName
 }
 
+#if !#defined(EXPLORER_TAIJI) {
 ZoomIcon :: (view: *PaneView, mode: Model.ViewMode) -> s32 {
     sizes: [12]s32=.[16,24,32,48,64,96,128,160,192,256,512,1024]
     return sizes[view.zoom[cast(s32)mode]]
@@ -1511,6 +1606,7 @@ DROP_ACTIVE :: 4096;
 
 // Primary presses may start a drag; a secondary click opens Thunar's item or
 // folder menu, selecting an unselected item first as GTK views do.
+#if !#defined(EXPLORER_TAIJI) {
 ViewPointer :: (host: *Host, session: Session, pane: s32, hit: s32, body: Rectangle, focused: bool) {
     TrackDrag(host,session,pane,hit,body,focused)
     pointer:=Input.PointerSample(session)
@@ -1666,6 +1762,8 @@ DrawNativeGrid :: (host: *Host, manager: *Model.Manager, bounds: Rectangle, prop
     Native.DetailsUndershoot(p,bounds,result.scroll_offset,metrics.content_extent,metrics.compact)
 }
 
+}
+}
 DrawDetails :: (host: *Host, session: Session, bounds: Rectangle,
     key: s32, modifiers: s32, focused: bool, pane_index: s32 = -1) {
     physical := ifx pane_index < 0 then host.active_pane else pane_index
@@ -1676,6 +1774,7 @@ DrawDetails :: (host: *Host, session: Session, bounds: Rectangle,
     DrawDetailsInPane(host, *host.view, session, bounds, key, modifiers, focused, pane_index)
 }
 
+#if !#defined(EXPLORER_TAIJI) {
 DetailsData :: (manager: *Model.Manager, index: s32, data: *DetailsCells) {
     entry:=*manager.entries[index]
     data.cells[0]=entry.caption
@@ -1762,10 +1861,37 @@ MeasureDetailsColumns :: (manager: *Model.Manager, view: *PaneView, bounds: Rect
     view.column_widths[0]=name_width
 }
 
+}
 DrawDetailsInPane :: (host: *Host, view: *PaneView, session: Session, bounds: Rectangle,
     key: s32, modifiers: s32, focused: bool, pane_index: s32 = -1) {
     manager := PaneManager(host, pane_index)
 
+    #if #defined(EXPLORER_TAIJI) {
+        columns: [4]string = .["Name", "Size", "Type", "Modified"]
+        ascending: [4]string = .["Name ↑", "Size ↑", "Type ↑", "Modified ↑"]
+        descending: [4]string = .["Name ↓", "Size ↓", "Type ↓", "Modified ↓"]
+        count := cast(s32)manager.entries.count
+        row_height: s32 = 25
+        header_height: float32 = 30.0
+        body := Rectangle.{bounds.x, bounds.y + header_height, bounds.width, bounds.height - header_height}
+        if body.height < 1.0 { return }
+        BoxWidget.Draw(session, BoxWidget.Props.{.key = 610, .bounds = body, .fill = ColorFromPacked(host.palette.base)})
+        x := body.x
+        column_count: s32 = ifx body.width >= 490.0 then 4 else ifx body.width >= 270.0 then 2 else 1
+        name_width := ifx column_count == 4 then body.width - 250.0 else ifx column_count == 2 then body.width - 84.0 else body.width
+        widths: [4]float32 = .[name_width, 84.0, 66.0, 100.0]
+        for column: cast(s32)0..column_count-1 {
+            name := columns[column]
+            if SortColumn(manager.sort_mode) == column {
+                name = ifx manager.sort_reverse then descending[column] else ascending[column]
+            }
+            if Button(host, session, 60 + column, name, .{x, bounds.y, widths[column], header_height}, focused) {
+                mode := SortForColumn(column)
+                Model.SetSort(manager, mode, mode == manager.sort_mode && !manager.sort_reverse)
+            }
+            x += widths[column]
+        }
+    } else {
     p := *host.paint
     bounds=Native.DetailsFrame(p,bounds)
     columns: [4]string = .["Name","Size","Type","Date Modified"]
@@ -1820,15 +1946,27 @@ DrawDetailsInPane :: (host: *Host, view: *PaneView, session: Session, bounds: Re
         TreeSetCursor(session,node,5)
     }
     p.clip=previous_clip
+    }
     parent := TreeSubmittedNodeAt(session, TreeCurrentParent(session))
     scroll_key := TreeIdentityHash(parent.identity_generation, cast(u64)40, 2147483646)
     state := Tables.TableViewResult.{.focused_row=manager.cursor,.anchor=manager.anchor}
     navigated := focused && (key==KeyHome || key==KeyEnd || key==KeyUp || key==KeyDown)
+    #if #defined(EXPLORER_TAIJI) {
+        navigated = navigated || (focused && (key == KeyPageUp || key == KeyPageDown))
+    }
     if focused && count > 0 {
         row := manager.cursor
         if row < 0 { row=0 }
         if key==KeyHome { row=0 } else if key==KeyEnd { row=count-1 }
         else if key==KeyUp && row > 0 { row-=1 } else if key==KeyDown && row<count-1 { row+=1 }
+        #if #defined(EXPLORER_TAIJI) {
+            page := cast(s32)body.height / row_height
+            if page < 1 { page = 1 }
+            if key == KeyPageUp { row -= page }
+            if key == KeyPageDown { row += page }
+            if row < 0 { row = 0 }
+            if row >= count { row = count - 1 }
+        }
         control := (modifiers & KeyModifierControl)!=0
         shift := (modifiers & KeyModifierShift)!=0
         if navigated { state=Tables.TableViewMultiSelect(manager.selected[:],count,state,row,control,shift,control && !shift) }
@@ -1842,20 +1980,33 @@ DrawDetailsInPane :: (host: *Host, view: *PaneView, session: Session, bounds: Re
         manager.reveal_focus=false
         ScrollDevice.ScrollDeviceStopMotion(session,scroll_key)
     }
+    #if !#defined(EXPLORER_TAIJI) {
     if ApplyNativeWheel(host,view,session,scroll_key,body,(modifiers & KeyModifierShift)!=0,focused) {
         manager.scroll=cast(s32)view.native_scroll_metrics.vertical.value
         view.details_scroll_x=cast(s32)view.native_scroll_metrics.horizontal.value
     } else if focused && (modifiers & KeyModifierShift)!=0 && !view.native_scroll_metrics.available {
         view.details_scroll_x-=cast(s32)(Input.PointerWheelTake(session,body)*48.0)
     }
-    scroll := ScrollWidget.Draw(session,ScrollWidget.Props.{.key=scroll_key,.bounds=body,.content_height=count*row_height,
-        .scroll_offset=manager.scroll,.manual_scroll=true,.external_scrollbar=view.native_scroll_metrics.available,.immediate_wheel=true,
-        .input=.{.disabled= !focused || view.native_scroll_metrics.dragging}})
+    }
+    scroll_props := ScrollWidget.Props.{.key = scroll_key, .bounds = body, .content_height = count * row_height,
+        .scroll_offset = manager.scroll, .manual_scroll = true, .immediate_wheel = true,
+        .input = .{.disabled = !focused}}
+    #if #defined(EXPLORER_TAIJI) {
+        if focused && !ScrollDevice.ScrollDeviceSampled(session) {
+            scroll_props.scroll_delta = cast(s32)(-Input.PointerWheelTake(session, body)*48.0)
+        }
+    } else {
+        scroll_props.external_scrollbar = view.native_scroll_metrics.available
+        scroll_props.input.disabled = !focused || view.native_scroll_metrics.dragging
+    }
+    scroll := ScrollWidget.Draw(session, scroll_props)
     manager.scroll=scroll.scroll_offset
+    #if !#defined(EXPLORER_TAIJI) {
     FinishNativeScroll(view,session,view.details_scroll_x,manager.scroll,focused)
     if view.native_scroll_metrics.available {
         manager.scroll=cast(s32)view.native_scroll_metrics.vertical.value
         view.details_scroll_x=cast(s32)view.native_scroll_metrics.horizontal.value
+    }
     }
     physical:=ifx pane_index<0 then host.active_pane else pane_index
     pointer:=Input.PointerSample(session)
@@ -1865,8 +2016,10 @@ DrawDetailsInPane :: (host: *Host, view: *PaneView, session: Session, bounds: Re
         if hit_row>=0 && hit_row<count { hit=hit_row }
     }
     host.list_bounds[physical]=body
+    #if !#defined(EXPLORER_TAIJI) {
     RecordDropRow(host,body,manager.cwd,physical,0,true)
     ViewPointer(host,session,physical,hit,body,focused)
+    }
     if scroll.opened {
         if ButtonWidget.Draw(session,ButtonWidget.Props.{.key=cast(u64)649,.bounds=body,.invisible=true,.disabled= !focused})==1 { Model.ClearSelection(manager) }
         first := manager.scroll/row_height
@@ -1889,6 +2042,32 @@ DrawDetailsInPane :: (host: *Host, view: *PaneView, session: Session, bounds: Re
                 manager.cursor=state.focused_row; manager.anchor=state.anchor
                 activated=index
             }
+    #if #defined(EXPLORER_TAIJI) {
+                if TreePushScope(session,node) {
+                    if manager.selected[index] {
+                        BoxWidget.Draw(session, BoxWidget.Props.{.key = 1, .bounds = row_bounds,
+                            .fill = ColorFromPacked(host.palette.selected)})
+                    }
+                    size: [24]u8
+                    date: [32]u8
+                    cells: [4]string = .[entry.caption, "", "", ""]
+                    if column_count > 1 && entry.info.kind != .Directory {
+                        cells[1] = Number.FormatInteger(entry.info.size, size[:])
+                    }
+                    if column_count == 4 {
+                        cells[2] = Model.EntryType(entry)
+                        cells[3] = GuestDate(entry.info.modified, date[:])
+                    }
+                    x = row_bounds.x
+                    for column: cast(s32)0..column_count-1 {
+                        TextWidget.Draw(session, TextWidget.Props.{.key = cast(u64)(10 + column),
+                            .bounds = .{x + 6.0, yy, widths[column] - 12.0, cast(float32)row_height},
+                            .text = cells[column], .size = 13, .wrap = .TextWrapEllipsis})
+                        x += widths[column]
+                    }
+                    End(session)
+                }
+    } else {
             selected := manager.selected[index]
             gtk_state: u32 = ifx selected then cast(u32)Gtk.GtkStyleSelected else cast(u32)0
             if focused && Input.TreeHoveredAt(session,previous) { gtk_state |= cast(u32)Gtk.GtkStylePrelight }
@@ -1916,15 +2095,20 @@ DrawDetailsInPane :: (host: *Host, view: *PaneView, session: Session, bounds: Re
                 Native.Label(p,cell_bounds,data.cells[column],"treeview",gtk_state,ifx column==1 then 2 else 0)
                 x+=width
             }
-            if scoped { End(session) }
+            if scoped { End(session) }    }
+
         }
+    #if !#defined(EXPLORER_TAIJI) {
         p.clip=previous_clip
+    }
         End(session)
         if activated >= 0 { EntryClick(host,activated,modifiers) }
     }
+    #if !#defined(EXPLORER_TAIJI) {
     Native.DetailsUndershoot(p,body,manager.scroll,count*row_height)
     Native.DetailsUndershoot(p,body,view.details_scroll_x,content_width,true)
     PaintNativeScroll(view,session,p,focused)
+    }
     if focused && key==KeyEnter { ActivateEntry(host,manager.cursor) }
 
 }
@@ -2046,10 +2230,12 @@ DrawPreviewInPane :: (host: *Host, view: *PaneView, session: Session, viewport: 
     y := viewport.y + 40.0
     if Button(host, session, 82, "Previous", .{x, y, 76.0, 32.0}) { PreviewStep(host, -1) }
     if Button(host, session, 83, "Next", .{x + 82.0, y, 62.0, 32.0}) { PreviewStep(host, 1) }
+    #if !#defined(EXPLORER_TAIJI) {
     if Button(host, session, 84, "Open", .{x + 150.0, y, 78.0, 32.0}) || key == KeyEnter {
         if !Opener.OpenUri(TextView(state.path)) {
             Model.SetError(manager, "The default application could not be started.")
         }
+    }
     }
     if Button(host, session, 85, "Close", .{viewport.x + viewport.width - 76.0, y, 68.0, 32.0}) {
         Preview.Close(state)
@@ -2072,6 +2258,7 @@ DrawPreviewInPane :: (host: *Host, view: *PaneView, session: Session, viewport: 
         viewport.y + viewport.height - 62.0 - content_y}
     if body.width < 1.0 { body.width = 1.0 }
     if body.height < 1.0 { body.height = 1.0 }
+    #if !#defined(EXPLORER_TAIJI) {
     if state.kind == .Image {
         image := ImageWidget.Props.{.key = cast(u64)90, .asset_path = TextView(state.path),
             .alt_text = "Image preview unavailable", .bounds = body, .fit = .ImageFitContain,
@@ -2128,17 +2315,26 @@ DrawPreviewInPane :: (host: *Host, view: *PaneView, session: Session, viewport: 
         TextWidget.Draw(session, TextWidget.Props.{.key = cast(u64)93,
             .bounds = .{body.x, viewport.y + viewport.height - 54.0, body.width, 22.0},
             .text = description, .size = 13})
-    } else if state.kind == .Text {
+        }
+    }
+    if state.kind == .Text {
         DrawPreviewText(host, session, body, key, modifiers, focused)
-    } else {
+    } else if state.kind != .Image {
         message := "No built-in preview for this file. Choose Open to use its default application."
+        #if #defined(EXPLORER_TAIJI) {
+            message = "Text preview unavailable. Taiji has no default application dispatcher."
+        }
         if state.kind == .Error { message = TextView(state.body) }
         TextWidget.Draw(session, TextWidget.Props.{.key = cast(u64)94, .bounds = body,
             .text = message, .size = 16})
     }
     if state.kind != .Image && state.info.kind != .Missing {
         modified: [32]u8
+    #if #defined(EXPLORER_TAIJI) {
+        date := GuestDate(state.info.modified, modified[:])
+    } else {
         date := Calendar.FormatDateTime(DateTime.LocalAt(state.info.modified), "%Y-%m-%d %H:%M:%S", modified[:])
+    }
         metadata: Vec(u8)
         BuilderPrint(*metadata, "% bytes · Modified %", state.info.size, date)
         TextWidget.Draw(session, TextWidget.Props.{.key = cast(u64)96,
@@ -2147,7 +2343,11 @@ DrawPreviewInPane :: (host: *Host, view: *PaneView, session: Session, viewport: 
     }
     help := "Open uses the default application · Esc closes preview"
     if state.kind == .Image { help = "Fit / 100% / + − · arrows and wheel pan when zoomed · PgUp/PgDn browse · Esc closes" }
-    if state.kind == .Text && state.truncated { help = "Preview limited to 64 KiB · Open to read the complete file · Esc closes" }
+    #if #defined(EXPLORER_TAIJI) {
+        help = ifx state.truncated then "Preview limited to 64 KiB · Esc closes" else "Esc closes preview"
+    } else {
+        if state.kind == .Text && state.truncated { help = "Preview limited to 64 KiB · Open to read the complete file · Esc closes" }
+    }
     if manager.error != "" { help = manager.error }
     help_caption: Text = FileDisplay.Caption(help)
     TextWidget.Draw(session, TextWidget.Props.{.key = cast(u64)95,
@@ -2156,6 +2356,7 @@ DrawPreviewInPane :: (host: *Host, view: *PaneView, session: Session, viewport: 
 }
 
 #scope_export
+#if !#defined(EXPLORER_TAIJI) {
 DrawPaneBody :: (host: *Host, session: Session, bounds: Rectangle, pane_index: s32,
     key: s32, modifiers: s32, enabled: bool) {
     manager := PaneManager(host, pane_index)
@@ -2383,6 +2584,7 @@ OpenPlace :: (host: *Host, route: string, key: u64) {
     host.location_without_slash=true
 }
 
+}
 ConfirmDelete :: (host: *Host) {
     manager:=ActiveManager(host)
     count:=Model.SelectedCount(manager)
@@ -2418,6 +2620,7 @@ FinishDelete :: (host: *Host) {
     RefreshOtherPane(host)
 }
 
+#if !#defined(EXPLORER_TAIJI) {
 OpenInfoFor :: (host: *Host, path: string) {
     if path=="" { OpenInfo(host,true); return }
     if !CaptureModalOwner(host) { return }
@@ -2453,6 +2656,8 @@ OpenInfo :: (host: *Host, properties: bool) {
     VecFree(caption.bytes)
 }
 
+}
+#if !#defined(EXPLORER_TAIJI) {
 ChangeZoom :: (host: *Host, direction: s32) {
     manager:=ActiveManager(host); view:=ActiveView(host)
     mode:=cast(s32)manager.view_mode
@@ -2518,6 +2723,8 @@ MenuShortcut :: (menu: s32, item: s32) -> string {
 }
 
 // Global actions yield to text editors, previews and popup navigation.
+}
+#if !#defined(EXPLORER_TAIJI) {
 DispatchShortcut :: (host: *Host, session: Session, key: s32, modifiers: s32) -> bool {
     manager:=ActiveManager(host); view:=ActiveView(host)
     if key==0 || manager.prompt!=.PromptNone || host.preview.opened || host.breadcrumb_open || host.info_open ||
@@ -3129,12 +3336,15 @@ DrawNativeMenu :: (host: *Host, session: Session, viewport: Rectangle, focused: 
     }
 }
 
+}
 Draw :: (host: *Host, host_session: HostSession, host_viewport: HostViewport,
     focused: bool = true) -> s32 {
     if host == null || !host.started { return 1 }
     session := Session.{.slot = host_session.slot, .epoch = host_session.epoch}
     viewport := Rectangle.{host_viewport.x, host_viewport.y, host_viewport.width, host_viewport.height}
+    #if !#defined(EXPLORER_TAIJI) {
     ResolvePaneInput(host, session, viewport, focused)
+    }
     if host.active_pane == 1 {
         return DrawInPane(host, *host.secondary[0].view, host_session, host_viewport, focused)
     }
@@ -3145,10 +3355,12 @@ DrawInPane :: (host: *Host, view: *PaneView, host_session: HostSession, host_vie
     focused: bool = true) -> s32 {
 
     if host == null || !host.started { return 1 }
+    #if !#defined(EXPLORER_TAIJI) {
     FileClipboard.Poll()
     // Drop destinations are recorded while this frame draws.
     VecFree(host.drop_rows)
     ApplyExternalDrops(host)
+    }
     ui_session: Session
     ui_session.slot = host_session.slot
     ui_session.epoch = host_session.epoch
@@ -3162,6 +3374,7 @@ DrawInPane :: (host: *Host, view: *PaneView, host_session: HostSession, host_vie
     snapshot: Input.InputSnapshot
     if !focused { snapshot = Input.TreeInputSuspend(session) }
     defer { if !focused { unused Input.TreeInputResume(session, snapshot) } }
+    #if !#defined(EXPLORER_TAIJI) {
     if !focused || PaneLocked(host) {
         unused NativeScroll.GtkScrollCancel(host.view.native_scroll)
         if host.secondary.count>0 { unused NativeScroll.GtkScrollCancel(host.secondary[0].view.native_scroll) }
@@ -3169,6 +3382,12 @@ DrawInPane :: (host: *Host, view: *PaneView, host_session: HostSession, host_vie
         unused NativeScroll.GtkScrollCancel(host.secondary[0].view.native_scroll)
     }
     RefreshTheme(host)
+    }
+    #if #defined(EXPLORER_TAIJI) {
+        host.palette = .{.background = 0xe8ecf1ff, .base = 0xfafcffff, .text = 0x17212bff,
+            .selected = 0xb4d2f4ff, .selected_text = 0x17212bff, .border = 0x8695a5ff,
+            .danger = 0xa72323ff, .warning = 0x885a16ff, .success = 0x226640ff}
+    }
     if !Palettes.WidgetPaletteUse(session, host.palette) { return 1 }
     defer { unused Palettes.WidgetPaletteRestore(session) }
     manager := ActiveManager(host)
@@ -3178,7 +3397,11 @@ DrawInPane :: (host: *Host, view: *PaneView, host_session: HostSession, host_vie
     root := BoxWidget.Draw(session, BoxWidget.Props.{.key = cast(u64)500, .bounds = viewport,
         .fill = ColorFromPacked(host.palette.background)})
     if root < 0 || !TreePushScope(session, root) { return 1 }
-    defer { Native.ApplyPointerCursors(session,root) }
+    defer {
+        #if !#defined(EXPLORER_TAIJI) {
+            Native.ApplyPointerCursors(session,root)
+        }
+    }
     TreeSetChildClip(session, root, viewport)
     defer { End(session) }
     defer { ApplyPaneRequest(host) }
@@ -3202,7 +3425,9 @@ DrawInPane :: (host: *Host, view: *PaneView, host_session: HostSession, host_vie
         else { manager.prompt = .PromptNone; host.field.length = 0; host.field.focused = false }
         key = 0
     }
+    #if !#defined(EXPLORER_TAIJI) {
     if focused && key == KeyF3 && modifiers == 0 && !PaneLocked(host) { unused ToggleSplit(host); key = 0 }
+    }
     typed_text := Keys.TypedTextTake(session, host.typed[:])
     if host.preview.opened {
         DrawPreview(host, session, viewport, key, modifiers, focused)
@@ -3215,13 +3440,27 @@ DrawInPane :: (host: *Host, view: *PaneView, host_session: HostSession, host_vie
         return 0
     }
 
+    #if #defined(EXPLORER_TAIJI) {
+        if DispatchGuestShortcut(host,key,modifiers) { key=0 }
+    } else {
     if DispatchShortcut(host,session,key,modifiers) { key=0 }
+    }
     // A completed location edit can commit before drawing its destination.
     // Text arriving with Return still goes through the field's edit path.
     if focused && manager.prompt == .PromptLocation && key == KeyEnter && typed_text == "" {
         FinishPrompt(host)
         key = 0
     }
+    #if #defined(EXPLORER_TAIJI) {
+        path_bounds := DrawGuestChrome(host, session, viewport, focused, key)
+        top: float32 = ifx host.actions_open then 132.0 else 70.0
+        list := Rectangle.{viewport.x + 6.0, viewport.y + top, viewport.width - 12.0, viewport.height - top - 30.0}
+        if list.width >= 1.0 && list.height >= 1.0 {
+            DrawDetails(host, session, list, ifx PaneLocked(host) || host.actions_open then 0 else key,
+                modifiers, focused && !PaneLocked(host) && !host.actions_open)
+        }
+        DrawGuestStatus(manager, session, viewport)
+    } else {
     window_focused:=focused
     if host.info_open { focused=false; key=0 }
 
@@ -3288,10 +3527,12 @@ DrawInPane :: (host: *Host, view: *PaneView, host_session: HostSession, host_vie
     painted:=GtkPainterEnd(*host.paint,cast(u64)599)
     host.paint_active=false
     if !painted { return 1 }
+    }
     if manager.prompt == .PromptLocation {
         DrawLocationEditor(host, session, path_bounds, viewport, key, modifiers, typed_text, focused)
         if manager.prompt == .PromptLocation { DrawLocationStatus(host, session, viewport) }
     }
+    #if !#defined(EXPLORER_TAIJI) {
     UpdateDrag(host,session,key)
     DrawChooser(host,session,viewport,focused,key)
     if manager.prompt==.PromptEmptyTrash {
@@ -3304,27 +3545,36 @@ DrawInPane :: (host: *Host, view: *PaneView, host_session: HostSession, host_vie
             FinishEmptyTrash(host)
         }
     }
+    }
     if manager.prompt==.PromptDelete {
-        bounds:=Rectangle.{viewport.x+viewport.width*0.5-250.0,viewport.y+viewport.height*0.5-55.0,500.0,110.0}
+        width: float32 = 500.0
+        #if #defined(EXPLORER_TAIJI) {
+            if viewport.width < width + 12.0 { width = viewport.width - 12.0 }
+        }
+        bounds:=Rectangle.{viewport.x+(viewport.width-width)*0.5,viewport.y+viewport.height*0.5-55.0,width,110.0}
         BoxWidget.Draw(session,BoxWidget.Props.{.key=cast(u64)50,.bounds=bounds,.fill=ColorFromPacked(host.palette.base)})
-        TextWidget.Draw(session,TextWidget.Props.{.key=cast(u64)51,.bounds=.{bounds.x+16.0,bounds.y+12.0,468.0,40.0},.text=PromptTitle(host),.size = 16})
-        if Button(host,session,53,"Cancel",.{bounds.x+250.0,bounds.y+62.0,100.0,32.0},focused) {
+        TextWidget.Draw(session,TextWidget.Props.{.key=cast(u64)51,.bounds=.{bounds.x+16.0,bounds.y+12.0,width-32.0,40.0},.text=PromptTitle(host),.size = 16})
+        if Button(host,session,53,"Cancel",.{bounds.x+width-250.0,bounds.y+62.0,100.0,32.0},focused) {
             manager.prompt=.PromptNone
-        } else if Button(host,session,54,"Delete",.{bounds.x+364.0,bounds.y+62.0,120.0,32.0},focused) || (focused && key==KeyEnter) {
+        } else if Button(host,session,54,"Delete",.{bounds.x+width-136.0,bounds.y+62.0,120.0,32.0},focused) || (focused && key==KeyEnter) {
             FinishDelete(host)
         }
     }
     if manager.prompt != .PromptNone && manager.prompt != .PromptLocation && manager.prompt!=.PromptDelete && manager.prompt!=.PromptEmptyTrash {
-        prompt_bounds := Rectangle.{viewport.x + viewport.width * 0.5 - 220.0,
-            viewport.y + viewport.height * 0.5 - 46.0, 440.0, 92.0}
+        width: float32 = 440.0
+        #if #defined(EXPLORER_TAIJI) {
+            if viewport.width < width + 12.0 { width = viewport.width - 12.0 }
+        }
+        prompt_bounds := Rectangle.{viewport.x + (viewport.width - width) * 0.5,
+            viewport.y + viewport.height * 0.5 - 46.0, width, 92.0}
         BoxWidget.Draw(session, BoxWidget.Props.{.key = cast(u64)50, .bounds = prompt_bounds,
             .fill = ColorFromPacked(host.palette.base)})
         TextWidget.Draw(session, TextWidget.Props.{.key = cast(u64)51,
-            .bounds = .{prompt_bounds.x + 16.0, prompt_bounds.y + 12.0, 408.0, 22.0},
+            .bounds = .{prompt_bounds.x + 16.0, prompt_bounds.y + 12.0, width - 32.0, 22.0},
             .text = PromptTitle(host), .size = 16})
         props := TextFieldWidget.Props.{
             .key = cast(u64)52, .bounds = .{prompt_bounds.x + 16.0,
-                prompt_bounds.y + 40.0, 408.0, 32.0},
+                prompt_bounds.y + 40.0, width - 32.0, 32.0},
             .value = TextView(host.field_value[:host.field.length]),
             .cursor = host.field.cursor, .anchor = host.field.anchor,
             .scroll_x = host.field.scroll_x, .focused = host.field.focused && focused,
@@ -3348,4 +3598,115 @@ DrawInPane :: (host: *Host, view: *PaneView, host_session: HostSession, host_vie
         }
     }
     return 0
+}
+
+#if #defined(EXPLORER_TAIJI) {
+GuestCalendar :: #import "std/date_parse";
+GuestDate :: (seconds: s64, output: []u8) -> string {
+    length := GuestCalendar.WriteIsoDay(seconds, output)
+    return ifx length > 0 then TextView(output[:length]) else ""
+}
+
+DrawGuestStatus :: (manager: *Model.Manager, session: Session, viewport: Rectangle) {
+    bounds := Rectangle.{viewport.x + 8.0, viewport.y + viewport.height - 26.0, viewport.width - 16.0, 22.0}
+    if manager.error == "" {
+        label: [64]u8
+        digits: [21]u8
+        length := CopyInto(label[:], Number.FormatInteger(manager.entries.count, digits[:]))
+        length += CopyInto(label[length:], " items  ·  ")
+        length += CopyInto(label[length:], Number.FormatInteger(cast(s64)Model.SelectedCount(manager), digits[:]))
+        length += CopyInto(label[length:], " selected")
+        DrawGuestStatusText(session, bounds, TextView(label[:length]))
+    } else {
+        escaped: Text = FileDisplay.Caption(manager.error)
+        DrawGuestStatusText(session, bounds, TextView(escaped))
+    }
+}
+
+DrawGuestStatusText :: (session: Session, bounds: Rectangle, text: string) {
+    TextWidget.Draw(session, .{.key = 506, .bounds = bounds, .text = text, .size = 13, .wrap = .TextWrapEllipsis})
+}
+
+DispatchGuestShortcut :: (host: *Host, key: s32, modifiers: s32) -> bool {
+    manager := ActiveManager(host)
+    if key == 0 || PaneLocked(host) || host.actions_open { return false }
+    if modifiers == KeyModifierAlt {
+        if key == KeyLeft { unused Model.NavigateBack(manager) }
+        else if key == KeyRight { unused Model.NavigateForward(manager) }
+        else if key == KeyUp { unused Model.NavigateUp(manager) }
+        else { return false }
+    } else if modifiers == (KeyModifierControl | KeyModifierShift) && key == 78 {
+        OpenPrompt(host, .PromptFolder)
+    } else if modifiers == KeyModifierControl {
+        if key == 76 { OpenPrompt(host, .PromptLocation) }
+        else if key == 82 { unused Model.Refresh(manager) }
+        else if key == 65 { Model.SelectAll(manager) }
+        else if key == 67 { unused Model.CopySelection(manager, false) }
+        else if key == 86 { unused Model.Paste(manager) }
+        else if key == 88 { Model.SetError(manager, "Taiji does not provide a safe move operation") }
+        else if key == 72 { manager.show_hidden = !manager.show_hidden; unused Model.Refresh(manager) }
+        else { return false }
+    } else if modifiers == 0 || modifiers == KeyModifierShift {
+        if key == KeyDelete { ConfirmDelete(host) }
+        else if key == 294 { unused Model.Refresh(manager) }
+        else if key == 291 { Model.SetError(manager, "Taiji does not provide a safe rename operation") }
+        else { return false }
+    } else { return false }
+    return true
+}
+
+DrawGuestChrome :: (host: *Host, session: Session, viewport: Rectangle, focused: bool, key: s32) -> Rectangle {
+    manager := ActiveManager(host)
+    enabled := focused && !PaneLocked(host) && !host.actions_open
+    x := viewport.x + 6.0
+    y := viewport.y + 4.0
+    width := viewport.width - 12.0
+    cell := width / 6.0
+    if Button(host, session, 210, "Back", .{x, y, cell, 28.0}, enabled && manager.back.count > 0) { unused Model.NavigateBack(manager) }
+    if Button(host, session, 211, "Forward", .{x+cell, y, cell, 28.0}, enabled && manager.forward.count > 0) { unused Model.NavigateForward(manager) }
+    if Button(host, session, 212, "Up", .{x+cell*2.0, y, cell, 28.0}, enabled && manager.cwd != "/") { unused Model.NavigateUp(manager) }
+    if Button(host, session, 213, "Refresh", .{x+cell*3.0, y, cell, 28.0}, enabled) { unused Model.Refresh(manager) }
+    if Button(host, session, 214, "Open", .{x+cell*4.0, y, cell, 28.0}, enabled && manager.cursor >= 0) { ActivateEntry(host, manager.cursor) }
+    if ButtonWidget.Draw(session, .{.key = 227, .bounds = .{x + cell*5.0,y,cell,28.0},
+        .label = "Actions", .disabled = !focused || manager.prompt != .PromptNone,
+        .selected = host.actions_open, .fit_content = true}) == 1 { host.actions_open = !host.actions_open }
+    if host.actions_open && key == KeyEscape { host.actions_open = false }
+    if host.actions_open {
+        selected := Model.SelectedCount(manager)
+        can_copy := selected > 0
+        for index: cast(s32)0..cast(s32)manager.entries.count-1 {
+            if manager.selected[index] && manager.entries[index].info.kind != .File { can_copy = false; break }
+        }
+        labels: [6]string = .["New folder", "New file", "Copy", "Paste", "Delete…",
+            ifx manager.show_hidden then "Hide hidden" else "Show hidden"]
+        allowed: [6]bool = .[true, true, can_copy, manager.clipboard.paths.count > 0, selected > 0, true]
+        choice: s32 = -1
+        action_width := width / 3.0
+        for index: cast(s32)0..5 {
+            button := Rectangle.{x + cast(float32)(index % 3)*action_width,
+                y + 66.0 + cast(float32)(index / 3)*30.0, action_width, 30.0}
+            if Button(host, session, 240 + index, labels[index], button, focused && allowed[index]) { choice = index }
+        }
+        if choice >= 0 { host.actions_open = false }
+        if choice == 0 { OpenPrompt(host, .PromptFolder) }
+        else if choice == 1 { OpenPrompt(host, .PromptFile) }
+        else if choice == 2 { unused Model.CopySelection(manager, false) }
+        else if choice == 3 { unused Model.Paste(manager) }
+        else if choice == 4 { ConfirmDelete(host) }
+        else if choice == 5 { manager.show_hidden = !manager.show_hidden; unused Model.Refresh(manager) }
+    }
+    path_bounds := Rectangle.{x,y+32.0,width,30.0}
+    if manager.prompt != .PromptLocation {
+        escaped_path: Text
+        needs_escapes := FileDisplay.GuestCaptionNeedsEscapes(manager.cwd)
+        if needs_escapes {
+            escaped: Text = FileDisplay.Caption(manager.cwd)
+            VecSwap(escaped_path.bytes, escaped.bytes)
+        }
+        label := ifx needs_escapes then TextView(escaped_path) else manager.cwd
+        if ButtonWidget.Draw(session, .{.key = 222, .bounds = path_bounds, .label = label,
+            .disabled = !focused || PaneLocked(host) || host.actions_open}) == 1 { OpenPrompt(host, .PromptLocation) }
+    }
+    return path_bounds
+}
 }

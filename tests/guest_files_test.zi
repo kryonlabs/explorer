@@ -1,0 +1,156 @@
+using Guest :: #import "guest_files";
+using Vectors :: #import "std/vec";
+wire: Vec(u8);
+copied: Vec(u8);
+position: s64;
+closes: s32;
+removes: s32;
+creates: s32;
+chunk: s32 = 7;
+fail_write: bool;
+fail_read: bool;
+fail_close: bool;
+replace_target: bool;
+replace_source: bool;
+create_collision: bool;
+failures: s32;
+
+Expect :: (value: bool, label: string) {
+    if !value { print("FAIL: %\n", label); failures += 1 }
+}
+Open :: (path: string) -> s32 { position = 0; return 3 }
+Create :: (path: string, directory: bool) -> s32 { creates += 1; return ifx create_collision then -1 else 4 }
+Read :: (handle: s32, bytes: []u8) -> s32 {
+    if fail_read { return -1 }
+    size := wire.count-position
+    if size > chunk { size = chunk }
+    if size > bytes.count { size = bytes.count }
+    for i: 0..size-1 { bytes[i] = wire[position+i] }
+    position += size
+    return cast(s32)size
+}
+Write :: (handle: s32, bytes: string) -> s32 {
+    if fail_write { return 0 }
+    // Deliberately short writes.
+    size := ifx bytes.count > 2 then 2 else bytes.count
+    for i: 0..size-1 { unused VecPush(copied,bytes[i]) }
+    return cast(s32)size
+}
+Close :: (handle: s32) -> s32 { closes += 1; return ifx fail_close then -1 else 0 }
+Remove :: (path: string) -> Guest.Status { removes += 1; return .Ok }
+Stat :: (path: string, info: *Guest.Info) -> Guest.Status {
+    info.kind = .File; info.size = wire.count
+    info.inode = ifx path == "/source" then 42 else ifx replace_target then 44 else 43
+    return .Ok
+}
+Fstat :: (handle: s32, info: *Guest.Info) -> Guest.Status {
+    info.kind = .File; info.size = wire.count
+    info.inode = ifx handle == 4 || replace_source then 43 else 42
+    return .Ok
+}
+Put :: (at: s64, width: s64, value: u64) {
+    for i: 0..width-1 { wire[at+i] = cast(u8)(value >> cast(u64)(8*i)) }
+}
+Record :: (name: string) {
+    VecClear(wire)
+    for i: 0..48+name.count { unused VecPush(wire,cast(u8)0) }
+    Put(0,2,cast(u64)wire.count-2)
+    Put(13,8,42); Put(21,4,0x800001ed)
+    Put(41,2,cast(u64)name.count)
+    for i: 0..name.count-1 { wire[43+i] = name[i] }
+}
+
+ReadListing :: (provider: Guest.Provider, path: string) -> (first: Text, info: Guest.Info, count: s32, status: Guest.Status) {
+    cursor := Guest.OpenDirectory(provider, path)
+    buffer: [Guest.DIRECTORY_BUFFER]u8
+    name: Text
+    metadata: Guest.Info
+    total: s32
+    while true {
+        entry := Guest.NextDirectoryEntry(provider, *cursor, buffer[:])
+        if !entry.valid { break }
+        if total == 0 {
+            owned: Text = TextCopy(entry.name)
+            VecSwap(name.bytes, owned.bytes)
+            metadata = entry.info
+        }
+        total += 1
+    }
+    result := Guest.CloseDirectory(provider, *cursor)
+    return name, metadata, total, result
+}
+
+main :: () -> s32 {
+    provider := Guest.Provider.{open = Open, create_new = Create, read = Read,
+        write = Write, close = Close, stat = Stat, fstat = Fstat, remove = Remove}
+    Record("世界.txt")
+    name, info, count, status := ReadListing(provider, "/usr")
+    Expect(status == .Ok && count == 1,"split records")
+    Expect(TextView(name) == "世界.txt" && info.inode == 42 && info.kind == .Directory,"UTF8 name and metadata")
+    // The caller copies borrowed names before advancing the reader.
+    Record("another name")
+    wire[43] = #char "X"
+    Expect(TextView(name) == "世界.txt","copied name survives storage reuse")
+    Record("bad/name")
+    _, _, rejected_count, rejected := ReadListing(provider, "/")
+    Expect(rejected == .Failed && rejected_count == 0,"reject path injection")
+    Record("valid")
+    Put(0,2,cast(u64)wire.count-1)
+    _, _, truncated_count, truncated := ReadListing(provider, "/")
+    Expect(truncated == .Failed && truncated_count == 0,"truncated record is not EOF")
+    Record("valid")
+    fail_read = true
+    _, _, failed_count, failed := ReadListing(provider, "/")
+    Expect(failed == .Failed && failed_count == 0,"read failure")
+    fail_read = false
+    fail_close = true
+    _, _, closed_count, unclosed := ReadListing(provider, "/")
+    Expect(unclosed == .Failed && closed_count == 1,"close failure after a valid record")
+    fail_close = false
+    VecClear(wire)
+    text := "guest copy 世界"
+    for byte: text { unused VecPush(wire,byte) }
+    Expect(Guest.CopyNew(provider,"/source","/new") == .Ok && TextView(copied[:]) == text,"stream copy short writes")
+    fail_write = true
+    Expect(Guest.CopyNew(provider,"/source","/failed") == .Failed && removes == 1,"failed copy cleanup")
+    disabled := Guest.Provider.{open = Open, create_new = Create, read = Read,
+        write = Write, close = Close, stat = Stat}
+    before := creates
+    Expect(Guest.CopyNew(disabled,"/source","/disabled") == .Unsupported && creates == before,"no mutation without rollback")
+    Expect(!Guest.ValidPath("") && !Guest.ValidName("..") && !Guest.ValidName("a/b"),"invalid paths")
+    absolute: Text = Guest.AbsolutePath("../世界/./file","/usr/guest")
+    root: Text = Guest.AbsolutePath("/../../","/ignored")
+    unknown: Text = Guest.AbsolutePath("relative","")
+    Expect(TextView(absolute) == "/usr/世界/file" && TextView(root) == "/" && unknown.bytes.count == 0,"guest path normalization")
+    Expect(closes == 9,"every opened handle closed")
+    replace_target = true
+    Expect(Guest.CopyNew(provider,"/source","/replaced") == .CleanupFailed && removes == 1,"keep replacement target after copy failure")
+    replace_target = false
+    replace_source = true
+    before = creates
+    Expect(Guest.CopyNew(provider,"/source","/new") == .Failed && creates == before,"refuse replaced source before create")
+    replace_source = false
+    create_collision = true
+    Expect(Guest.CopyNew(provider,"/source","/new") == .Failed && removes == 1,"exclusive create never removes existing target")
+    create_collision = false
+    Expect(closes == 13,"failed copy also closes every opened handle")
+    fail_write = false
+    // Many entries cross buffer boundaries and hit the explicit listing cap.
+    Record("entry")
+    record: Vec(u8)
+    for byte: wire { unused VecPush(record,byte) }
+    VecClear(wire)
+    for i: 0..Guest.ENTRY_LIMIT { for byte: record { unused VecPush(wire,byte) } }
+    chunk = 8192
+    _, _, limited_count, limited := ReadListing(provider, "/")
+    Expect(limited == .Limit && limited_count == Guest.ENTRY_LIMIT,"bounded large directory with explicit failure")
+    VecFree(record)
+    Record("again")
+    for i: 0..99 {
+        _, _, repeated_count, repeated := ReadListing(provider, "/")
+        Expect(repeated == .Ok && repeated_count == 1,"repeated listing")
+    }
+    VecFree(wire); VecFree(copied)
+    if failures == 0 { print("guest_files_test: passed\n") }
+    return ifx failures == 0 then 0 else 1
+}

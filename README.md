@@ -1,9 +1,10 @@
 # Explorer
 
-Explorer is an independent Linux file manager written in Ziran with a Kryon
-user interface. Its goal is full Thunar parity; the current implementation
-covers basic navigation and file operations. It runs as a standalone desktop
-application.
+Explorer is a file manager written in Ziran with a Kryon user interface. Its
+standalone Linux application aims for Thunar parity. The same app also has a
+[TaijiOS ZX build](docs/TAIJI.md) with guest filesystem access.
+
+The following shortcuts and integrations apply to the Linux desktop.
 
 Use View → Icons, Detailed List or Compact List, or Ctrl+1, Ctrl+2 and Ctrl+3, to change
 views. All views share selection, focus and sorting. Ctrl-click toggles a file;

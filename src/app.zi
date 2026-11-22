@@ -1,32 +1,14 @@
+AppHost :: #import "app_host";
+#import "kryon/session"
+#import "kryon/geometry"
+
+#if !#defined(EXPLORER_TAIJI) {
 Desktop :: #import "kryon/desktop_runtime";
 Window :: #import "kryon/Window";
 Gtk :: #import "kryon/GtkStyleLinux";
 Native :: #import "native_ui";
 Windows :: #import "native_windows";
 window_icon_generation: u64;
-AppHost :: #import "app_host";
-#import "kryon/session"
-#import "kryon/geometry"
-#import "kryon/tree"
-#import "kryon/drawing_props"
-#import "kryon/control_props"
-#import "kryon/style"
-#import "kryon/style_sheet"
-#import "kryon/system_clipboard"
-#import "kryon/input_protocol"
-BoxWidget :: #import "kryon/box";
-TextWidget :: #import "kryon/text";
-ButtonWidget :: #import "kryon/button";
-ScrollWidget :: #import "kryon/scroll";
-Overlay :: #import "kryon/overlay";
-BreadcrumbWidget :: #import "kryon/breadcrumb";
-DropdownWidget :: #import "kryon/dropdown";
-TextFieldWidget :: #import "kryon/text_field";
-ListBox :: #import "kryon/list_box";
-PanedViewWidget :: #import "kryon/paned_view";
-TabBar :: #import "kryon/tab_bar";
-GridMultiWidget :: #import "kryon/grid_multi";
-ImageWidget :: #import "kryon/image";
 using CString :: #import "std/c_string";
 using Bytes :: #import "std/byte_text_linux";
 glib :: #system_library "glib-2.0";
@@ -42,6 +24,8 @@ OpenWindow :: (path: string) -> bool {
     return SpawnWindow(*directory[0],*arguments[0],null,0,null,null,null,null)!=0
 }
 
+}
+
 host: AppHost.Host;
 
 #program_export
@@ -55,35 +39,47 @@ Frame :: (session: Session, viewport: Rectangle) -> s32 {
     host_viewport.y = viewport.y
     host_viewport.width = viewport.width
     host_viewport.height = viewport.height
-    // Files another application dropped on this window (SDL's XDND target).
-    dropped: [4096]u8
-    while Desktop.DesktopTakeDroppedFile(dropped[:]) { AppHost.QueueExternalDrop(*host, TextFromCString(*dropped[0])) }
-    result:=AppHost.Draw(*host, host_session, host_viewport,Window.WindowFocused())
-    // A drag out of Explorer follows the pointer and serves its data every frame.
-    if AppHost.DragActive(*host) { Desktop.DesktopRequestFrame() }
-    if host.window_requested {
-        next: Text
-        while AppHost.TakeWindowRequest(*host, *next) {
-            if !OpenWindow(TextView(next)) { AppHost.ActiveManager(*host).error="The new window could not be started." }
+    #if #defined(EXPLORER_TAIJI) {
+        result := AppHost.Draw(*host, host_session, host_viewport)
+    } else {
+        // Files another application dropped on this window (SDL's XDND target).
+        dropped: [4096]u8
+        while Desktop.DesktopTakeDroppedFile(dropped[:]) { AppHost.QueueExternalDrop(*host, TextFromCString(*dropped[0])) }
+        result:=AppHost.Draw(*host, host_session, host_viewport,Window.WindowFocused())
+        // A drag out of Explorer follows the pointer and serves its data every frame.
+        if AppHost.DragActive(*host) { Desktop.DesktopRequestFrame() }
+        if host.window_requested {
+            next: Text
+            while AppHost.TakeWindowRequest(*host, *next) {
+                if !OpenWindow(TextView(next)) { AppHost.ActiveManager(*host).error="The new window could not be started." }
+            }
+            VecFree(next.bytes)
         }
-        VecFree(next.bytes)
-    }
-    if host.quit_all_requested {
-        host.quit_all_requested=false
-        if !Windows.CloseAll() { AppHost.ActiveManager(*host).error="The windows could not all be closed." }
-    }
-    if host.quit_requested || Windows.PollClose() { Window.WindowQuit() }
-    if Windows.TakeFailure() { AppHost.ActiveManager(*host).error="The windows could not all be closed." }
-    // Only the standalone application owns the desktop window. Embedding
-    // Explorer in another host must not change that application's window icon.
-    generation:=Gtk.GtkStyleGeneration()
-    if generation!=0 && generation!=window_icon_generation {
-        nodes:=Native.Nodes("image")
-        icon:=Gtk.GtkIconRaster("system-file-manager",48,1,nodes[:])
-        if icon.rgba.count>0 && Desktop.DesktopSetIcon(icon.width,icon.height,icon.rgba) {
-            window_icon_generation=Gtk.GtkStyleGeneration()
+        if host.quit_all_requested {
+            host.quit_all_requested=false
+            if !Windows.CloseAll() { AppHost.ActiveManager(*host).error="The windows could not all be closed." }
         }
-        Gtk.GtkStyleBitmapRelease(*icon)
+        if host.quit_requested || Windows.PollClose() { Window.WindowQuit() }
+        if Windows.TakeFailure() { AppHost.ActiveManager(*host).error="The windows could not all be closed." }
+        // Only the standalone application owns the desktop window. Embedding
+        // Explorer in another host must not change that application's window icon.
+        generation:=Gtk.GtkStyleGeneration()
+        if generation!=0 && generation!=window_icon_generation {
+            nodes:=Native.Nodes("image")
+            icon:=Gtk.GtkIconRaster("system-file-manager",48,1,nodes[:])
+            if icon.rgba.count>0 && Desktop.DesktopSetIcon(icon.width,icon.height,icon.rgba) {
+                window_icon_generation=Gtk.GtkStyleGeneration()
+            }
+            Gtk.GtkStyleBitmapRelease(*icon)
+        }
     }
     return result
+}
+
+#if #defined(EXPLORER_TAIJI) {
+    #scope_export
+    Prepare :: () -> bool { return AppHost.Prepare(*host) }
+
+    #scope_export
+    Close :: () { AppHost.Close(*host) }
 }

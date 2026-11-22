@@ -1,0 +1,246 @@
+// Guest filesystem policy. All I/O crosses this typed provider; no native
+// filesystem, environment, shell or desktop service is reachable here.
+using Vectors :: #import "std/vec";
+Utf8 :: #import "std/utf8";
+
+#scope_export
+PATH_LIMIT :: 4095;
+NAME_LIMIT :: 255;
+DIRECTORY_BUFFER :: 8192;
+ENTRY_LIMIT :: 4096;
+LIST_PATH_BYTES_LIMIT :: 1048576;
+COPY_LIMIT :: 16777216;
+Kind :: enum { File; Directory; Other; }
+Status :: enum { Ok; Missing; Denied; Invalid; Unsupported; Failed; Limit; CleanupFailed; }
+Info :: struct {
+    kind: Kind
+    mode: u32
+    size: s64
+    modified: s64
+    device: u64
+    inode: u64
+    version: u64
+}
+// CreateNew must atomically refuse an existing path. A failed Stat does not
+// establish that a destination is free.
+OpenCall :: #type (path: string) -> s32;
+CreateCall :: #type (path: string, directory: bool) -> s32;
+ReadCall :: #type (handle: s32, bytes: []u8) -> s32;
+WriteCall :: #type (handle: s32, bytes: string) -> s32;
+CloseCall :: #type (handle: s32) -> s32;
+StatCall :: #type (path: string, info: *Info) -> Status;
+FstatCall :: #type (handle: s32, info: *Info) -> Status;
+RemoveCall :: #type (path: string) -> Status;
+Provider :: struct {
+    open: OpenCall
+    create_new: CreateCall
+    read: ReadCall
+    write: WriteCall
+    close: CloseCall
+    stat: StatCall
+    remove: RemoveCall
+    fstat: FstatCall
+}
+GuestEntry :: struct {
+    name: string
+    info: Info
+    valid: bool
+}
+DirectoryReader :: struct {
+    handle: s32
+    count: s32
+    offset: s64
+    held: s64
+    status: Status
+    opened: bool
+    ended: bool
+}
+
+ValidPath :: (path: string) -> bool {
+    if path.count == 0 || path.count > PATH_LIMIT || !Utf8.Valid(path) { return false }
+    for byte: path { if byte == 0 { return false } }
+    return true
+}
+ValidName :: (name: string) -> bool {
+    if !ValidPath(name) || name.count > NAME_LIMIT || name == "." || name == ".." { return false }
+    for byte: name { if byte == #char "/" { return false } }
+    return true
+}
+
+// The caller supplies the guest cwd; an unknown cwd cannot become a host path.
+AbsolutePath :: (path: string, cwd: string) -> Text {
+    if !ValidPath(path) { return .{} }
+    combined: Vec(u8)
+    if path[0] != #char "/" {
+        if !ValidPath(cwd) || cwd[0] != #char "/" || cwd.count+path.count+1 > PATH_LIMIT { return .{} }
+        for byte: cwd { if !VecPush(combined,byte) { return .{} } }
+        if !VecPush(combined,#char "/") { return .{} }
+    }
+    for byte: path { if !VecPush(combined,byte) { return .{} } }
+    result: Vec(u8)
+    if !VecPush(result,#char "/") { return .{} }
+    at: s64
+    while at < combined.count {
+        if combined[at] == #char "/" { at += 1; continue }
+        start := at
+        while at < combined.count && combined[at] != #char "/" { at += 1 }
+        component := TextView(combined[start:at])
+        if component == "." { continue }
+        if component == ".." {
+            end := result.count
+            while end > 1 && result[end-1] != #char "/" { end -= 1 }
+            if end > 1 { end -= 1 }
+            unused VecResize(result,end)
+            continue
+        }
+        if !ValidName(component) { return .{} }
+        if result.count > 1 && !VecPush(result,#char "/") { return .{} }
+        for byte: component { if !VecPush(result,byte) { return .{} } }
+    }
+    return BuilderFinish(result)
+}
+
+Uint :: (bytes: []u8, at: s64, count: s64) -> u64 {
+    value: u64
+    for i: 0..count-1 { value |= cast(u64)bytes[at+i] << cast(u64)(8*i) }
+    return value
+}
+// A decoded name borrows the directory buffer until the next read. Validate
+// all four strings and the entire packed Inferno Dir record before returning it.
+DecodeRecord :: (record: []u8) -> GuestEntry {
+    if record.count < 49 || cast(s64)Uint(record,0,2)+2 != record.count { return .{} }
+    at: s64 = 41
+    name: string
+    for field: 0..3 {
+        if at+2 > record.count { return .{} }
+        length := cast(s64)Uint(record,at,2)
+        at += 2
+        if length > record.count-at { return .{} }
+        if field == 0 { name = TextView(record[at:at+length]) }
+        at += length
+    }
+    if at != record.count || !ValidName(name) { return .{} }
+    mode := cast(u32)Uint(record,21,4)
+    size := Uint(record,33,8)
+    if size > cast(u64)9223372036854775807 { return .{} }
+    info := Info.{kind = ifx (mode & 0x80000000) != 0 then .Directory else .File,
+        mode = mode, size = cast(s64)size, modified = cast(s64)Uint(record,29,4),
+        device = Uint(record,2,6), inode = Uint(record,13,8), version = Uint(record,9,4)}
+    return .{name, info, true}
+}
+
+OpenDirectory :: (provider: Provider, path: string) -> DirectoryReader {
+    if !ValidPath(path) { return .{status = .Invalid} }
+    if provider.open == null || provider.read == null || provider.close == null { return .{status = .Unsupported} }
+    handle := provider.open(path)
+    if handle < 0 { return .{status = .Failed} }
+    return .{handle = handle, opened = true}
+}
+
+// Read a single record, reusing the caller's buffer. The model can build its
+// staged listing directly while retaining the previous listing on failure.
+NextDirectoryEntry :: (provider: Provider, directory: *DirectoryReader, bytes: []u8) -> GuestEntry {
+    if !directory.opened || directory.ended { return .{} }
+    status: Status = .Failed
+    while true {
+        pending := directory.held - directory.offset
+        if pending >= 2 {
+            size := cast(s64)Uint(bytes, directory.offset, 2)+2
+            if size < 49 || size > bytes.count { break }
+            if size <= pending {
+                if directory.count >= ENTRY_LIMIT { status = .Limit; break }
+                end := directory.offset + size
+                entry := DecodeRecord(bytes[directory.offset:end])
+                if !entry.valid { break }
+                directory.offset = end
+                directory.count += 1
+                return entry
+            }
+        }
+        if directory.offset > 0 {
+            for index: cast(s64)0..pending-1 { bytes[index] = bytes[directory.offset+index] }
+            directory.offset = 0
+            directory.held = pending
+        }
+        if pending == bytes.count { break }
+        count := provider.read(directory.handle, bytes[pending:])
+        if count < 0 || count > bytes.count-pending { break }
+        if count == 0 {
+            if pending == 0 { status = .Ok }
+            break
+        }
+        directory.held += count
+    }
+    directory.ended = true
+    directory.status = status
+    return .{}
+}
+
+CloseDirectory :: (provider: Provider, directory: *DirectoryReader) -> Status {
+    if directory.opened {
+        directory.opened = false
+        if provider.close(directory.handle) < 0 && directory.status == .Ok { directory.status = .Failed }
+    }
+    return directory.status
+}
+
+SameObject :: (first: Info, second: Info) -> bool {
+    return first.device == second.device && first.inode == second.inode
+}
+
+SameSnapshot :: (first: Info, second: Info) -> bool {
+    return SameObject(first,second) && first.version == second.version && first.size == second.size
+}
+
+// Bounded streaming copy. Exclusive create keeps existing targets intact.
+// On failure, only attempt cleanup while the output path still names the
+// opened file. Guest Remove is path-based, so the check is best effort.
+CopyNew :: (provider: Provider, source: string, target: string) -> Status {
+    if !ValidPath(source) || !ValidPath(target) || source == target { return .Invalid }
+    if provider.open == null || provider.create_new == null || provider.read == null ||
+        provider.write == null || provider.close == null || provider.remove == null ||
+        provider.stat == null || provider.fstat == null { return .Unsupported }
+    info: Info
+    status := provider.stat(source,*info)
+    if status != .Ok { return status }
+    if info.kind != .File { return .Unsupported }
+    if info.size < 0 || info.size > COPY_LIMIT { return .Limit }
+    input := provider.open(source)
+    if input < 0 { return .Failed }
+    opened: Info
+    if provider.fstat(input,*opened) != .Ok || !SameSnapshot(info,opened) {
+        unused provider.close(input)
+        return .Failed
+    }
+    output := provider.create_new(target,false)
+    if output < 0 { unused provider.close(input); return .Failed }
+    bytes: [8192]u8
+    total: s64
+    created: Info
+    known_output := provider.fstat(output,*created) == .Ok
+    ok := known_output
+    while ok && total < info.size {
+        remaining := info.size - total
+        request := ifx remaining < bytes.count then remaining else bytes.count
+        count := provider.read(input,bytes[:request])
+        if count <= 0 || count > request { ok = false; break }
+        total += count
+        at: s64
+        while at < count {
+            wrote := provider.write(output,TextView(bytes[at:count]))
+            if wrote <= 0 || wrote > count-at { ok = false; break }
+            at += wrote
+        }
+    }
+    after: Info
+    stable := ok && total == info.size && provider.fstat(input,*after) == .Ok && SameSnapshot(info,after)
+    read_closed := provider.close(input) >= 0
+    write_closed := provider.close(output) >= 0
+    if !stable || !read_closed || !write_closed {
+        actual: Info
+        if !known_output || provider.stat(target,*actual) != .Ok || !SameObject(created,actual) ||
+            provider.remove(target) != .Ok { return .CleanupFailed }
+        return .Failed
+    }
+    return .Ok
+}

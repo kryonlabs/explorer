@@ -1,3 +1,5 @@
+.DEFAULT_GOAL := build
+
 ZIRAN ?= ./scripts/ziran.sh
 CC ?= cc
 export LDLIBS := $(LDLIBS) -lxcb
@@ -5,6 +7,13 @@ export LDLIBS := $(LDLIBS) -lxcb
 SOURCES := $(wildcard src/*.zi) $(wildcard tests/*.zi) ziran.toml ziran.lock scripts/ziran.sh
 NATIVE_FLAGS := -std=c99 -O2 -ffunction-sections -fdata-sections -Wl,--gc-sections
 HOST_TEST_ENV := python3 tests/private_desktop.py --headless env -u GTK_THEME HOME=$(CURDIR)/build/host-test-fixture XDG_CONFIG_HOME=$(CURDIR)/build/host-test-fixture/config XDG_DATA_HOME=$(CURDIR)/build/host-test-fixture/data-home
+
+.PHONY: test-guest-files
+test-guest-files:
+	mkdir -p build
+	$(ZIRAN) run --project --target=c tests/guest_files_test.zi
+	$(ZIRAN) bundle --project --entry guest_files_test:main -o build/guest-files-test.zx tests/guest_files_test.zi
+	$(ZIRAN) run build/guest-files-test.zx
 
 .PHONY: test-context-menu test-drag-menu test-native-status test-native-theme test-locations test-thunar test-split test-split-native test-tabs test-tabs-native build check test test-ui test-installed test-file-clipboard test-filenames test-bookmarks test-bookmarks-native test-tree test-tree-native test-location test-location-native run install clean test-saved
 
@@ -194,3 +203,24 @@ test-context-menu: build build/context-menu-probe
 # XDND drags to a python-xlib target, Thunar and Chromium; menu actions.
 test-drag-menu: build build/context-menu-probe
 	python3 tests/private_desktop.py python3 tests/drag_menu_test.py
+
+TAIJIOS_ROOT ?= ../../taijiosnet/taijios
+TAIJIOS_MODULES ?= $(TAIJIOS_ROOT)/appl/cmd
+.PHONY: taiji
+taiji:
+	mkdir -p build
+	$(ZIRAN) bundle --project --define EXPLORER_TAIJI --define KRYON_PIXMAP_EXTERNAL_BUFFER \
+		--module-path "$(TAIJIOS_MODULES)" \
+		--module-path "$(TAIJIOS_MODULES)/tcltk" \
+		--bind-host kryon/pixmap --entry taiji_host:main -o build/explorer.zx src/taiji_host.zi
+
+.PHONY: test-taiji-model
+test-taiji-model:
+	mkdir -p build
+	$(ZIRAN) bundle --project --define EXPLORER_TAIJI --module-path "$(TAIJIOS_MODULES)" \
+		--entry taiji_model_test:main -o build/taiji-model-test.zx tests/taiji_model_test.zi
+	TAIJIOS_ROOT="$(TAIJIOS_ROOT)" python3 tests/private_desktop.py --headless python3 tests/taiji_model_test.py
+
+.PHONY: test-taiji-desktop
+test-taiji-desktop: taiji
+	TAIJIOS_ROOT="$(TAIJIOS_ROOT)" python3 tests/private_desktop.py python3 tests/taiji_desktop_test.py
