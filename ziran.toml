@@ -8,11 +8,11 @@ links = ["xcb", "gtk-3", "gdk-3", "gio-2.0", "gobject-2.0", "glib-2.0", "pango-1
 
 [toolchain]
 git = "https://git.waozi.xyz/ziranlang/ziran.git"
-ref = "5db3d3c39425d5dfe4bfe4a84e6f6e2e5a810ad0"
+ref = "62d90ff97d10373f44f428bfff538f75185512e5"
 
 [dependencies.kryon]
 git = "https://git.waozi.xyz/kryonlabs/kryon.git"
-ref = "54e5b07fc9e8d97f3a1fdb2a269dcf8c70c88572"
+ref = "39f7540d193ccaa2096e1115df608da8116b32b7"
 
 [exports]
 model = "src/model.zi"
@@ -42,4 +42,9 @@ categories = "Utility;FileManager;Core;"
 
 [dependencies.data_views]
 git = "https://git.waozi.xyz/kryonlabs/data-views.git"
-ref = "27914331912026561572f4bce277cf78e854cb8b"
+ref = "62603bdb75efdb50bda53e7d648cfe0dfc1623fd"
+
+[dependencies.taiji_sdk]
+git = "https://git.waozi.xyz/taijios/taijios.git"
+ref = "80248ef85df70346d5b1b820dd4c9302d4c6d557"
+source = true
