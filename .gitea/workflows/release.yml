@@ -18,7 +18,7 @@ concurrency:
 jobs:
   release:
     if: github.ref == 'refs/heads/master'
-    runs-on: build-ubuntu24.04
+    runs-on: build-native
     timeout-minutes: 90
     env:
       RELEASE_VERSION: ${{ inputs.version }}
