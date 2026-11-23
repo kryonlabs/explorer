@@ -10,6 +10,8 @@ import tempfile
 import time
 from PIL import Image, ImageChops
 
+from private_desktop import taiji_staging
+
 
 def call(*args, check=True):
     return subprocess.run(args, capture_output=True, check=check, timeout=5).stdout
@@ -30,9 +32,7 @@ def main():
     assert os.environ.get('HARMONY_DESKTOP_RECOVERY') == '0'
     root = Path(os.environ.get('TAIJIOS_ROOT', '../../taijiosnet/taijios')).resolve()
     emulator = Path(os.environ.get('TAIJIOS_EMULATOR', root / 'emu/Linux/o.emu'))
-    staging = root / 'build/zx-smoke'
-    subprocess.run(['git', '-C', str(root), 'check-ignore', '-q', str(staging / 'explorer-private-test-probe')], check=True)
-    staging.mkdir(parents=True, exist_ok=True)
+    staging = taiji_staging(root)
     with tempfile.TemporaryDirectory(dir=staging, prefix='explorer-gui-') as directory:
         fixture = Path(directory)
         guest = '/' + fixture.relative_to(root).as_posix()

@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Open TaijiOS PNG/JPEG files with the registered ZX image viewer.
+
 ## [0.1.0] - 2026-11-22
 
 - Ship Explorer as a Linux amd64 Debian package and a ZX 28 application for TaijiOS.
@@ -42,6 +44,9 @@
 - Sort directory entries in O(n log n), size visible details before offscreen
   rows, and allocate file descriptions according to their text length. Submit
   completed location edits before drawing the destination.
+- Benchmark icon and compact views as well as details against Thunar, set
+  Thunar's view through its running settings daemon, count a folder as ready
+  only once its entries are visible, and keep each first changed frame.
 
 - Rename the package, executable, build output, desktop identity, embedded
   module paths and internal runtime names from Shelf to Explorer.

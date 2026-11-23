@@ -111,10 +111,15 @@ def main():
                 pid=int(xdo('getwindowpid',extra))
                 assert Path(f'/proc/{pid}/exe').resolve()==(REPO/'build/explorer-desktop').resolve()
                 owned.append(extra)
-                xdo('windowfocus','--sync',extra);xdo('key','--window',extra,'ctrl+q')
+                # Ctrl+Q can close the window before xdotool sends the key
+                # releases, which then fail with BadWindow. Judge the app by
+                # its window closing and exit status instead.
+                xdo('windowfocus','--sync',extra)
+                subprocess.run(['xdotool','key','--window',extra,'ctrl+q'],capture_output=True,timeout=5)
+            wait(lambda:not set(new)&set(windows()),'Ctrl+Q did not close the new Explorer window')
             xdo('windowfocus','--sync',window)
             # Real (XTEST) input to the focused window: Kryon's key delivery
-            # does not act on a synthetic --window event after the steps above.
+            # does not act on this synthetic --window event after the steps above.
             subprocess.run(['xdotool','key','--clearmodifiers','ctrl+q'],capture_output=True,timeout=5)
             assert process.wait(timeout=10)==0
             (OUTPUT/'report.json').write_text(json.dumps({'status':'passed','menu_hover':True,'keyboard_menus':True,'text_focus_delete':True,'trash_delete':True,'keypad_delete':True,'permanent_confirmation_cancel':True,'create_folder_shortcut':True,'new_window':True,'close_own_window':True},indent=2))

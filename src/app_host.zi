@@ -1,3 +1,6 @@
+#if #defined(EXPLORER_TAIJI) {
+GuestApps :: #import "app_registry";
+}
 #scope_module
 using Model :: #import "model";
 #import "kryon/session"
@@ -1415,7 +1418,11 @@ ActivateEntryInPane :: (host: *Host, view: *PaneView, row: s32) {
         unused Model.OpenPathTracked(manager, Model.EntryPath(manager, row))
     } else {
     #if #defined(EXPLORER_TAIJI) {
-        OpenPreview(host, Model.EntryPath(manager, row))
+        path := Model.EntryPath(manager, row)
+        mime := GuestApps.MimeType(path)
+        if mime == "image/png" || mime == "image/jpeg" {
+            if !GuestApps.OpenFile(path) { Model.SetError(manager, "The image viewer could not be started.") }
+        } else { OpenPreview(host, path) }
     } else {
     if Model.IsUri(Model.EntryPath(manager,row)) {
         if !Opener.OpenUri(Model.EntryPath(manager,row)) { Model.SetError(manager,"The default application could not be started.") }
@@ -2230,7 +2237,11 @@ DrawPreviewInPane :: (host: *Host, view: *PaneView, session: Session, viewport: 
     y := viewport.y + 40.0
     if Button(host, session, 82, "Previous", .{x, y, 76.0, 32.0}) { PreviewStep(host, -1) }
     if Button(host, session, 83, "Next", .{x + 82.0, y, 62.0, 32.0}) { PreviewStep(host, 1) }
-    #if !#defined(EXPLORER_TAIJI) {
+    #if #defined(EXPLORER_TAIJI) {
+    if state.kind == .Image && (Button(host, session, 84, "Open", .{x + 150.0, y, 78.0, 32.0}) || key == KeyEnter) {
+        if !GuestApps.OpenFile(TextView(state.path)) { Model.SetError(manager, "The image viewer could not be started.") }
+    }
+    } else {
     if Button(host, session, 84, "Open", .{x + 150.0, y, 78.0, 32.0}) || key == KeyEnter {
         if !Opener.OpenUri(TextView(state.path)) {
             Model.SetError(manager, "The default application could not be started.")

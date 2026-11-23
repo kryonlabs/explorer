@@ -7,15 +7,15 @@ import signal
 import subprocess
 from tempfile import TemporaryDirectory
 
+from private_desktop import taiji_staging
+
 
 def main():
     assert os.environ.get('EXPLORER_PRIVATE_DESKTOP') == '1'
     assert os.environ.get('HARMONY_DESKTOP_RECOVERY') == '0'
     root = Path(os.environ.get('TAIJIOS_ROOT', '../../taijiosnet/taijios')).resolve()
     emulator = Path(os.environ.get('TAIJIOS_EMULATOR', root / 'emu/Linux/o.emu'))
-    staging = root / 'build/zx-smoke'
-    subprocess.run(['git', '-C', str(root), 'check-ignore', '-q', str(staging / 'explorer-private-test-probe')], check=True)
-    staging.mkdir(parents=True, exist_ok=True)
+    staging = taiji_staging(root)
     with TemporaryDirectory(dir=staging, prefix='explorer-private-test-') as directory:
         fixture = Path(directory)
         guest = '/' + fixture.relative_to(root).as_posix()

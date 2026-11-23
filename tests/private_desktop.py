@@ -10,6 +10,17 @@ import tempfile
 import time
 
 
+def taiji_staging(root):
+    staging = root / "build/zx-smoke"
+    build = Path(__file__).resolve().parents[1] / "build"
+    archived_runtime = root.is_relative_to(build) and staging.resolve().is_relative_to(root)
+    if not archived_runtime:
+        subprocess.run(["git", "-C", str(root), "check-ignore", "-q",
+                        str(staging / "explorer-private-test-probe")], check=True)
+    staging.mkdir(parents=True, exist_ok=True)
+    return staging
+
+
 def main():
     build = Path(__file__).resolve().parents[1] / "build"
     build.mkdir(exist_ok=True)
