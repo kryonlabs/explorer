@@ -47,14 +47,14 @@ def main():
             memory_report = 'echo EXPLORER_GUEST_POOLS_LIVE_LIMIT_HIGH_WATER; cat /dev/memory; '
         desktop = (f'home={guest}; wm/toolbar &; zxrun -w {guest}/explorer.zx; '
                    f'echo EXPLORER_EXIT $status; {memory_report}sleep 60')
-        command = ['wm/wm', '/dis/sh.dis', '-c', desktop]
-        overlay = os.environ.get('EXPLORER_TAIJI_DIS_OVERLAY')
+        command = ['wm/wm', '/zx/sh.dis', '-c', desktop]
+        overlay = os.environ.get('EXPLORER_TAIJI_ZX_OVERLAY') or os.environ.get('EXPLORER_TAIJI_DIS_OVERLAY')
         if overlay:
             # A separately staged set of guest modules must match the candidate emulator.
             assert overlay.startswith('/build/zx-smoke/') and all(c.isascii() and (c.isalnum() or c in '/-_.') for c in overlay)
             assert '..' not in Path(overlay).parts and (root / overlay.lstrip('/')).is_dir()
-            bind = '; '.join(f'bind -b {overlay} {destination}' for destination in ('/dis', '/dis/wm', '/dis/lib'))
-            command = ['/dis/sh.dis', '-c', f"{bind}; wm/wm /dis/sh.dis -c '{desktop}'"]
+            bind = '; '.join(f'bind -b {overlay} {destination}' for destination in ('/zx', '/zx/wm', '/zx/lib'))
+            command = ['/zx/sh.dis', '-c', f"{bind}; wm/wm /zx/sh.dis -c '{desktop}'"]
         with tempfile.TemporaryFile() as log:
             def log_tail():
                 length = os.fstat(log.fileno()).st_size

@@ -37,7 +37,7 @@ def main():
                 (large / name).touch()
         with (fixture / 'test.log').open('w+b') as output:
             process = subprocess.Popen([emulator, '-p', 'main=32M', '-r', root,
-                                        '/dis/sh.dis', '-c', f'home={guest}; zxrun {guest}/model.zx; echo EXPLORER_GUEST_END $status'],
+                                        '/zx/sh.dis', '-c', f'home={guest}; zxrun {guest}/model.zx; echo EXPLORER_GUEST_END $status'],
                                        stdin=subprocess.DEVNULL, stdout=output, stderr=output,
                                        start_new_session=True)
             try:
