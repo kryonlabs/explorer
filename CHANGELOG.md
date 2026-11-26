@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- Build TaijiOS targets through the SDK's public Ziran exports, without adding
+  dependency folders as module paths.
+
 - Open TaijiOS PNG/JPEG files with the registered ZX image viewer.
 
 ## [0.1.0] - 2026-11-22

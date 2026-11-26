@@ -12,9 +12,9 @@ and upload strips as the window changes size. The ZX build selects Kryon's
 external-buffer pixmap profile to avoid allocating another full raster. After
 input settles, composition sleeps until the next window or input event.
 
-Build against the canonical Taiji `appl/cmd` modules and Kryon `host/surface`
-export. Local Ziran and Kryon development overrides belong in the ignored
-`ziran.local.toml`.
+Build against the Taiji SDK package exports and Kryon `host/surface` export.
+Local Ziran, Kryon and `taiji_sdk` development overrides belong in the ignored
+`ziran.local.toml`; set `taiji_sdk` to the canonical TaijiOS checkout.
 
 ```sh
 make taiji
@@ -23,8 +23,8 @@ make test-taiji-model
 make test-taiji-desktop
 ```
 
-`make taiji` writes `build/explorer.zx`. For a different canonical checkout
-location, set `TAIJIOS_ROOT` when invoking `make`. `test-taiji-model` runs that
+`make taiji` writes `build/explorer.zx`. For guest tests with a different canonical
+checkout location, set `TAIJIOS_ROOT` when invoking `make`. `test-taiji-model` runs that
 model inside a real Taiji emulator with the standard 32 MiB heap. It uses only
 its disposable guest Home fixture and tests UTF-8 paths, bounded navigation
 history, exclusive creation, copy collisions, preview, and deletion. It also

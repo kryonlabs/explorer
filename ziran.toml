@@ -46,5 +46,4 @@ ref = "62603bdb75efdb50bda53e7d648cfe0dfc1623fd"
 
 [dependencies.taiji_sdk]
 git = "https://git.waozi.xyz/taijios/taijios.git"
-ref = "80248ef85df70346d5b1b820dd4c9302d4c6d557"
-source = true
+ref = "a8290241a083b72a4553e467a87c0d94fee7d038"

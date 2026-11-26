@@ -205,19 +205,16 @@ test-drag-menu: build build/context-menu-probe
 	python3 tests/private_desktop.py python3 tests/drag_menu_test.py
 
 TAIJIOS_ROOT ?= ../../taijiosnet/taijios
-TAIJIOS_MODULES ?= $(TAIJIOS_ROOT)/appl/cmd
 .PHONY: taiji
 taiji:
 	mkdir -p build
 	$(ZIRAN) bundle --project --define EXPLORER_TAIJI --define KRYON_PIXMAP_EXTERNAL_BUFFER \
-		--module-path "$(TAIJIOS_MODULES)" \
-		--module-path "$(TAIJIOS_MODULES)/tcltk" \
 		--bind-host kryon/pixmap --entry taiji_host:main -o build/explorer.zx src/taiji_host.zi
 
 .PHONY: test-taiji-model
 test-taiji-model:
 	mkdir -p build
-	$(ZIRAN) bundle --project --define EXPLORER_TAIJI --module-path "$(TAIJIOS_MODULES)" \
+	$(ZIRAN) bundle --project --define EXPLORER_TAIJI \
 		--entry taiji_model_test:main -o build/taiji-model-test.zx tests/taiji_model_test.zi
 	TAIJIOS_ROOT="$(TAIJIOS_ROOT)" python3 tests/private_desktop.py --headless python3 tests/taiji_model_test.py
 
