@@ -4,7 +4,7 @@ ZIRAN ?= ./scripts/ziran.sh
 CC ?= cc
 export LDLIBS := $(LDLIBS) -lxcb
 
-SOURCES := $(wildcard src/*.zi) $(wildcard tests/*.zi) ziran.toml ziran.lock scripts/ziran.sh
+SOURCES := $(wildcard src/*.tsx) $(wildcard src/*.zi) $(wildcard tests/*.zi) ziran.toml ziran.lock scripts/ziran.sh
 NATIVE_FLAGS := -std=c99 -O2 -ffunction-sections -fdata-sections -Wl,--gc-sections
 HOST_TEST_ENV := python3 tests/private_desktop.py --headless env -u GTK_THEME HOME=$(CURDIR)/build/host-test-fixture XDG_CONFIG_HOME=$(CURDIR)/build/host-test-fixture/config XDG_DATA_HOME=$(CURDIR)/build/host-test-fixture/data-home
 

@@ -9,8 +9,9 @@ tracks feature parity; docs/TAIJI.md covers the ZX build.
 
 | Path | Contents |
 | --- | --- |
-| `src/app.zi`, `src/app_host.zi` | Application entrypoint and host wiring |
-| `src/*.zi` | Bookmarks, context menus, locations, file clipboard and views |
+| `src/app.tsx`, `src/app_host.zi` | TSX application entrypoint and native host wiring |
+| `src/*.tsx` | Screen composition: tabs, sidebar, location, previews, dialogs, guests |
+| `src/*.zi` | Bookmarks, context menus, locations, file clipboard and native views |
 | `tests/` | Model, host, tab, tree, clipboard and interaction tests |
 | `scripts/` | Build and test helpers |
 | `docs/` | TAIJI.md (ZX build), THUNAR_PARITY.md (parity table) |

@@ -7,6 +7,16 @@
 
 - Open TaijiOS PNG/JPEG files with the registered ZX image viewer.
 
+- Drop the duplicate shot-only pixmap profile; screenshots use
+  `kryon run desktop --png` from the desktop profile.
+
+- Compose the Explorer interface in TSX: the application entry, tab strip,
+  sidebar tree and places, breadcrumb and location editor, previews, dialogs,
+  context menu, guest and controls views now live in `src/*.tsx` over the
+  native `app_host` bridge, with no legacy `.zi` screen composition left.
+  Item slices install from pane- and model-owned captions immediately before
+  each TSX view and are emptied right after it returns.
+
 ## [0.1.0] - 2026-11-22
 
 - Ship Explorer as a Linux amd64 Debian package and a ZX 28 application for TaijiOS.
