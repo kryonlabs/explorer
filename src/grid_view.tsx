@@ -18,8 +18,6 @@ export function DrawFileGrid(session: Session, bounds: Rectangle,
     const manager = AppHost.PaneManagerHost(pane_index);
     const count = AppHost.GridItemsInstallHost(pane_index);
     if (count < s32(0)) { return; }
-    const items = AppHost.GridItemsHost(pane_index);
-    const selected = AppHost.GridSelectedHost(pane_index);
     let frame = AppHost.DetailsFrameHost(bounds);
     let props = AppHost.FileGridPropsHost(pane_index, session, frame);
     // GTK determines the viewport and whether bars consume allocation. Repeat
@@ -68,9 +66,11 @@ export function DrawFileGrid(session: Session, bounds: Rectangle,
     // GridMulti reveals focus on cursor, layout and viewport changes while
     // retaining independent wheel scrolling between navigation events.
     AppHost.GridRevealFocusOffHost(pane_index);
-    const result = GridMulti({session: session, props: props, items: items,
-        selected: selected});
-    // The retained grid copies its semantic labels; end this frame's borrows.
+    // The item and selection Vecs are pane-owned: GridMulti applies selection
+    // changes in place, so bind the views only around this call, then trim.
+    const result = GridMulti({session: session, props: props,
+        items: AppHost.GridItemsHost(pane_index),
+        selected: AppHost.GridSelectedHost(pane_index)});
     AppHost.GridItemsTrimHost(pane_index);
     if (!result.valid) { return; }
     AppHost.GridResultApplyHost(pane_index, result.cursor, result.anchor,

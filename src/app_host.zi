@@ -2957,8 +2957,6 @@ chooser_flags_cache: [256]bool;
 breadcrumb_items_cache: [256]BreadcrumbWidget.BreadcrumbItem;
 location_caption_cache: Text;
 status_message_cache: Text;
-grid_items_cache: [4096]GridMultiWidget.GridMultiItem;
-grid_selected_cache: [4096]bool;
 
 TabCountHost :: () -> s32 {
     return cast(s32)ActiveManager(*host).tabs.count
@@ -3376,20 +3374,24 @@ GridItemsInstallHost :: (pane: s32) -> s32 {
     return cast(s32)manager.entries.count
 }
 
+// The grid widget borrows the pane-owned item and selection Vecs directly:
+// ListBoxMultiApply writes selection changes in place, so TSX binds these
+// views only around the widget call and the item Vec is trimmed afterwards.
+// The views are staged in module bindings so the checker can prove their
+// lifetime from the global rather than from a pointer derived mid-call.
+grid_scope_items: []GridMultiWidget.GridMultiItem;
+grid_scope_selected: []bool;
+
 GridItemsHost :: (pane: s32) -> []GridMultiWidget.GridMultiItem {
-    view := PaneViewAt(*host, pane)
-    count := cast(s32)view.grid_items.count
-    if count > 4096 { count = 4096 }
-    for index: cast(s32)0..count-1 { grid_items_cache[index] = view.grid_items[index] }
-    return grid_items_cache[0:count]
+    view := PaneViewAt(*host,pane)
+    grid_scope_items = view.grid_items[:]
+    return grid_scope_items
 }
 
 GridSelectedHost :: (pane: s32) -> []bool {
-    manager := PaneManager(*host, pane)
-    count := cast(s32)manager.entries.count
-    if count > 4096 { count = 4096 }
-    for index: cast(s32)0..count-1 { grid_selected_cache[index] = manager.selected[index] }
-    return grid_selected_cache[0:count]
+    manager := PaneManager(*host,pane)
+    grid_scope_selected = manager.selected[:]
+    return grid_scope_selected
 }
 
 GridItemsTrimHost :: (pane: s32) {
