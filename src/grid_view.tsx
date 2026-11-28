@@ -9,6 +9,7 @@ import { GridMulti } from "kryon/tsx/grid_multi";
 import * as Input from "kryon/tree_input";
 import { Session } from "kryon/session";
 import { Rectangle } from "kryon/geometry";
+import { Scoped } from "std/callable";
 import { KeyDown, KeyEnd, KeyEnter, KeyHome, KeyLeft, KeyModifierControl,
     KeyModifierShift, KeyRight, KeyUp } from "kryon/input_protocol";
 
@@ -67,11 +68,13 @@ export function DrawFileGrid(session: Session, bounds: Rectangle,
     // retaining independent wheel scrolling between navigation events.
     AppHost.GridRevealFocusOffHost(pane_index);
     // The item and selection Vecs are pane-owned: GridMulti applies selection
-    // changes in place, so bind the views only around this call, then trim.
-    const result = GridMulti({session: session, props: props,
-        items: AppHost.GridItemsHost(pane_index),
-        selected: AppHost.GridSelectedHost(pane_index)});
-    AppHost.GridItemsTrimHost(pane_index);
+    // changes in place, so they are bound only inside the scoped callback and
+    // the item Vec is trimmed once the callback's views expire.
+    const action: Scoped<AppHost.GridDataAction> = (items: NativeGridMulti.GridMultiItem[],
+            selected: boolean[]): NativeGridMulti.GridMultiResult => {
+        return GridMulti({session: session, props: props, items: items, selected: selected});
+    };
+    const result = AppHost.WithGridData(pane_index, action);
     if (!result.valid) { return; }
     AppHost.GridResultApplyHost(pane_index, result.cursor, result.anchor,
         result.scroll_offset);

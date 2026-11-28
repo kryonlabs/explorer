@@ -26,6 +26,7 @@ TabBar :: #import "kryon/tab_bar";
 GridMultiWidget :: #import "kryon/grid_multi";
 ImageWidget :: #import "kryon/image";
 using TextBuffer :: #import "std/text_buffer";
+Callable :: #import "std/callable";
 Input :: #import "kryon/tree_input";
 ScrollDevice :: #import "kryon/scroll_device";
 #if !#defined(EXPLORER_TAIJI) {
@@ -3375,28 +3376,17 @@ GridItemsInstallHost :: (pane: s32) -> s32 {
 }
 
 // The grid widget borrows the pane-owned item and selection Vecs directly:
-// ListBoxMultiApply writes selection changes in place, so TSX binds these
-// views only around the widget call and the item Vec is trimmed afterwards.
-// The views are staged in module bindings so the checker can prove their
-// lifetime from the global rather than from a pointer derived mid-call.
-grid_scope_items: []GridMultiWidget.GridMultiItem;
-grid_scope_selected: []bool;
+// ListBoxMultiApply writes selection changes in place, so the TSX grid binds
+// these views only inside the scoped callback. The item Vec is trimmed once
+// the callback's views expire; no staging copy or surviving view is kept.
+GridDataAction :: #type (items: []GridMultiWidget.GridMultiItem, selected: []bool) -> GridMultiWidget.GridMultiResult;
 
-GridItemsHost :: (pane: s32) -> []GridMultiWidget.GridMultiItem {
-    view := PaneViewAt(*host,pane)
-    grid_scope_items = view.grid_items[:]
-    return grid_scope_items
-}
-
-GridSelectedHost :: (pane: s32) -> []bool {
-    manager := PaneManager(*host,pane)
-    grid_scope_selected = manager.selected[:]
-    return grid_scope_selected
-}
-
-GridItemsTrimHost :: (pane: s32) {
+WithGridData :: (pane: s32, action: Callable.Scoped(GridDataAction)) -> GridMultiWidget.GridMultiResult {
     view := PaneViewAt(*host, pane)
+    manager := PaneManager(*host, pane)
+    result := action(view.grid_items[:], manager.selected[:])
     unused VecResize(view.grid_items, 0)
+    return result
 }
 
 GridEntryKeyHost :: (pane: s32, index: s32) -> u64 {
