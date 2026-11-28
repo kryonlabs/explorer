@@ -61,6 +61,7 @@ using LocalTree :: #import "tree_sidebar";
 ScreenView :: #import "app_screen";
 GuestView :: #import "guest_view";
 DialogsView :: #import "dialogs_view";
+ScreenGrid :: #import "grid_view";
 TabsView :: #import "tabs_view";
 LocationView :: #import "location_view";
 UiControls :: #import "ui_controls";
@@ -1487,104 +1488,6 @@ PlaceRow :: (host: *Host, session: Session, bounds: Rectangle, route: string, si
     RequestContext(host,.Shortcuts,side,host.active_pane,pointer.x,pointer.y,route,index)
 }
 
-DrawFileGrid :: (host: *Host, session: Session, bounds: Rectangle,
-    key: s32, modifiers: s32, focused: bool, pane_index: s32 = -1) {
-    physical := ifx pane_index < 0 then host.active_pane else pane_index
-    if physical == 1 {
-        DrawFileGridInPane(host, *host.secondary[0].view, session, bounds, key, modifiers, focused, pane_index)
-        return
-    }
-    DrawFileGridInPane(host, *host.view, session, bounds, key, modifiers, focused, pane_index)
-}
-
-DrawFileGridInPane :: (host: *Host, view: *PaneView, session: Session, bounds: Rectangle,
-    key: s32, modifiers: s32, focused: bool, pane_index: s32 = -1) {
-    manager := PaneManager(host, pane_index)
-
-    if !VecResize(view.grid_items, manager.entries.count) { return }
-    for index: cast(s32)0..cast(s32)manager.entries.count - 1 {
-        view.grid_items[index].key = manager.entries[index].key
-        view.grid_items[index].label = Model.EntryCaption(manager, index)
-
-    }
-    bounds=Native.DetailsFrame(*host.paint,bounds)
-    props := FileGridProps(manager, session, bounds,view)
-    // GTK determines the viewport and whether bars consume allocation. Repeat
-    // layout for a non-overlay bar, dispatching native input only on pass zero.
-    original:=bounds
-    for pass: cast(s32)0..1 {
-        layout:=GridLayout.GridMultiMeasure(props,cast(s32)manager.entries.count)
-        width:=ifx layout.compact then layout.content_extent else cast(s32)props.bounds.width
-        height:=ifx layout.compact then cast(s32)props.bounds.height else layout.content_extent
-        bounds=PrepareNativeScroll(view,session,original,width,height,
-            ifx layout.compact then manager.scroll else 0,ifx layout.compact then 0 else manager.scroll,
-            layout.compact,!layout.compact,focused,pass==0)
-        props.bounds=bounds
-        if view.native_scroll_metrics.available {
-            manager.scroll=cast(s32)(ifx layout.compact then view.native_scroll_metrics.horizontal.value else view.native_scroll_metrics.vertical.value)
-        }
-    }
-    if ApplyNativeWheel(host,view,session,props.key,bounds,manager.view_mode==.ViewCompact,focused) {
-        manager.scroll=cast(s32)(ifx manager.view_mode==.ViewCompact then view.native_scroll_metrics.horizontal.value else view.native_scroll_metrics.vertical.value)
-    }
-    props.scroll_offset=manager.scroll
-    props.external_scrollbar=view.native_scroll_metrics.available
-    props.preserve_scroll_on_focus=true
-    props.immediate_wheel=true
-    props.invisible=true
-    props.focused = focused
-    // Keep the grid active during native capture: toggling disabled would
-    // re-reveal the selected item on release and undo the dragged offset.
-    // The native bar's retained slider node owns pointer hit testing.
-    props.disabled = !focused
-    props.control = (modifiers & KeyModifierControl) != 0
-    props.shift = (modifiers & KeyModifierShift) != 0
-    if focused {
-        props.navigation.home = key == KeyHome
-        props.navigation.end = key == KeyEnd
-        props.navigation.left = key == KeyLeft
-        props.navigation.right = key == KeyRight
-        props.navigation.up = key == KeyUp
-        props.navigation.down = key == KeyDown
-        props.navigation.space = key == 32
-        props.navigation.enter = key == KeyEnter
-    }
-    // GridMulti reveals focus on cursor, layout and viewport changes while
-    // retaining independent wheel scrolling between navigation events.
-    manager.reveal_focus = false
-    result := UiControls.WidgetGridMulti(session, props, view.grid_items[:], manager.selected[:])
-    // The retained grid copies its semantic labels; end this frame's borrows.
-    unused VecResize(view.grid_items, 0)
-    if !result.valid { return }
-    manager.cursor = result.cursor
-    manager.anchor = result.anchor
-    manager.scroll = result.scroll_offset
-    compact:=manager.view_mode==.ViewCompact
-    FinishNativeScroll(view,session,ifx compact then manager.scroll else 0,ifx compact then 0 else manager.scroll,focused)
-    if view.native_scroll_metrics.available {
-        manager.scroll=cast(s32)(ifx compact then view.native_scroll_metrics.horizontal.value else view.native_scroll_metrics.vertical.value)
-        result.scroll_offset=manager.scroll
-    }
-    physical:=ifx pane_index<0 then host.active_pane else pane_index
-    pointer:=Input.PointerSample(session)
-    hit: s32= -1
-    grid_metrics:=GridLayout.GridMultiMeasure(props,cast(s32)manager.entries.count)
-    host.list_bounds[physical]=bounds
-    RecordDropRow(host,bounds,manager.cwd,physical,0,true)
-    for i: cast(s32)0..cast(s32)manager.entries.count-1 {
-        cell:=GridLayout.GridMultiCellBounds(grid_metrics,i,result.scroll_offset)
-        if cell.x+cell.width<bounds.x || cell.y+cell.height<bounds.y || cell.x>bounds.x+bounds.width || cell.y>bounds.y+bounds.height { continue }
-        if pointer.x>=cell.x && pointer.x<cell.x+cell.width && pointer.y>=cell.y && pointer.y<cell.y+cell.height &&
-            pointer.x>=bounds.x && pointer.x<bounds.x+bounds.width && pointer.y>=bounds.y && pointer.y<bounds.y+bounds.height { hit=i }
-        RecordDropRow(host,cell,Model.EntryPath(manager,i),physical,manager.entries[i].key,Model.EntryIsDirectory(manager,i))
-    }
-    ViewPointer(host,session,physical,hit,bounds,focused)
-    DrawNativeGrid(host,manager,bounds,props,result)
-    PaintNativeScroll(view,session,*host.paint,focused)
-    if result.activated_index >= 0 { ActivateEntry(host, result.activated_index) }
-    else if result.clicked_index >= 0 { EntryClick(host, result.clicked_index, modifiers) }
-}
-
 DrawNativeGrid :: (host: *Host, manager: *Model.Manager, bounds: Rectangle, props: GridMultiWidget.Props, result: GridMultiWidget.GridMultiResult) {
     p:=*host.paint
     nodes:=Native.Nodes("treeview")
@@ -2106,7 +2009,7 @@ DrawPaneBody :: (host: *Host, session: Session, bounds: Rectangle, pane_index: s
     }
     if list.width < 1.0 || list.height < 1.0 { return }
     if manager.view_mode == .ViewList { DrawDetails(host, session, list, key, modifiers, enabled, pane_index) }
-    else { DrawFileGrid(host, session, list, key, modifiers, enabled, pane_index) }
+    else { ScreenGrid.DrawFileGrid(session, list, key, modifiers, enabled, pane_index) }
     }
 }
 
@@ -3054,6 +2957,8 @@ chooser_flags_cache: [256]bool;
 breadcrumb_items_cache: [256]BreadcrumbWidget.BreadcrumbItem;
 location_caption_cache: Text;
 status_message_cache: Text;
+grid_items_cache: [4096]GridMultiWidget.GridMultiItem;
+grid_selected_cache: [4096]bool;
 
 TabCountHost :: () -> s32 {
     return cast(s32)ActiveManager(*host).tabs.count
@@ -3455,6 +3360,137 @@ StatusBarMessageHost :: () -> string {
         return TextView(status_message_cache)
     }
     return ""
+}
+
+// Grid facades for grid_view.tsx: item/selection mirrors, the native GTK
+// scroller, icon/emblem/thumbnail paints and state actions. Taiji compiles
+// the stubs; the grid call site is desktop-gated so the stubs never run.
+GridItemsInstallHost :: (pane: s32) -> s32 {
+    view := PaneViewAt(*host, pane)
+    manager := PaneManager(*host, pane)
+    if !VecResize(view.grid_items, manager.entries.count) { return -1 }
+    for index: cast(s32)0..cast(s32)manager.entries.count - 1 {
+        view.grid_items[index].key = manager.entries[index].key
+        view.grid_items[index].label = Model.EntryCaption(manager, index)
+    }
+    return cast(s32)manager.entries.count
+}
+
+GridItemsHost :: (pane: s32) -> []GridMultiWidget.GridMultiItem {
+    view := PaneViewAt(*host, pane)
+    count := cast(s32)view.grid_items.count
+    if count > 4096 { count = 4096 }
+    for index: cast(s32)0..count-1 { grid_items_cache[index] = view.grid_items[index] }
+    return grid_items_cache[0:count]
+}
+
+GridSelectedHost :: (pane: s32) -> []bool {
+    manager := PaneManager(*host, pane)
+    count := cast(s32)manager.entries.count
+    if count > 4096 { count = 4096 }
+    for index: cast(s32)0..count-1 { grid_selected_cache[index] = manager.selected[index] }
+    return grid_selected_cache[0:count]
+}
+
+GridItemsTrimHost :: (pane: s32) {
+    view := PaneViewAt(*host, pane)
+    unused VecResize(view.grid_items, 0)
+}
+
+GridEntryKeyHost :: (pane: s32, index: s32) -> u64 {
+    manager := PaneManager(*host, pane)
+    return manager.entries[index].key
+}
+
+DetailsFrameHost :: (bounds: Rectangle) -> Rectangle {
+    #if !#defined(EXPLORER_TAIJI) {
+        return Native.DetailsFrame(*host.paint,bounds)
+    }
+    return bounds
+}
+
+FileGridPropsHost :: (pane: s32, session: Session, bounds: Rectangle) -> GridMultiWidget.Props {
+    #if !#defined(EXPLORER_TAIJI) {
+        return FileGridProps(PaneManager(*host,pane),session,bounds,PaneViewAt(*host,pane))
+    }
+    props: GridMultiWidget.Props
+    return props
+}
+
+PrepareNativeScrollHost :: (pane: s32, session: Session, bounds: Rectangle,
+    width: s32, height: s32, offset_x: s32, offset_y: s32, horizontal: bool,
+    vertical: bool, focused: bool, dispatch: bool) -> Rectangle {
+    #if !#defined(EXPLORER_TAIJI) {
+        return PrepareNativeScroll(PaneViewAt(*host,pane),session,bounds,width,height,
+            offset_x,offset_y,horizontal,vertical,focused,dispatch)
+    }
+    return bounds
+}
+
+NativeScrollAvailableHost :: (pane: s32) -> bool {
+    return PaneViewAt(*host,pane).native_scroll_metrics.available
+}
+
+NativeScrollValueHost :: (pane: s32, horizontal: bool) -> s32 {
+    view := PaneViewAt(*host,pane)
+    return cast(s32)(ifx horizontal then view.native_scroll_metrics.horizontal.value else view.native_scroll_metrics.vertical.value)
+}
+
+ApplyNativeWheelHost :: (session: Session, pane: s32, key: u64, body: Rectangle,
+    horizontal: bool, focused: bool) -> bool {
+    #if !#defined(EXPLORER_TAIJI) {
+        return ApplyNativeWheel(*host,PaneViewAt(*host,pane),session,key,body,horizontal,focused)
+    }
+    return false
+}
+
+PaneScrollSetHost :: (pane: s32, value: s32) {
+    manager := PaneManager(*host,pane)
+    manager.scroll = value
+}
+
+GridRevealFocusOffHost :: (pane: s32) {
+    manager := PaneManager(*host,pane)
+    manager.reveal_focus = false
+}
+
+GridResultApplyHost :: (pane: s32, cursor: s32, anchor: s32, scroll: s32) {
+    manager := PaneManager(*host,pane)
+    manager.cursor = cursor; manager.anchor = anchor; manager.scroll = scroll
+}
+
+FinishNativeScrollHost :: (pane: s32, session: Session, offset_x: s32,
+    offset_y: s32, focused: bool) {
+    #if !#defined(EXPLORER_TAIJI) {
+        FinishNativeScroll(PaneViewAt(*host,pane),session,offset_x,offset_y,focused)
+    }
+}
+
+ListBoundsSetHost :: (pane: s32, bounds: Rectangle) {
+    host.list_bounds[pane] = bounds
+}
+
+RecordDropRowHost :: (bounds: Rectangle, path: string, pane: s32, key: u64, folder: bool) {
+    RecordDropRow(*host,bounds,path,pane,key,folder)
+}
+
+ViewPointerHost :: (session: Session, pane: s32, hit: s32, body: Rectangle, focused: bool) {
+    #if !#defined(EXPLORER_TAIJI) {
+        ViewPointer(*host,session,pane,hit,body,focused)
+    }
+}
+
+DrawNativeGridHost :: (pane: s32, bounds: Rectangle, props: GridMultiWidget.Props,
+    result: GridMultiWidget.GridMultiResult) {
+    #if !#defined(EXPLORER_TAIJI) {
+        DrawNativeGrid(*host,PaneManager(*host,pane),bounds,props,result)
+    }
+}
+
+PaintNativeScrollHost :: (pane: s32, session: Session, focused: bool) {
+    #if !#defined(EXPLORER_TAIJI) {
+        PaintNativeScroll(PaneViewAt(*host,pane),session,*host.paint,focused)
+    }
 }
 
 ChooserOpenHost :: () -> bool {

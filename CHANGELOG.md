@@ -32,6 +32,13 @@
   `src/app_screen.tsx` over granular `app_host` facades, and the former
   whole-screen native `DrawNativeChrome` composition is deleted.
 
+- Move the file grid to TSX composition: icon and compact grid items,
+  keyboard navigation flags, selection state and the click/drag/drop hit
+  wiring run in `src/grid_view.tsx` over granular `app_host` facades, with
+  GTK icon, emblem, thumbnail and scrollbar paints plus zoom, activation and
+  clipboard business staying native; the whole native `DrawFileGrid` screen
+  composition is deleted.
+
 ## [0.1.0] - 2026-11-22
 
 - Ship Explorer as a Linux amd64 Debian package and a ZX 28 application for TaijiOS.
