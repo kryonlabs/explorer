@@ -1,8 +1,9 @@
-// Screen composition: the desktop frame (chrome, sidebar, tab strip, panes,
+// Screen composition: the desktop frame (menubar, toolbar with navigation,
+// pathbar/location entry, search, status bar, sidebar, tab strip, panes,
 // menubar dropdowns, context menu hand-off, the info dialog and the Open With
-// chooser) is laid out and wired in TSX; GTK surfaces, the giant menu action
-// dispatch, clipboard/drag state and the chooser confirm stay behind the
-// app_host bridge as granular primitives and state actions.
+// chooser) is laid out and wired in TSX; GTK surfaces and metrics, the menu
+// action dispatch, clipboard/drag state and the chooser confirm stay behind
+// the app_host bridge as granular primitives and state actions.
 import * as AppHost from "app_host";
 import { Box } from "kryon/tsx/box";
 import { Text } from "kryon/tsx/text";
@@ -17,6 +18,11 @@ import { ColorFromPacked } from "kryon/drawing_props";
 import { KeyEscape, KeyEnter, KeyLeft, KeyRight, KeyUp, KeyDown,
     KeyHome, KeyEnd } from "kryon/input_protocol";
 import * as TabsView from "tabs_view";
+import * as Model from "model";
+import * as LocationView from "location_view";
+import * as Input from "kryon/tree_input";
+import * as Tree from "kryon/tree";
+import { WidgetKind } from "kryon/widget_kind";
 
 export function DrawScreen(session: Session, viewport: Rectangle, focused: boolean,
         key: s32, modifiers: s32, typed_text: string,
@@ -33,7 +39,7 @@ export function DrawScreen(session: Session, viewport: Rectangle, focused: boole
     const view_x = viewport.x + sidebar_width + separator_width;
     const view_width = viewport.width - sidebar_width - separator_width;
     const breadcrumb_was_open = host.breadcrumb_open;
-    AppHost.DrawNativeChromeHost(session, viewport, path_bounds, screenFocused, screenKey);
+    DrawChrome(session, viewport, path_bounds, screenFocused, screenKey);
     if (breadcrumb_was_open || host.breadcrumb_open) { screenKey = s32(0); }
     if (!sidebarHidden) {
         const sidebar: Rectangle = {x: viewport.x, y: viewport.y + chrome_height,
@@ -101,6 +107,121 @@ export function DrawScreen(session: Session, viewport: Rectangle, focused: boole
         viewport: viewport, path_bounds: path_bounds});
 }
 
+// Chrome: menubar, toolbar with navigation, pathbar or location entry, search
+// and the status bar compose here over the granular native facades. Menu
+// widths, toolbar metrics, the breadcrumb ancestor cache, the status message
+// with its free-space refresh and the GTK icon/label paints stay native; the
+// composition order, hover, clicks and the retained status text node run in
+// TSX exactly as the former DrawNativeChrome did.
+function DrawChrome(session: Session, viewport: Rectangle,
+        path_bounds: Rectangle, focused: boolean, key: s32): void {
+    const host = nativeRef(AppHost.host);
+    const manager = AppHost.ActiveManager(host);
+    const menu_height = AppHost.MenuHeightHost();
+    if (!host.menubar_hidden) {
+        AppHost.ScreenSurfaceHost({x: viewport.x, y: viewport.y,
+            width: viewport.width, height: menu_height}, "menubar");
+        const menu_labels: [string, string, string, string, string, string] = ["File", "Edit", "View", "Go", "Bookmarks", "Help"];
+        const pointer = Input.PointerSample(session);
+        let x = viewport.x;
+        for (let i = s32(0); i < s32(6); i += s32(1)) {
+            const width = AppHost.MenuWidthHost(i);
+            const bounds: Rectangle = {x: x, y: viewport.y,
+                width: width, height: menu_height};
+            if (focused && host.actions_open &&
+                    (pointer.x !== host.menu_pointer.x ||
+                        pointer.y !== host.menu_pointer.y) &&
+                    pointer.x >= x && pointer.x < x + width &&
+                    pointer.y >= viewport.y &&
+                    pointer.y < viewport.y + menu_height &&
+                    host.menu_index !== i + s32(1)) {
+                nativeSet(nativeRef(host.menu_index), i + s32(1));
+                nativeSet(nativeRef(host.menu_cursor), s32(0));
+                AppHost.MenuPointerStoreHost(pointer.x, pointer.y);
+            }
+            if (AppHost.ScreenControlHost(u64(600) + u64(i), bounds, menu_labels[i],
+                    "", focused, host.actions_open && host.menu_index === i + s32(1),
+                    true)) {
+                const open = !host.actions_open || host.menu_index !== i + s32(1);
+                nativeSet(nativeRef(host.actions_open), open);
+                nativeSet(nativeRef(host.menu_index), i + s32(1));
+                if (open) {
+                    nativeSet(nativeRef(host.menu_cursor), s32(0));
+                    AppHost.MenuPointerStoreHost(pointer.x, pointer.y);
+                    AppHost.CapturePopupOwner(host);
+                }
+            }
+            x += width;
+        }
+    }
+    const toolbar_height = AppHost.ToolbarHeightHost();
+    AppHost.ScreenSurfaceHost({x: viewport.x, y: viewport.y + menu_height,
+        width: viewport.width, height: toolbar_height}, "toolbar");
+    for (let i = s32(0); i < s32(4); i += s32(1)) {
+        let enabled = focused && AppHost.PromptNoneHost();
+        if (i === s32(0)) { enabled = enabled && manager.back.count > s32(0); }
+        if (i === s32(1)) { enabled = enabled && manager.forward.count > s32(0); }
+        let nav_key = u64(0);
+        let nav_label = "";
+        let nav_icon = "";
+        if (i === s32(0)) {
+            nav_key = u64(1); nav_label = "Back"; nav_icon = "go-previous-symbolic";
+        } else if (i === s32(1)) {
+            nav_key = u64(616); nav_label = "Forward"; nav_icon = "go-next-symbolic";
+        } else if (i === s32(2)) {
+            nav_key = u64(2); nav_label = "Up"; nav_icon = "go-up-symbolic";
+        } else {
+            nav_key = u64(3); nav_label = "Home"; nav_icon = "go-home-symbolic";
+        }
+        if (AppHost.ScreenControlHost(nav_key,
+                AppHost.ToolbarItemHost(viewport, i, false), nav_label, nav_icon,
+                enabled, false, true)) {
+            if (i === s32(0)) { Model.NavigateBack(manager); }
+            else if (i === s32(1)) { Model.NavigateForward(manager); }
+            else if (i === s32(2)) { Model.NavigateUp(manager); }
+            else { Model.OpenPathTracked(manager, Model.HomePath()); }
+        }
+    }
+    const location_prompt = AppHost.LocationPromptHost();
+    if (!location_prompt && host.pathbar && !Model.IsUri(manager.cwd)) {
+        const synced = AppHost.BreadcrumbCacheInstall(host, manager);
+        LocationView.DrawLocationBreadcrumb(session, path_bounds, focused, key,
+            synced, AppHost.BreadcrumbItemsHost());
+        AppHost.BreadcrumbItemsTrimHost();
+    }
+    if (!location_prompt && (!host.pathbar || Model.IsUri(manager.cwd))) {
+        AppHost.ScreenSurfaceHost(path_bounds, "entry");
+        const caption = AppHost.LocationCaptionHost();
+        if (Button({session: session, props: {key: u64(226), bounds: path_bounds,
+                label: caption, invisible: true, disabled: !focused}})) {
+            AppHost.OpenPrompt(host, Model.PromptKind.PromptLocation);
+        }
+        const icon_bounds = AppHost.LocationIconHost(path_bounds);
+        if (Model.IsUri(manager.cwd)) {
+            AppHost.ScreenIconHost(icon_bounds,
+                manager.cwd === "computer:///" ? "computer"
+                : manager.cwd === "recent:///" ? "document-open-recent"
+                : "network-workgroup");
+        } else {
+            AppHost.ScreenFileIconHost(icon_bounds, manager.cwd);
+        }
+        AppHost.ScreenLabelHost(AppHost.LocationTextHost(path_bounds), caption,
+            "entry");
+    }
+    if (AppHost.ScreenControlHost(u64(614),
+            AppHost.ToolbarItemHost(viewport, s32(0), true), "Search",
+            "system-search-symbolic", focused, false, true)) {
+        AppHost.OpenPrompt(host, Model.PromptKind.PromptSearch);
+    }
+    const status = AppHost.NativeStatusBoundsHost(viewport);
+    AppHost.ScreenSurfaceHost(status, "statusbar");
+    const has_error = manager.error !== "";
+    const message = AppHost.StatusBarMessageHost();
+    AppHost.ScreenStatusLabelHost(status, message, has_error);
+    const node = Tree.TreeSubmitCurrent(session,
+        has_error ? u64(21) : u64(242), s32(WidgetKind.WidgetKindText), status);
+    Tree.TreeSetLabel(session, node, message);
+}
 // Menubar dropdown: popup lifecycle, key navigation, hover, geometry and the
 // per-item paint run here; label tables, shortcuts and the action dispatch
 // stay native so the menu keeps one source of truth for its state.

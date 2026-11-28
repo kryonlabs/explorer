@@ -25,6 +25,13 @@
   and `src/app_screen.tsx`, with the menu action dispatch, chooser confirm
   and GTK paint primitives kept as granular `app_host` facades.
 
+- Compose the desktop chrome contents in TSX: the six menubar buttons with
+  hover switching, the toolbar navigation controls, the pathbar breadcrumb or
+  location entry with its icon and click-to-edit, the search button and the
+  status bar with its retained status text node now run in
+  `src/app_screen.tsx` over granular `app_host` facades, and the former
+  whole-screen native `DrawNativeChrome` composition is deleted.
+
 ## [0.1.0] - 2026-11-22
 
 - Ship Explorer as a Linux amd64 Debian package and a ZX 28 application for TaijiOS.

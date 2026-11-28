@@ -2122,81 +2122,6 @@ RefreshTheme :: (host: *Host) {
     host.palette_loaded = true
 }
 
-DrawNativeChrome :: (host: *Host, session: Session, viewport: Rectangle, path: Rectangle, focused: bool, key: s32) {
-    p := *host.paint
-    manager := ActiveManager(host)
-    menu_height:=Native.MenuHeight()
-    if !host.menubar_hidden {
-    Native.Surface(p,.{viewport.x,viewport.y,viewport.width,menu_height},"menubar")
-    labels: [6]string = .["File","Edit","View","Go","Bookmarks","Help"]
-    x := viewport.x
-    for i: 0..5 {
-        width:=Native.MenuWidth(cast(s32)i)
-        pointer:=Input.PointerSample(session)
-        if focused && host.actions_open && (pointer.x!=host.menu_pointer.x || pointer.y!=host.menu_pointer.y) && pointer.x>=x && pointer.x<x+width && pointer.y>=viewport.y && pointer.y<viewport.y+menu_height && host.menu_index!=i+1 {
-            host.menu_index=cast(s32)i+1; host.menu_cursor=0
-            host.menu_pointer=.{pointer.x,pointer.y}
-        }
-        if Native.Control(p,cast(u64)(600+i),.{x,viewport.y,width,menu_height},labels[i],"",focused,host.actions_open && host.menu_index==i+1,false,true) {
-            open := !host.actions_open || host.menu_index != i+1
-            host.actions_open=open; host.menu_index=cast(s32)i+1
-            if open { host.menu_cursor=0; host.menu_pointer=.{pointer.x,pointer.y}; CapturePopupOwner(host) }
-        }
-        x += width
-    }
-    }
-    Native.Surface(p,.{viewport.x,viewport.y+menu_height,viewport.width,Native.ToolbarHeight()},"toolbar")
-    icons: [4]string = .["go-previous-symbolic","go-next-symbolic","go-up-symbolic","go-home-symbolic"]
-    navigation_labels: [4]string=.["Back","Forward","Up","Home"]
-    navigation_keys: [4]u64=.[1,616,2,3]
-    for i: 0..3 {
-        enabled := focused && manager.prompt == .PromptNone
-        if i == 0 { enabled = enabled && manager.back.count > 0 }
-        if i == 1 { enabled = enabled && manager.forward.count > 0 }
-        if Native.Control(p,navigation_keys[i],Native.ToolbarItem(viewport,cast(s32)i),navigation_labels[i],icons[i],enabled,false,false,true) {
-            if i == 0 { unused Model.NavigateBack(manager) }
-            else if i == 1 { unused Model.NavigateForward(manager) }
-            else if i == 2 { unused Model.NavigateUp(manager) }
-            else { unused Model.OpenPathTracked(manager,Model.HomePath()) }
-        }
-    }
-    if manager.prompt != .PromptLocation && host.pathbar && !Model.IsUri(manager.cwd) {
-        synced := BreadcrumbCacheInstall(host, manager)
-        LocationView.DrawLocationBreadcrumb(session,path,focused,key,synced,
-            host.location_items.breadcrumb_items[:])
-        unused VecResize(host.location_items.breadcrumb_items, 0)
-    }
-    if manager.prompt != .PromptLocation && (!host.pathbar || Model.IsUri(manager.cwd)) {
-        Native.Surface(p,path,"entry")
-        location_text: Vec(u8)
-        unused BuilderAppend(location_text,manager.cwd)
-        if !host.location_without_slash && manager.cwd!="" && manager.cwd[manager.cwd.count-1]!=#char "/" { unused BuilderAppend(location_text,"/") }
-        caption: Text = FileDisplay.Caption(TextView(location_text[:]))
-            if UiControls.WidgetButtonProps(session,ButtonWidget.Props.{.key=cast(u64)226,.bounds=path,.label=TextView(caption),.invisible=true,.disabled= !focused}) { OpenPrompt(host,.PromptLocation) }
-        location_icon:=Native.LocationIcon(path)
-        if Model.IsUri(manager.cwd) { Native.Icon(p,location_icon,ifx manager.cwd=="computer:///" then "computer" else ifx manager.cwd=="recent:///" then "document-open-recent" else "network-workgroup") }
-        else { Native.FileIcon(p,location_icon,manager.cwd) }
-        Native.Label(p,Native.LocationText(path),TextView(caption),"entry")
-    }
-    if Native.Control(p,cast(u64)614,Native.ToolbarItem(viewport,0,true),"Search","system-search-symbolic",focused,false,false,true) { OpenPrompt(host,.PromptSearch) }
-    status := NativeStatusBounds(host,viewport)
-    Native.Surface(p,status,"statusbar")
-    message: Vec(u8)
-    if manager.error != "" { caption: Text=FileDisplay.Caption(manager.error); unused BuilderAppend(message,TextView(caption)) }
-    else {
-        now:=DateTime.UnixMilliseconds()
-        path_key:=Model.PathKey(manager.cwd)
-        if host.free_path!=path_key || now<host.free_ms || now-host.free_ms>=1000 {
-            host.free_bytes=ifx Model.IsUri(manager.cwd) then -1 else Gtk.GtkFileSystemFree(manager.cwd); host.free_path=path_key; host.free_ms=now
-        }
-        unused Status.Append(manager,host.free_bytes,*message)
-    }
-    Native.StatusLabel(p,status,TextView(message[:]),manager.error!="")
-    node:=TreeSubmitCurrent(session,ifx manager.error!="" then cast(u64)21 else cast(u64)242,cast(s32)WidgetKindText,status)
-    TreeSetLabel(session,node,TextView(message[:]))
-    VecFree(message)
-}
-
 NativeStatusBounds :: (host: *Host, viewport: Rectangle) -> Rectangle {
     manager:=ActiveManager(host)
     height: float32=Native.StatusHeight()
@@ -3126,6 +3051,9 @@ tab_items_cache: [64]TabBar.Tab;
 info_body_cache: Text;
 chooser_items_cache: [256]ListBox.ListBoxItem;
 chooser_flags_cache: [256]bool;
+breadcrumb_items_cache: [256]BreadcrumbWidget.BreadcrumbItem;
+location_caption_cache: Text;
+status_message_cache: Text;
 
 TabCountHost :: () -> s32 {
     return cast(s32)ActiveManager(*host).tabs.count
@@ -3150,13 +3078,6 @@ PaneSeparatorWidthHost :: () -> float32 {
         return Native.PaneSeparatorWidth()
     }
     return 0.0
-}
-
-DrawNativeChromeHost :: (session: Session, viewport: Rectangle,
-    path_bounds: Rectangle, focused: bool, key: s32) {
-    #if !#defined(EXPLORER_TAIJI) {
-        DrawNativeChrome(*host,session,viewport,path_bounds,focused,key)
-    }
 }
 
 TreeModeHost :: () -> bool {
@@ -3409,12 +3330,131 @@ ScreenLabelHost :: (bounds: Rectangle, text: string, style: string) {
     }
 }
 
-ScreenControlHost :: (key: u64, bounds: Rectangle, label: string, detail: string,
-    enabled: bool) -> bool {
+ScreenControlHost :: (key: u64, bounds: Rectangle, label: string, icon: string,
+    enabled: bool, selected: bool = false, flat: bool = false) -> bool {
     #if !#defined(EXPLORER_TAIJI) {
-        return Native.Control(*host.paint,key,bounds,label,detail,enabled)
+        return Native.Control(*host.paint,key,bounds,label,icon,enabled,selected,false,flat)
     }
     return false
+}
+
+// Chrome metrics, pointer storage and item copies for the TSX chrome
+// composition in app_screen.tsx; GTK measurement stays native.
+MenuWidthHost :: (index: s32) -> float32 {
+    #if !#defined(EXPLORER_TAIJI) {
+        return Native.MenuWidth(index)
+    }
+    return 0.0
+}
+
+ToolbarHeightHost :: () -> float32 {
+    #if !#defined(EXPLORER_TAIJI) {
+        return Native.ToolbarHeight()
+    }
+    return 0.0
+}
+
+MenuPointerStoreHost :: (x: float32, y: float32) {
+    host.menu_pointer = .{x,y}
+}
+
+LocationPromptHost :: () -> bool {
+    return ActiveManager(*host).prompt == .PromptLocation
+}
+
+ToolbarItemHost :: (viewport: Rectangle, index: s32, trailing: bool) -> Rectangle {
+    #if !#defined(EXPLORER_TAIJI) {
+        return Native.ToolbarItem(viewport,index,trailing)
+    }
+    return viewport
+}
+
+// Breadcrumb items borrow the shared ancestors cache; TSX receives a copy so
+// the native Vec can be trimmed right after the view draws.
+BreadcrumbItemsHost :: () -> []BreadcrumbWidget.BreadcrumbItem {
+    count := cast(s32)host.location_items.breadcrumb_items.count
+    if count > 256 { count = 256 }
+    for index: cast(s32)0..count-1 {
+        breadcrumb_items_cache[index] = host.location_items.breadcrumb_items[index]
+    }
+    return breadcrumb_items_cache[0:count]
+}
+
+BreadcrumbItemsTrimHost :: () {
+    unused VecResize(host.location_items.breadcrumb_items, 0)
+}
+
+LocationCaptionHost :: () -> string {
+    #if !#defined(EXPLORER_TAIJI) {
+        manager := ActiveManager(*host)
+        VecClear(location_caption_cache.bytes)
+        location_text: Vec(u8)
+        unused BuilderAppend(location_text,manager.cwd)
+        if !host.location_without_slash && manager.cwd!="" && manager.cwd[manager.cwd.count-1]!=#char "/" {
+            unused BuilderAppend(location_text,"/")
+        }
+        caption: Text = FileDisplay.Caption(TextView(location_text[:]))
+        unused BuilderAppend(location_caption_cache.bytes,TextView(caption))
+        return TextView(location_caption_cache)
+    }
+    return ""
+}
+
+LocationIconHost :: (bounds: Rectangle) -> Rectangle {
+    #if !#defined(EXPLORER_TAIJI) {
+        return Native.LocationIcon(bounds)
+    }
+    return bounds
+}
+
+LocationTextHost :: (bounds: Rectangle) -> Rectangle {
+    #if !#defined(EXPLORER_TAIJI) {
+        return Native.LocationText(bounds)
+    }
+    return bounds
+}
+
+ScreenIconHost :: (bounds: Rectangle, icon: string) {
+    #if !#defined(EXPLORER_TAIJI) {
+        Native.Icon(*host.paint,bounds,icon)
+    }
+}
+
+ScreenFileIconHost :: (bounds: Rectangle, path: string) {
+    #if !#defined(EXPLORER_TAIJI) {
+        Native.FileIcon(*host.paint,bounds,path)
+    }
+}
+
+ScreenStatusLabelHost :: (bounds: Rectangle, text: string, error: bool) {
+    #if !#defined(EXPLORER_TAIJI) {
+        Native.StatusLabel(*host.paint,bounds,text,error)
+    }
+}
+
+// Status text keeps the native free-space caching; TSX paints and labels it.
+StatusBarMessageHost :: () -> string {
+    #if !#defined(EXPLORER_TAIJI) {
+        manager := ActiveManager(*host)
+        VecClear(status_message_cache.bytes)
+        message: Vec(u8)
+        if manager.error != "" {
+            caption: Text = FileDisplay.Caption(manager.error)
+            unused BuilderAppend(message,TextView(caption))
+        } else {
+            now := DateTime.UnixMilliseconds()
+            path_key := Model.PathKey(manager.cwd)
+            if host.free_path!=path_key || now<host.free_ms || now-host.free_ms>=1000 {
+                host.free_bytes=ifx Model.IsUri(manager.cwd) then -1 else Gtk.GtkFileSystemFree(manager.cwd)
+                host.free_path=path_key; host.free_ms=now
+            }
+            unused Status.Append(manager,host.free_bytes,*message)
+        }
+        unused BuilderAppend(status_message_cache.bytes,TextView(message[:]))
+        VecFree(message)
+        return TextView(status_message_cache)
+    }
+    return ""
 }
 
 ChooserOpenHost :: () -> bool {
