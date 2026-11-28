@@ -1,6 +1,6 @@
 // Explorer application entry, composed in TSX. Screen sections live in
-// guest_view.tsx and later app_screen.tsx over the app_host native bridge;
-// the frame here only orchestrates begin/draw/end plus the Taiji lifecycle
+// guest_view.tsx and app_screen.tsx over the app_host native bridge; the
+// frame here only orchestrates begin/draw/end plus the Taiji lifecycle
 // exports, preserving the exact window contract of the former app.zi.
 import * as AppHost from "app_host";
 import { Session } from "kryon/session";

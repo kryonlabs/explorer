@@ -17,6 +17,14 @@
   Item slices install from pane- and model-owned captions immediately before
   each TSX view and are emptied right after it returns.
 
+- Move the remaining maintained screen composition to TSX: the details header
+  with drag resize and sort wiring plus its visible-row window, the desktop
+  screen layout (chrome, tree/places sidebar, pane separator, tab strip,
+  paned split bodies), the menubar dropdown with key navigation and hover,
+  the info dialog and the Open With chooser now run in `src/details_view.tsx`
+  and `src/app_screen.tsx`, with the menu action dispatch, chooser confirm
+  and GTK paint primitives kept as granular `app_host` facades.
+
 ## [0.1.0] - 2026-11-22
 
 - Ship Explorer as a Linux amd64 Debian package and a ZX 28 application for TaijiOS.

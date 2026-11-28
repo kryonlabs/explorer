@@ -58,6 +58,7 @@ using DesktopLocations :: #import "desktop_locations";
 using Bookmarks :: #import "bookmarks";
 }
 using LocalTree :: #import "tree_sidebar";
+ScreenView :: #import "app_screen";
 GuestView :: #import "guest_view";
 DialogsView :: #import "dialogs_view";
 TabsView :: #import "tabs_view";
@@ -1729,39 +1730,20 @@ DrawDetailsInPane :: (host: *Host, view: *PaneView, session: Session, bounds: Re
     manager := PaneManager(host, pane_index)
 
     #if #defined(EXPLORER_TAIJI) {
-        columns: [4]string = .["Name", "Size", "Type", "Modified"]
-        ascending: [4]string = .["Name ↑", "Size ↑", "Type ↑", "Modified ↑"]
-        descending: [4]string = .["Name ↓", "Size ↓", "Type ↓", "Modified ↓"]
         count := cast(s32)manager.entries.count
         row_height: s32 = 25
         header_height: float32 = 30.0
         body := Rectangle.{bounds.x, bounds.y + header_height, bounds.width, bounds.height - header_height}
         if body.height < 1.0 { return }
-        UiControls.WidgetBox(session, BoxWidget.Props.{.key = 610, .bounds = body, .fill = ColorFromPacked(host.palette.base)})
-        x := body.x
-        column_count: s32 = ifx body.width >= 490.0 then 4 else ifx body.width >= 270.0 then 2 else 1
-        name_width := ifx column_count == 4 then body.width - 250.0 else ifx column_count == 2 then body.width - 84.0 else body.width
-        widths: [4]float32 = .[name_width, 84.0, 66.0, 100.0]
         // The shared TSX scroll call below carries the native branch's paint
         // metrics; the Taiji rows derive everything from widths instead.
         icon_size: float32 = 0.0
         icon_delta: float32 = 0.0
         content_width: s32 = 0
-        for column: cast(s32)0..column_count-1 {
-            name := columns[column]
-            if SortColumn(manager.sort_mode) == column {
-                name = ifx manager.sort_reverse then descending[column] else ascending[column]
-            }
-            if Button(host, session, 60 + column, name, .{x, bounds.y, widths[column], header_height}, focused) {
-                mode := SortForColumn(column)
-                Model.SetSort(manager, mode, mode == manager.sort_mode && !manager.sort_reverse)
-            }
-            x += widths[column]
-        }
+        header := Rectangle.{body.x, bounds.y, body.width, header_height}
     } else {
     p := *host.paint
     bounds=Native.DetailsFrame(p,bounds)
-    columns: [4]string = .["Name","Size","Type","Date Modified"]
     count := cast(s32)manager.entries.count
     if !VecResize(view.details_cells,cast(s64)count) { return }
     MeasureDetailsColumns(manager,view,bounds)
@@ -1781,41 +1763,10 @@ DrawDetailsInPane :: (host: *Host, view: *PaneView, session: Session, bounds: Re
     }
     if content_width<cast(s32)body.width { content_width=cast(s32)body.width }
     header := Rectangle.{body.x,bounds.y,body.width,header_height}
-    Native.Surface(p,header,"toolbar")
-    previous_clip:=p.clip
-    p.clip=RectangleIntersection(previous_clip,header)
-    x := body.x-cast(float32)view.details_scroll_x
-    for column: cast(s32)0..3 {
-        width := cast(float32)view.column_widths[column]
-        if column == 3 { width=body.x-cast(float32)view.details_scroll_x+cast(float32)content_width-x }
-        resize_key:=cast(u64)0xffff000000000000 | cast(u64)column
-        previous:=TreePrevious(session,TreeCurrentParent(session),resize_key,cast(s32)WidgetKindSlider)
-        drag:=Input.TreeTakeDragAt(session,previous)
-        if column<3 && focused && (drag.active || drag.ended) {
-            width=drag.x-drag.grab_x-x+3.0
-            if width<60.0 { width=60.0 }
-            view.column_widths[column]=cast(s32)width
-            view.columns_resized=true
-        }
-        if Native.Header(p,cast(u64)(60+column),.{x,header.y,width,header_height},columns[column],SortColumn(manager.sort_mode)==column,manager.sort_reverse,focused) {
-            mode := SortForColumn(column)
-            Model.SetSort(manager,mode,ifx mode==manager.sort_mode then !manager.sort_reverse else false)
-            view.last_click_ms=0
-        }
-        x+=width
+    // The TSX details view composes the header columns, drag resize and sort
+    // wiring over the native header primitives.
     }
-    // Dividers are above both neighboring header buttons for hit testing.
-    x=body.x-cast(float32)view.details_scroll_x
-    for column: cast(s32)0..2 {
-        x+=cast(float32)view.column_widths[column]
-        node:=TreeSubmitCurrent(session,cast(u64)0xffff000000000000 | cast(u64)column,cast(s32)WidgetKindSlider,.{x-3.0,header.y,6.0,header.height})
-        TreeSetInteractive(session,node,!focused,false,column+800)
-        TreeSetCursor(session,node,5)
-    }
-    p.clip=previous_clip
-    }
-    parent := TreeSubmittedNodeAt(session, TreeCurrentParent(session))
-    scroll_key := TreeIdentityHash(parent.identity_generation, cast(u64)40, 2147483646)
+    scroll_key := TreeIdentityHash(TreeParentGeneration(session, TreeCurrentParent(session), false), cast(u64)40, 2147483646)
     state := Tables.TableViewResult.{.focused_row=manager.cursor,.anchor=manager.anchor}
     navigated := focused && (key==KeyHome || key==KeyEnd || key==KeyUp || key==KeyDown)
     #if #defined(EXPLORER_TAIJI) {
@@ -1867,8 +1818,9 @@ DrawDetailsInPane :: (host: *Host, view: *PaneView, session: Session, bounds: Re
         scroll_props.input.disabled = !focused || view.native_scroll_metrics.dragging
     }
     physical:=ifx pane_index<0 then host.active_pane else pane_index
-    scroll := DetailsView.DrawRows(session, scroll_props, body, manager.scroll, count,
-        row_height, focused, modifiers, physical, icon_size, icon_delta, content_width)
+    scroll := DetailsView.DrawRows(session, scroll_props, body, header, view.details_scroll_x,
+        manager.scroll, count, row_height, focused, modifiers, physical, icon_size,
+        icon_delta, content_width)
     manager.scroll=scroll.scroll_offset
     #if !#defined(EXPLORER_TAIJI) {
     FinishNativeScroll(view,session,view.details_scroll_x,manager.scroll,focused)
@@ -2123,9 +2075,9 @@ DrawPreviewInPane :: (host: *Host, view: *PaneView, session: Session, viewport: 
 }
 
 #scope_export
-#if !#defined(EXPLORER_TAIJI) {
 DrawPaneBody :: (host: *Host, session: Session, bounds: Rectangle, pane_index: s32,
     key: s32, modifiers: s32, enabled: bool) {
+    #if !#defined(EXPLORER_TAIJI) {
     manager := PaneManager(host, pane_index)
     node := UiControls.WidgetBox(session, BoxWidget.Props.{.key = cast(u64)(550 + pane_index), .bounds = bounds})
     if node < 0 || !TreePushScope(session, node) { return }
@@ -2155,6 +2107,7 @@ DrawPaneBody :: (host: *Host, session: Session, bounds: Rectangle, pane_index: s
     if list.width < 1.0 || list.height < 1.0 { return }
     if manager.view_mode == .ViewList { DrawDetails(host, session, list, key, modifiers, enabled, pane_index) }
     else { DrawFileGrid(host, session, list, key, modifiers, enabled, pane_index) }
+    }
 }
 
 RefreshTheme :: (host: *Host) {
@@ -2312,7 +2265,6 @@ OpenPlace :: (host: *Host, route: string, key: u64) {
     host.location_without_slash=true
 }
 
-}
 ConfirmDelete :: (host: *Host) {
     manager:=ActiveManager(host)
     count:=Model.SelectedCount(manager)
@@ -2834,48 +2786,6 @@ CloseChooser :: (host: *Host) {
     host.chooser_open = false
 }
 
-DrawChooser :: (host: *Host, session: Session, viewport: Rectangle, focused: bool, key: s32) {
-    if !host.chooser_open { return }
-    manager := ActiveManager(host)
-    if focused && key == KeyEscape { CloseChooser(host); return }
-    bounds := Rectangle.{viewport.x + (viewport.width - 520.0) * 0.5, viewport.y + (viewport.height - 480.0) * 0.5, 520.0, 480.0}
-    UiControls.WidgetBox(session, BoxWidget.Props.{.key = cast(u64)8300, .bounds = viewport})
-    UiControls.WidgetBox(session, BoxWidget.Props.{.key = cast(u64)8301, .bounds = bounds, .fill = ColorFromPacked(host.palette.base)})
-    UiControls.WidgetText(session, TextWidget.Props.{.key = cast(u64)8302, .bounds = .{bounds.x + 16.0, bounds.y + 12.0, bounds.width - 32.0, 24.0},
-        .text = ifx host.chooser_default then "Set Default Application" else "Open With", .size = 16})
-    if !VecResize(host.chooser_items, host.chooser_apps.count) || !VecResize(host.chooser_flags, host.chooser_apps.count) { return }
-    for i: cast(s32)0..cast(s32)host.chooser_apps.count - 1 {
-        host.chooser_items[i] = ListBox.ListBoxItem.{cast(u64)i + cast(u64)1, AppLabel(host.chooser_apps[i].app)}
-        host.chooser_flags[i] = i == host.chooser_selected
-    }
-    list := Rectangle.{bounds.x + 16.0, bounds.y + 44.0, bounds.width - 32.0, bounds.height - 140.0}
-    props := ListBox.ListBoxMultiProps.{.key = cast(u64)8303, .bounds = list, .row_height = 30,
-        .anchor = host.chooser_selected, .scroll_offset = host.chooser_scroll, .focused = focused}
-    props.scroll_delta = cast(s32)(-Input.PointerWheelTake(session, list) * 64.0)
-    result := ListBox.ListBoxMulti(session, props, host.chooser_items[:], host.chooser_flags[:])
-    host.chooser_scroll = result.scroll_offset
-    if result.clicked_index >= 0 { host.chooser_selected = result.clicked_index }
-    remember := ifx host.chooser_remember then "[x] Use as default for this kind of file" else "[ ] Use as default for this kind of file"
-    if Button(host, session, 8304, remember, .{bounds.x + 16.0, bounds.y + bounds.height - 88.0, bounds.width - 32.0, 30.0}, focused && !host.chooser_default) {
-        host.chooser_remember = !host.chooser_remember
-    }
-    if Button(host, session, 8305, "Cancel", .{bounds.x + bounds.width - 236.0, bounds.y + bounds.height - 46.0, 100.0, 32.0}, focused) {
-        CloseChooser(host); return
-    }
-    confirm := ifx host.chooser_default then "Set Default" else "Open"
-    if Button(host, session, 8306, confirm, .{bounds.x + bounds.width - 126.0, bounds.y + bounds.height - 46.0, 110.0, 32.0}, focused && host.chooser_selected >= 0) || (focused && key == KeyEnter && host.chooser_selected >= 0) {
-        app := host.chooser_apps[host.chooser_selected].app
-        if host.chooser_remember && !MenuSetDefault(app, TextView(host.chooser_type)) { Model.SetError(manager, "The default application could not be changed") }
-        if !host.chooser_default {
-            paths: Vec(string)
-            for * path: host.chooser_paths { unused VecPush(paths, TextView(path.*)) }
-            if !MenuLaunchApp(app, paths[:]) { Model.SetError(manager, "The application could not be started.") }
-            VecFree(paths)
-        }
-        CloseChooser(host)
-    }
-}
-
 // Dragging files ---------------------------------------------------------------
 
 DragActive :: (host: *Host) -> bool { return host.drag.active }
@@ -2980,88 +2890,38 @@ ApplyExternalDrops :: (host: *Host) {
     VecFree(external_drops)
 }
 
-DrawNativeMenu :: (host: *Host, session: Session, viewport: Rectangle, focused: bool, key: s32) {
-    if !host.actions_open { return }
-    if !PopupOwnerValid(host) || key == KeyEscape { host.actions_open=false; return }
-    if focused && (key==KeyLeft || key==KeyRight) {
-        host.menu_index=(host.menu_index+ifx key==KeyLeft then 4 else 6)%6+1
-        host.menu_cursor=0
-    }
-    labels: [16]string
-    count: s32
-    if host.menu_index == 1 { labels[0]="New folder"; labels[1]="New file"; labels[2]="New tab"; labels[3]="Close tab"; labels[4]="Rename"; labels[5]="Move to Trash"; labels[6]="Restore"; labels[7]="Preview"; count=8 }
-    else if host.menu_index == 2 { labels[0]="Undo"; labels[1]="Redo"; labels[2]="Cut"; labels[3]="Copy"; labels[4]="Paste"; labels[5]="Select all"; labels[6]="Duplicate"; labels[7]="Make link"; labels[8]="Select by pattern"; labels[9]="Invert selection"; count=10 }
-    else if host.menu_index == 3 { labels[0]="Icons"; labels[1]="Detailed List"; labels[2]="Compact List"; labels[3]="Show hidden files"; labels[4]="Places"; labels[5]="Tree"; labels[6]="Split view"; labels[7]="Other pane"; labels[8]="Reload"; labels[9]="Pathbar"; count=10 }
-    else if host.menu_index == 4 { labels[0]="Back"; labels[1]="Forward"; labels[2]="Parent"; labels[3]="Home"; labels[4]="File System"; labels[5]="Location"; labels[6]="Search"; count=7 }
-    else if host.menu_index == 5 { labels[0]="Add bookmark"; labels[1]="Rename bookmark"; labels[2]="Remove bookmark"; labels[3]="Move bookmark up"; labels[4]="Move bookmark down"; count=5 }
-    else { labels[0]="About Explorer"; count=1 }
-    if focused {
-        if key == KeyUp { host.menu_cursor=(host.menu_cursor+count-1)%count }
-        if key == KeyDown { host.menu_cursor=(host.menu_cursor+1)%count }
-        if key == KeyHome { host.menu_cursor=0 }
-        if key == KeyEnd { host.menu_cursor=count-1 }
-    }
-    x := viewport.x+Native.MenuOffset(host.menu_index-1)
-    menu_nodes:=Native.Nodes("menu")
-    label_width: s32; shortcut_width: s32
-    for i: cast(s32)0..count-1 {
-        label:=Gtk.GtkTextMeasure(menu_nodes[:],labels[i],0,1)
-        accelerator:=Gtk.GtkTextMeasure(menu_nodes[:],MenuShortcut(host.menu_index,i),0,1)
-        if label.width>label_width { label_width=label.width }
-        if accelerator.width>shortcut_width { shortcut_width=accelerator.width }
-    }
-    menu_style:=Gtk.GtkStyleQuery(menu_nodes[:],1)
-    width:=cast(float32)(label_width+shortcut_width+menu_style.padding.left+menu_style.padding.right+40)
-    if x+width > viewport.x+viewport.width { x=viewport.x+viewport.width-width }
-    bounds := Rectangle.{x,viewport.y+Native.MenuHeight(),width,cast(float32)(count*28+8)}
-    popup := Overlay.Popup(session,Overlay.PopupProps.{.key=cast(u64)650,.bounds=bounds,.keep_bounds=.{viewport.x,viewport.y,viewport.width,Native.MenuHeight()}})
-    if popup.closed { host.actions_open=false; return }
-    if popup.panel_node < 0 || !TreePushScope(session,popup.panel_node) { return }
-    defer End(session)
-    Native.Surface(*host.paint,bounds,"menu")
+RunMenuAction :: (host: *Host, menu: s32, i: s32) {
     manager := ActiveManager(host)
-    pointer:=Input.PointerSample(session)
-    if focused && (pointer.x!=host.menu_pointer.x || pointer.y!=host.menu_pointer.y) {
-        if pointer.x>=x && pointer.x<x+width && pointer.y>=bounds.y+4.0 && pointer.y<bounds.y+4.0+cast(float32)(count*28) {
-            host.menu_cursor=cast(s32)(pointer.y-bounds.y-4.0)/28
+        if menu == 1 {
+        if i == 0 { OpenPrompt(host,.PromptFolder) } else if i == 1 { OpenPrompt(host,.PromptFile) }
+        else if i == 2 { unused Model.NewTab(manager) } else if i == 3 { unused Model.CloseTab(manager,manager.active_tab) }
+        else if i == 4 { OpenPrompt(host,.PromptRename) } else if i == 5 { unused Model.DeleteSelection(manager,true); RefreshOtherPane(host) }
+        else if i == 6 { unused Model.RestoreSelection(manager); RefreshOtherPane(host) } else if manager.cursor >= 0 { OpenPreview(host,Model.EntryPath(manager,manager.cursor)) }
+    } else if menu == 2 {
+        if i==0 { unused Model.Undo(manager); RefreshOtherPane(host) }
+        else if i==1 { unused Model.Redo(manager); RefreshOtherPane(host) }
+        else if i==2 || i==3 { unused FileClipboard.Copy(*host.file_clipboard,manager,i==2) } else if i==4 { unused PasteFiles(host) }
+        else if i==5 { Model.SelectAll(manager) } else if i==6 { unused Model.DuplicateSelection(manager); RefreshOtherPane(host) } else if i==7 { unused Model.MakeLinkSelection(manager); RefreshOtherPane(host) } else if i==8 { OpenPrompt(host,.PromptSelectPattern) } else { for n: cast(s32)0..cast(s32)manager.selected.count-1 { manager.selected[n]= !manager.selected[n] } }
+    } else if menu == 3 {
+        if i == 0 { Model.SetView(manager,.ViewIcon) } else if i == 1 { Model.SetView(manager,.ViewList) } else if i == 2 { Model.SetView(manager,.ViewCompact) }
+        else if i == 3 { manager.show_hidden= !manager.show_hidden; unused Model.Refresh(manager) }
+        else if i == 4 || i == 5 { TreeMode(host,i==5) } else if i == 6 { unused ToggleSplit(host) }
+        else if i == 7 { RequestPane(host,1-host.active_pane) } else if i==8 { unused Model.Refresh(manager) } else { host.pathbar= !host.pathbar }
+    } else if menu == 4 {
+        if i == 0 { unused Model.NavigateBack(manager) } else if i == 1 { unused Model.NavigateForward(manager) }
+        else if i == 2 { unused Model.NavigateUp(manager) } else if i == 3 { unused Model.OpenPathTracked(manager,Model.HomePath()) }
+        else if i == 4 { unused Model.OpenPathTracked(manager,"/") } else if i == 5 { OpenPrompt(host,.PromptLocation) } else { OpenPrompt(host,.PromptSearch) }
+    } else if menu == 5 {
+        if i == 0 { BookmarkSelection(host) }
+        else if i == 1 { OpenPrompt(host,.PromptBookmarkRename) }
+        else {
+            previous:=host.bookmark_selected
+            ok:=Bookmarks.Edit(*host.bookmarks,previous,i-1)
+            BookmarkResult(host,ok)
+            target:=previous+ifx i==3 then -1 else 1
+            if ok && i>=3 && target>=0 && target<host.bookmarks.document.rows.count { host.bookmark_selected=target }
         }
-        host.menu_pointer=.{pointer.x,pointer.y}
-    }
-    for i: cast(s32)0..count-1 {
-        clicked := Native.MenuItem(*host.paint,cast(u64)(660+i),.{x+4.0,bounds.y+4.0+cast(float32)i*28.0,width-8.0,28.0},labels[i],focused,i==host.menu_cursor,MenuShortcut(host.menu_index,i))
-        if !clicked && !(focused && key==KeyEnter && i==host.menu_cursor) { continue }
-        host.actions_open=false
-        if host.menu_index == 1 {
-            if i == 0 { OpenPrompt(host,.PromptFolder) } else if i == 1 { OpenPrompt(host,.PromptFile) }
-            else if i == 2 { unused Model.NewTab(manager) } else if i == 3 { unused Model.CloseTab(manager,manager.active_tab) }
-            else if i == 4 { OpenPrompt(host,.PromptRename) } else if i == 5 { unused Model.DeleteSelection(manager,true); RefreshOtherPane(host) }
-            else if i == 6 { unused Model.RestoreSelection(manager); RefreshOtherPane(host) } else if manager.cursor >= 0 { OpenPreview(host,Model.EntryPath(manager,manager.cursor)) }
-        } else if host.menu_index == 2 {
-            if i==0 { unused Model.Undo(manager); RefreshOtherPane(host) }
-            else if i==1 { unused Model.Redo(manager); RefreshOtherPane(host) }
-            else if i==2 || i==3 { unused FileClipboard.Copy(*host.file_clipboard,manager,i==2) } else if i==4 { unused PasteFiles(host) }
-            else if i==5 { Model.SelectAll(manager) } else if i==6 { unused Model.DuplicateSelection(manager); RefreshOtherPane(host) } else if i==7 { unused Model.MakeLinkSelection(manager); RefreshOtherPane(host) } else if i==8 { OpenPrompt(host,.PromptSelectPattern) } else { for n: cast(s32)0..cast(s32)manager.selected.count-1 { manager.selected[n]= !manager.selected[n] } }
-        } else if host.menu_index == 3 {
-            if i == 0 { Model.SetView(manager,.ViewIcon) } else if i == 1 { Model.SetView(manager,.ViewList) } else if i == 2 { Model.SetView(manager,.ViewCompact) }
-            else if i == 3 { manager.show_hidden= !manager.show_hidden; unused Model.Refresh(manager) }
-            else if i == 4 || i == 5 { TreeMode(host,i==5) } else if i == 6 { unused ToggleSplit(host) }
-            else if i == 7 { RequestPane(host,1-host.active_pane) } else if i==8 { unused Model.Refresh(manager) } else { host.pathbar= !host.pathbar }
-        } else if host.menu_index == 4 {
-            if i == 0 { unused Model.NavigateBack(manager) } else if i == 1 { unused Model.NavigateForward(manager) }
-            else if i == 2 { unused Model.NavigateUp(manager) } else if i == 3 { unused Model.OpenPathTracked(manager,Model.HomePath()) }
-            else if i == 4 { unused Model.OpenPathTracked(manager,"/") } else if i == 5 { OpenPrompt(host,.PromptLocation) } else { OpenPrompt(host,.PromptSearch) }
-        } else if host.menu_index == 5 {
-            if i == 0 { BookmarkSelection(host) }
-            else if i == 1 { OpenPrompt(host,.PromptBookmarkRename) }
-            else {
-                previous:=host.bookmark_selected
-                ok:=Bookmarks.Edit(*host.bookmarks,previous,i-1)
-                BookmarkResult(host,ok)
-                target:=previous+ifx i==3 then -1 else 1
-                if ok && i>=3 && target>=0 && target<host.bookmarks.document.rows.count { host.bookmark_selected=target }
-            }
-        } else { Model.SetError(manager,"Explorer · Ziran file manager · Ctrl+1/2/3 views · F3 split · Ctrl+L location") }
-    }
+    } else { Model.SetError(manager,"Explorer · Ziran file manager · Ctrl+1/2/3 views · F3 split · Ctrl+L location") }
 }
 
 }
@@ -3193,68 +3053,20 @@ DrawInPane :: (host: *Host, view: *PaneView, host_session: HostSession, host_vie
     if host.info_open { focused=false; key=0 }
 
     // Keep the native toolbar at the original top edge when its menu is hidden.
-    // The root clip remains the real window; the shared geometry retains GTK's
-    // measured menu allocation for an ordinary visible menubar.
+    // GtkPainterBegin sizes its buffer from this viewport before the TSX screen
+    // composes; the shared geometry retains GTK's measured menu allocation for
+    // an ordinary visible menubar.
     if host.menubar_hidden { viewport.y-=Native.MenuHeight(); viewport.height+=Native.MenuHeight() }
 
     if !GtkPainterBegin(*host.paint,session,viewport) { return 1 }
     host.paint_active=true
-    chrome_height:=Native.ChromeHeight()
-    path_bounds := Native.LocationBounds(viewport)
-    sidebar_width: float32=ifx host.sidebar_hidden then 0.0 else 170.0
-    sidebar := Rectangle.{viewport.x,viewport.y+chrome_height,sidebar_width,viewport.height-chrome_height}
-    separator_width: float32=ifx host.sidebar_hidden then 0.0 else Native.PaneSeparatorWidth()
-    view_x := viewport.x+sidebar_width+separator_width
-    view_width:=viewport.width-sidebar_width-separator_width
-    breadcrumb_was_open:=host.breadcrumb_open
-    DrawNativeChrome(host,session,viewport,path_bounds,focused,key)
-    if breadcrumb_was_open || host.breadcrumb_open { key=0 }
-    if host.sidebar_hidden { }
-    else if view.tree_mode {
-        Native.Surface(*host.paint,sidebar,"sidebar")
-        if DrawDirectoryTree(host,session,sidebar,focused,key) { key=0 }
-    } else { DrawNativePlaces(host,session,sidebar,focused) }
-    if separator_width>0.0 { Native.PaneSeparator(*host.paint,.{viewport.x+sidebar_width,sidebar.y,separator_width,sidebar.height}) }
-    tab_height: float32 = ifx manager.tabs.count > 1 || host.split then 32.0 else 0.0
-    if !host.split && tab_height > 0.0 {
-        pane_view := PaneViewAt(host, -1)
-        sync := TabCacheInstall(pane_view, manager)
-        if TabsView.DrawTabs(session,Rectangle.{view_x,viewport.y+chrome_height,view_width,32.0},focused,key,modifiers,-1,sync,pane_view.tab_items[:]) { key=0 }
-        unused VecResize(pane_view.tab_items, 0)
-    }
-    footer:=NativeStatusBounds(host,viewport)
-    list_bounds := Rectangle.{view_x,viewport.y+chrome_height+tab_height,view_width,footer.y-(viewport.y+chrome_height+tab_height)}
-    if list_bounds.width < 1.0 { list_bounds.width=1.0 }
-    if list_bounds.height < 1.0 { list_bounds.height=1.0 }
-    content_enabled := focused && manager.prompt == .PromptNone && !host.breadcrumb_open && !host.actions_open &&
-        !host.context_view.open && !host.chooser_open
-    if host.split {
-        pane := UiControls.WidgetPanedView(session, PanedViewWidget.Props.{.key = cast(u64)548, .id = 548,
-            .bounds = list_bounds, .vertical = true, .has_split = true,
-            .split = ifx host.divider_set then host.divider else cast(s32)(list_bounds.width * 0.5),
-            .min_first = 100, .min_second = 100, .disabled = !content_enabled})
-        host.divider = pane.split; host.divider_set = true
-        DrawPaneBody(host, session, pane.first, 0, ifx host.active_pane == 0 then key else 0,
-            ifx host.active_pane == 0 then modifiers else 0, content_enabled)
-        DrawPaneBody(host, session, pane.second, 1, ifx host.active_pane == 1 then key else 0,
-            ifx host.active_pane == 1 then modifiers else 0, content_enabled)
-    } else {
-        DrawPaneBody(host, session, list_bounds, host.active_pane,
-            ifx manager.prompt == .PromptNone then key else 0, modifiers, content_enabled)
-    }
-
-    if host.breadcrumb_open { Native.RetainedControls(*host.paint,host.breadcrumb_first,host.breadcrumb_last,host.breadcrumb_bounds,true) }
-    menu_was_open:=host.actions_open
-    DrawNativeMenu(host,session,viewport,focused,key)
-    if menu_was_open { key=0 }
-    if DrawContextMenu(host,session,viewport,focused,key) { key=0 }
-    if host.info_open {
-        bounds:=Rectangle.{viewport.x+(viewport.width-620.0)*0.5,viewport.y+(viewport.height-420.0)*0.5,620.0,420.0}
-        Native.Surface(*host.paint,bounds,"window")
-        Native.Label(*host.paint,.{bounds.x+20.0,bounds.y+12.0,bounds.width-40.0,28.0},host.info_title,"label")
-        Native.Label(*host.paint,.{bounds.x+20.0,bounds.y+48.0,bounds.width-40.0,bounds.height-110.0},TextView(host.info_body[:]),"label")
-        if Native.Control(*host.paint,cast(u64)55,.{bounds.x+bounds.width-120.0,bounds.y+bounds.height-46.0,100.0,32.0},"Close","",window_focused) { host.info_open=false }
-    }
+    // Chrome, sidebar, tab strip, panes, menubar, context menu and the info
+    // dialog compose in TSX over the app_host facade bridge.
+    screen := ScreenView.DrawScreen(session, viewport, focused, key, modifiers,
+        typed_text, window_focused)
+    key=screen.key; focused=screen.focused
+    viewport=screen.viewport
+    path_bounds := screen.path_bounds
     painted:=GtkPainterEnd(*host.paint,cast(u64)599)
     host.paint_active=false
     if !painted { return 1 }
@@ -3271,7 +3083,7 @@ DrawInPane :: (host: *Host, view: *PaneView, host_session: HostSession, host_vie
     }
     #if !#defined(EXPLORER_TAIJI) {
     UpdateDrag(host,session,key)
-    DrawChooser(host,session,viewport,focused,key)
+    ScreenView.DrawChooserView(session,viewport,focused,key)
     }
     // Confirmation and location dialogs compose from the shared TSX module.
     DialogsView.DrawEmptyTrash(session, viewport, key, focused)
@@ -3297,6 +3109,430 @@ DesktopUI :: () -> bool {
         return true
     }
     return false
+}
+
+// Screen composition facades: granular desktop primitives and state actions
+// consumed by app_screen.tsx. Taiji compiles the stubs; the screen call site
+// is desktop-gated so the stubs never run.
+ScreenResult :: struct {
+    key: s32
+    focused: bool
+    viewport: Rectangle
+    path_bounds: Rectangle
+}
+
+info_title_cache: Text;
+tab_items_cache: [64]TabBar.Tab;
+info_body_cache: Text;
+chooser_items_cache: [256]ListBox.ListBoxItem;
+chooser_flags_cache: [256]bool;
+
+TabCountHost :: () -> s32 {
+    return cast(s32)ActiveManager(*host).tabs.count
+}
+
+ChromeHeightHost :: () -> float32 {
+    #if !#defined(EXPLORER_TAIJI) {
+        return Native.ChromeHeight()
+    }
+    return 0.0
+}
+
+LocationBoundsHost :: (viewport: Rectangle) -> Rectangle {
+    #if !#defined(EXPLORER_TAIJI) {
+        return Native.LocationBounds(viewport)
+    }
+    return viewport
+}
+
+PaneSeparatorWidthHost :: () -> float32 {
+    #if !#defined(EXPLORER_TAIJI) {
+        return Native.PaneSeparatorWidth()
+    }
+    return 0.0
+}
+
+DrawNativeChromeHost :: (session: Session, viewport: Rectangle,
+    path_bounds: Rectangle, focused: bool, key: s32) {
+    #if !#defined(EXPLORER_TAIJI) {
+        DrawNativeChrome(*host,session,viewport,path_bounds,focused,key)
+    }
+}
+
+TreeModeHost :: () -> bool {
+    return ActiveView(*host).tree_mode
+}
+
+SidebarSurfaceHost :: (sidebar: Rectangle) {
+    #if !#defined(EXPLORER_TAIJI) {
+        Native.Surface(*host.paint,sidebar,"sidebar")
+    }
+}
+
+DrawDirectoryTreeHost :: (session: Session, sidebar: Rectangle, focused: bool,
+    key: s32) -> bool {
+    #if !#defined(EXPLORER_TAIJI) {
+        return DrawDirectoryTree(*host,session,sidebar,focused,key)
+    }
+    return false
+}
+
+DrawNativePlacesHost :: (session: Session, sidebar: Rectangle, focused: bool) {
+    #if !#defined(EXPLORER_TAIJI) {
+        DrawNativePlaces(*host,session,sidebar,focused)
+    }
+}
+
+PaneSeparatorPaintHost :: (bounds: Rectangle) {
+    #if !#defined(EXPLORER_TAIJI) {
+        Native.PaneSeparator(*host.paint,bounds)
+    }
+}
+
+TabSyncInstallHost :: (pane: s32) -> s32 {
+    #if !#defined(EXPLORER_TAIJI) {
+        return TabCacheInstall(PaneViewAt(*host,pane),PaneManager(*host,pane))
+    }
+    return 0
+}
+
+TabItemsHost :: (pane: s32) -> []TabBar.Tab {
+    view := PaneViewAt(*host,pane)
+    count := cast(s32)view.tab_items.count
+    if count > 64 { count = 64 }
+    for index: cast(s32)0..count-1 { tab_items_cache[index] = view.tab_items[index] }
+    return tab_items_cache[0:count]
+}
+
+TabItemsTrimHost :: (pane: s32) {
+    view := PaneViewAt(*host,pane)
+    unused VecResize(view.tab_items, 0)
+}
+
+NativeStatusBoundsHost :: (viewport: Rectangle) -> Rectangle {
+    #if !#defined(EXPLORER_TAIJI) {
+        return NativeStatusBounds(*host,viewport)
+    }
+    return viewport
+}
+
+ContentEnabledHost :: (focused: bool) -> bool {
+    #if !#defined(EXPLORER_TAIJI) {
+        manager := ActiveManager(*host)
+        return focused && manager.prompt == .PromptNone && !host.breadcrumb_open &&
+            !host.actions_open && !host.context_view.open && !host.chooser_open
+    }
+    return focused
+}
+
+PaneSplitHost :: (width: float32) -> s32 {
+    return ifx host.divider_set then host.divider else cast(s32)(width*0.5)
+}
+
+PaneKeyHost :: (pane: s32, key: s32) -> s32 {
+    return ifx host.active_pane == pane then key else 0
+}
+
+PaneModifiersHost :: (pane: s32, modifiers: s32) -> s32 {
+    return ifx host.active_pane == pane then modifiers else 0
+}
+
+PromptNoneHost :: () -> bool {
+    return ActiveManager(*host).prompt == .PromptNone
+}
+
+BreadcrumbRetainPaintHost :: () {
+    #if !#defined(EXPLORER_TAIJI) {
+        Native.RetainedControls(*host.paint,host.breadcrumb_first,host.breadcrumb_last,host.breadcrumb_bounds,true)
+    }
+}
+
+DrawContextMenuHost :: (session: Session, viewport: Rectangle, focused: bool,
+    key: s32) -> bool {
+    #if !#defined(EXPLORER_TAIJI) {
+        return DrawContextMenu(*host,session,viewport,focused,key)
+    }
+    return false
+}
+
+RunMenuActionHost :: (menu: s32, item: s32) {
+    #if !#defined(EXPLORER_TAIJI) {
+        RunMenuAction(*host,menu,item)
+    }
+}
+
+MenuCountHost :: () -> s32 {
+    index := host.menu_index
+    if index == 1 { return 8 }
+    if index == 2 { return 10 }
+    if index == 3 { return 10 }
+    if index == 4 { return 7 }
+    if index == 5 { return 5 }
+    return 1
+}
+
+MenuOffsetHost :: (index: s32) -> float32 {
+    #if !#defined(EXPLORER_TAIJI) {
+        return Native.MenuOffset(index)
+    }
+    return 0.0
+}
+
+MenuHeightHost :: () -> float32 {
+    #if !#defined(EXPLORER_TAIJI) {
+        return Native.MenuHeight()
+    }
+    return 0.0
+}
+
+MenuTextWidthHost :: (text: string, mode: s32) -> s32 {
+    #if !#defined(EXPLORER_TAIJI) {
+        nodes := Native.Nodes("menu")
+        return Gtk.GtkTextMeasure(nodes[:],text,0,mode).width
+    }
+    return 0
+}
+
+MenuStylePaddingHost :: () -> s32 {
+    #if !#defined(EXPLORER_TAIJI) {
+        nodes := Native.Nodes("menu")
+        style := Gtk.GtkStyleQuery(nodes[:],1)
+        return style.padding.left+style.padding.right
+    }
+    return 0
+}
+
+MenuItemLabelHost :: (item: s32) -> string {
+    index := host.menu_index
+    if index == 1 {
+        if item == 0 { return "New folder" }
+        if item == 1 { return "New file" }
+        if item == 2 { return "New tab" }
+        if item == 3 { return "Close tab" }
+        if item == 4 { return "Rename" }
+        if item == 5 { return "Move to Trash" }
+        if item == 6 { return "Restore" }
+        return "Preview"
+    }
+    if index == 2 {
+        if item == 0 { return "Undo" }
+        if item == 1 { return "Redo" }
+        if item == 2 { return "Cut" }
+        if item == 3 { return "Copy" }
+        if item == 4 { return "Paste" }
+        if item == 5 { return "Select all" }
+        if item == 6 { return "Duplicate" }
+        if item == 7 { return "Make link" }
+        if item == 8 { return "Select by pattern" }
+        return "Invert selection"
+    }
+    if index == 3 {
+        if item == 0 { return "Icons" }
+        if item == 1 { return "Detailed List" }
+        if item == 2 { return "Compact List" }
+        if item == 3 { return "Show hidden files" }
+        if item == 4 { return "Places" }
+        if item == 5 { return "Tree" }
+        if item == 6 { return "Split view" }
+        if item == 7 { return "Other pane" }
+        if item == 8 { return "Reload" }
+        return "Pathbar"
+    }
+    if index == 4 {
+        if item == 0 { return "Back" }
+        if item == 1 { return "Forward" }
+        if item == 2 { return "Parent" }
+        if item == 3 { return "Home" }
+        if item == 4 { return "File System" }
+        if item == 5 { return "Location" }
+        return "Search"
+    }
+    if index == 5 {
+        if item == 0 { return "Add bookmark" }
+        if item == 1 { return "Rename bookmark" }
+        if item == 2 { return "Remove bookmark" }
+        if item == 3 { return "Move bookmark up" }
+        return "Move bookmark down"
+    }
+    return "About Explorer"
+}
+
+MenuShortcutTextHost :: (item: s32) -> string {
+    #if !#defined(EXPLORER_TAIJI) {
+        return MenuShortcut(host.menu_index,item)
+    }
+    return ""
+}
+
+MenuPointerHoverHost :: (session: Session, focused: bool, x: float32,
+    width: float32, bounds: Rectangle, count: s32) {
+    #if !#defined(EXPLORER_TAIJI) {
+        pointer := Input.PointerSample(session)
+        if focused && (pointer.x!=host.menu_pointer.x || pointer.y!=host.menu_pointer.y) {
+            if pointer.x>=x && pointer.x<x+width && pointer.y>=bounds.y+4.0 && pointer.y<bounds.y+4.0+cast(float32)(count*28) {
+                host.menu_cursor=cast(s32)(pointer.y-bounds.y-4.0)/28
+            }
+            host.menu_pointer=.{pointer.x,pointer.y}
+        }
+    }
+}
+
+MenuItemPaintHost :: (session: Session, item: s32, bounds: Rectangle, label: string,
+    focused: bool, selected: bool, shortcut: string) -> bool {
+    #if !#defined(EXPLORER_TAIJI) {
+        return Native.MenuItem(*host.paint,cast(u64)(660+item),bounds,label,focused,selected,shortcut)
+    }
+    return false
+}
+
+InfoTitleHost :: () -> string {
+    VecClear(info_title_cache.bytes)
+    unused BuilderAppend(info_title_cache.bytes,host.info_title)
+    return TextView(info_title_cache)
+}
+
+InfoBodyHost :: () -> string {
+    VecClear(info_body_cache.bytes)
+    unused BuilderAppend(info_body_cache.bytes,TextView(host.info_body[:]))
+    return TextView(info_body_cache)
+}
+
+ScreenSurfaceHost :: (bounds: Rectangle, style: string) {
+    #if !#defined(EXPLORER_TAIJI) {
+        Native.Surface(*host.paint,bounds,style)
+    }
+}
+
+ScreenLabelHost :: (bounds: Rectangle, text: string, style: string) {
+    #if !#defined(EXPLORER_TAIJI) {
+        Native.Label(*host.paint,bounds,text,style)
+    }
+}
+
+ScreenControlHost :: (key: u64, bounds: Rectangle, label: string, detail: string,
+    enabled: bool) -> bool {
+    #if !#defined(EXPLORER_TAIJI) {
+        return Native.Control(*host.paint,key,bounds,label,detail,enabled)
+    }
+    return false
+}
+
+ChooserOpenHost :: () -> bool {
+    #if !#defined(EXPLORER_TAIJI) {
+        return host.chooser_open
+    }
+    return false
+}
+
+ChooserCloseHost :: () {
+    #if !#defined(EXPLORER_TAIJI) {
+        CloseChooser(*host)
+    }
+}
+
+ChooserTitleHost :: () -> string {
+    #if !#defined(EXPLORER_TAIJI) {
+        return ifx host.chooser_default then "Set Default Application" else "Open With"
+    }
+    return ""
+}
+
+ChooserItemsInstallHost :: () -> s32 {
+    #if !#defined(EXPLORER_TAIJI) {
+        if !VecResize(host.chooser_items,host.chooser_apps.count) { return -1 }
+        if !VecResize(host.chooser_flags,host.chooser_apps.count) { return -1 }
+        for i: cast(s32)0..cast(s32)host.chooser_apps.count-1 {
+            host.chooser_items[i] = ListBox.ListBoxItem.{cast(u64)i+cast(u64)1,AppLabel(host.chooser_apps[i].app)}
+            host.chooser_flags[i] = i == host.chooser_selected
+        }
+        return cast(s32)host.chooser_apps.count
+    }
+    return 0
+}
+
+ChooserItemsHost :: () -> []ListBox.ListBoxItem {
+    #if !#defined(EXPLORER_TAIJI) {
+        count := cast(s32)host.chooser_items.count
+        if count > 256 { count = 256 }
+        for index: cast(s32)0..count-1 { chooser_items_cache[index] = host.chooser_items[index] }
+        return chooser_items_cache[0:count]
+    }
+    return chooser_items_cache[0:0]
+}
+
+ChooserFlagsHost :: () -> []bool {
+    #if !#defined(EXPLORER_TAIJI) {
+        count := cast(s32)host.chooser_flags.count
+        if count > 256 { count = 256 }
+        for index: cast(s32)0..count-1 { chooser_flags_cache[index] = host.chooser_flags[index] }
+        return chooser_flags_cache[0:count]
+    }
+    return chooser_flags_cache[0:0]
+}
+
+ChooserSelectedHost :: () -> s32 {
+    #if !#defined(EXPLORER_TAIJI) {
+        return host.chooser_selected
+    }
+    return -1
+}
+
+ChooserScrollHost :: () -> s32 {
+    #if !#defined(EXPLORER_TAIJI) {
+        return host.chooser_scroll
+    }
+    return 0
+}
+
+ChooserWheelHost :: (session: Session, list: Rectangle) -> s32 {
+    return cast(s32)(-Input.PointerWheelTake(session,list)*64.0)
+}
+
+ChooserSelectHost :: (index: s32) {
+    #if !#defined(EXPLORER_TAIJI) {
+        host.chooser_selected=index
+    }
+}
+
+ChooserScrollSetHost :: (offset: s32) {
+    #if !#defined(EXPLORER_TAIJI) {
+        host.chooser_scroll=offset
+    }
+}
+
+ChooserRememberHost :: () -> bool {
+    #if !#defined(EXPLORER_TAIJI) {
+        return host.chooser_remember
+    }
+    return false
+}
+
+ChooserToggleRememberHost :: () {
+    #if !#defined(EXPLORER_TAIJI) {
+        host.chooser_remember=!host.chooser_remember
+    }
+}
+
+ChooserDefaultHost :: () -> bool {
+    #if !#defined(EXPLORER_TAIJI) {
+        return host.chooser_default
+    }
+    return false
+}
+
+ChooserConfirmHost :: () {
+    #if !#defined(EXPLORER_TAIJI) {
+        manager := ActiveManager(*host)
+        app := host.chooser_apps[host.chooser_selected].app
+        if host.chooser_remember && !MenuSetDefault(app,TextView(host.chooser_type)) { Model.SetError(manager,"The default application could not be changed") }
+        if !host.chooser_default {
+            paths: Vec(string)
+            for * path: host.chooser_paths { unused VecPush(paths,TextView(path.*)) }
+            if !MenuLaunchApp(app,paths[:]) { Model.SetError(manager,"The application could not be started.") }
+            VecFree(paths)
+        }
+        CloseChooser(*host)
+    }
 }
 
 DesktopFrameBegin :: (session: Session) -> bool {
@@ -3638,194 +3874,476 @@ CancelLocationHost :: (host: *Host) {
     CancelLocation(host)
 }
 
-// Details rows inside the TSX details scroll scope. The painter, pointer
-// view and selection state are re-derived exactly as the former inline
-// block saw them; the scroll offset arrives before any row work.
-DrawDetailsRowsHost :: (session: Session, body: Rectangle, scroll_offset: s32,
-    count: s32, row_height: s32, focused: bool, modifiers: s32, physical: s32,
-    icon_size: float32, icon_delta: float32, content_width: s32) {
-    manager := ActiveManager(*host)
-    manager.scroll = scroll_offset
-    view := PaneViewAt(*host)
-    p := *host.paint
-    previous_clip := p.clip
-    state := Tables.TableViewResult.{.focused_row = manager.cursor, .anchor = manager.anchor}
-    if UiControls.WidgetButtonProps(session,ButtonWidget.Props.{.key=cast(u64)649,.bounds=body,.invisible=true,.disabled= !focused}) { Model.ClearSelection(manager) }
-    first := manager.scroll/row_height
-    last := (manager.scroll+cast(s32)body.height+row_height-1)/row_height
-    if last>=count { last=count-1 }
-    activated: s32 = -1
-    x: float32 = 0.0
-    #if #defined(EXPLORER_TAIJI) {
-    column_count: s32 = ifx body.width >= 490.0 then 4 else ifx body.width >= 270.0 then 2 else 1
-    name_width := ifx column_count == 4 then body.width - 250.0 else ifx column_count == 2 then body.width - 84.0 else body.width
-    widths: [4]float32 = .[name_width, 84.0, 66.0, 100.0]
-    }
-    for index: first..last {
-        yy := body.y+cast(float32)(index*row_height-manager.scroll)
-        // GTK clips partially visible rows through the same viewport.
-        row_bounds := Rectangle.{body.x,yy,body.width,cast(float32)row_height}
-        entry := *manager.entries[index]
-        previous:=TreePrevious(session,TreeCurrentParent(session),entry.key,cast(s32)WidgetKindSelectable)
-        clicked := focused && Input.TreeTakeActivationAt(session,previous)
-        node:=TreeSubmitCurrent(session,entry.key,cast(s32)WidgetKindSelectable,row_bounds)
-        TreeSetInteractive(session,node,!focused,false,index+1)
-        TreeSetSelected(session,node,manager.selected[index])
-        TreeSetLabel(session,node,entry.caption)
-        if clicked {
-            state=Tables.TableViewMultiSelect(manager.selected[:],count,state,index,(modifiers & KeyModifierControl)!=0,(modifiers & KeyModifierShift)!=0)
-            manager.cursor=state.focused_row; manager.anchor=state.anchor
-            activated=index
-        }
-    #if #defined(EXPLORER_TAIJI) {
-                if TreePushScope(session,node) {
-                    if manager.selected[index] {
-                        UiControls.WidgetBox(session, BoxWidget.Props.{.key = 1, .bounds = row_bounds,
-                            .fill = ColorFromPacked(host.palette.selected)})
-                    }
-                    size: [24]u8
-                    date: [32]u8
-                    cells: [4]string = .[entry.caption, "", "", ""]
-                    if column_count > 1 && entry.info.kind != .Directory {
-                        cells[1] = Number.FormatInteger(entry.info.size, size[:])
-                    }
-                    if column_count == 4 {
-                        cells[2] = Model.EntryType(entry)
-                        cells[3] = GuestDate(entry.info.modified, date[:])
-                    }
-                    x = row_bounds.x
-                    for column: cast(s32)0..column_count-1 {
-                        UiControls.WidgetText(session, TextWidget.Props.{.key = cast(u64)(10 + column),
-                            .bounds = .{x + 6.0, yy, widths[column] - 12.0, cast(float32)row_height},
-                            .text = cells[column], .size = 13, .wrap = .TextWrapEllipsis})
-                        x += widths[column]
-                    }
-                    End(session)
-                }
-    } else {
-            selected := manager.selected[index]
-            gtk_state: u32 = ifx selected then cast(u32)Gtk.GtkStyleSelected else cast(u32)0
-            if focused && Input.TreeHoveredAt(session,previous) { gtk_state |= cast(u32)Gtk.GtkStylePrelight }
-            RecordDropRow(*host,row_bounds,entry.path,physical,entry.key,Model.EntryIsDirectory(manager,index))
-            if host.drop_key!=0 && host.drop_key==entry.key { gtk_state |= cast(u32)DROP_ACTIVE }
-            // Avoid painting outside the scroll viewport into headers/footer.
-            p.clip=RectangleIntersection(previous_clip,body)
-            Native.Surface(p,row_bounds,"treeview",gtk_state)
-            x=body.x-cast(float32)view.details_scroll_x
-            data := *view.details_cells[index]
-            DetailsData(manager,index,data)
-            revision:=cast(u64)entry.info.modified ^ cast(u64)entry.info.modified_nanoseconds
-            icon_bounds:=Rectangle.{x+Native.DetailsIconX(),yy+Native.DetailsIconY(),icon_size,icon_size}
-            if entry.icon_serialized!="" { Native.SerializedIcon(p,icon_bounds,entry.icon_serialized,revision) }
-            else { Native.FileIcon(p,icon_bounds,entry.path,false,revision) }
-            if !Model.IsUri(entry.path) && !Model.EntryIsDirectory(manager,index) && Preview.ImagePath(entry.path) { nodes:=Native.Nodes("image"); GtkPainterPaint(p,nodes[:],icon_bounds,entry.path,4,0,revision) }
-            Native.FileEmblems(p,.{icon_bounds.x-1.0,yy+1.0,icon_size+2.0,icon_size+2.0},icon_bounds,data.link,data.broken)
-            scoped:=TreePushScope(session,node)
-            for column: cast(s32)0..3 {
-                width := cast(float32)view.column_widths[column]
-                if column==3 { width=body.x-cast(float32)view.details_scroll_x+cast(float32)content_width-x }
-                padding:=ifx column==0 then Native.DetailsTextX()+icon_delta else Native.DetailsCellPadding()
-                cell_bounds:=Rectangle.{x+padding,yy,width-padding-Native.DetailsCellPadding(),cast(float32)row_height}
-                if scoped { cell:=TreeSubmitCurrent(session,cast(u64)(column+1),cast(s32)WidgetKindText,cell_bounds); TreeSetLabel(session,cell,data.cells[column]) }
-                Native.Label(p,cell_bounds,data.cells[column],"treeview",gtk_state,ifx column==1 then 2 else 0)
-                x+=width
-            }
-            if scoped { End(session) }    }
-
-    }
-    #if !#defined(EXPLORER_TAIJI) {
-    p.clip=previous_clip
-    }
-    #if !#defined(EXPLORER_TAIJI) {
-    // End the per-frame cell views before host state can move on.
-    for index: first..last {
-        data := *view.details_cells[index]
-        data.cells[0]=""; data.cells[1]=""; data.cells[2]=""; data.cells[3]=""
-    }
-    }
-    if activated >= 0 { EntryClick(*host,activated,modifiers) }
+// One Places/Devices/Network row descriptor for the TSX sidebar layout. The
+// strings borrow the per-row caches below and stay live only while the row
+// composes; every field is refreshed by the next row call.
+PlacesRowView :: struct {
+    heading: bool
+    key: u64
+    side: s32
+    index: s32
+    selected: bool
+    file_icon: bool
+    label: string
+    icon: string
+    route: string
+    icon_data: string
 }
 
-// Places sidebar rows inside the TSX sidebar scroll scope.
-DrawPlacesRowsHost :: (session: Session, sidebar: Rectangle, content: Rectangle,
-    scroll_offset: s32, focused: bool, has_desktop: bool, desktop: string) {
+places_row_cache: PlacesRowView;
+places_row_label: Text;
+places_row_route: Text;
+places_clip_cache: Rectangle;
+
+places_row_begin :: () {
+    places_row_cache.heading = false
+    places_row_cache.key = 0
+    places_row_cache.side = 0
+    places_row_cache.index = -1
+    places_row_cache.selected = false
+    places_row_cache.file_icon = false
+    places_row_cache.label = ""
+    places_row_cache.icon = ""
+    places_row_cache.route = ""
+    places_row_cache.icon_data = ""
+}
+
+// Places sidebar primitives for the TSX layout: scroll state, clipping,
+// heading/row paint and the open and context-menu actions per row.
+PlacesScrollHost :: (scroll_offset: s32) {
     host.bookmark_scroll = scroll_offset
-    p := *host.paint
-    saved_clip:=p.clip; p.clip=sidebar
-    y:=sidebar.y-cast(float32)host.bookmark_scroll
-    heading_height:=Native.PlacesHeadingHeight(); row_height:=Native.PlacesRowHeight()
-    Native.Heading(p,.{sidebar.x+10.0,y,sidebar.width-20.0,heading_height},"<b>Places</b>")
-    y+=heading_height
-    width:=content.width
-    if Native.Control(p,cast(u64)34,.{sidebar.x,y,width,row_height},"Computer","computer",focused,host.places_key==34,true) { OpenPlace(*host,"computer:///",34) }
-    PlaceRow(*host,session,.{sidebar.x,y,width,row_height},"computer:///",.Special,-1,34,focused)
-    y+=row_height
-    home: Text = FileDisplay.Caption(TabPaths.PathName(Model.HomePath()))
-    if Native.Control(p,cast(u64)31,.{sidebar.x,y,width,row_height},TextView(home),"go-home",focused,host.places_key==31,true) { OpenPlace(*host,Model.HomePath(),31) }
-    PlaceRow(*host,session,.{sidebar.x,y,width,row_height},Model.HomePath(),.Folder,-1,31,focused)
-    VecFree(home.bytes); y+=row_height
-    if has_desktop {
-        if Native.Control(p,cast(u64)37,.{sidebar.x,y,width,row_height},"Desktop","user-desktop",focused,host.places_key==37,true) { OpenPlace(*host,desktop,37) }
-        PlaceRow(*host,session,.{sidebar.x,y,width,row_height},desktop,.Folder,-1,37,focused)
-        y+=row_height
-    }
-    if Native.Control(p,cast(u64)35,.{sidebar.x,y,width,row_height},"Recent","document-open-recent",focused,host.places_key==35,true) { OpenPlace(*host,"recent:///",35) }
-    PlaceRow(*host,session,.{sidebar.x,y,width,row_height},"recent:///",.Folder,-1,35,focused)
-    y+=row_height
-    if Native.Control(p,cast(u64)33,.{sidebar.x,y,width,row_height},"Trash","user-trash",focused,host.places_key==33,true,false,TextView(host.trash_icon)) { OpenPlace(*host,Model.TrashDirectory(false),33) }
-    trash_route: Text=Model.TrashDirectory(false)
-    PlaceRow(*host,session,.{sidebar.x,y,width,row_height},TextView(trash_route),.Special,-1,0,focused)
-    y+=row_height
-    for i: cast(s32)0..cast(s32)host.bookmarks.document.rows.count-1 {
-        row:=host.bookmarks.document.rows[i]
-        if Native.Control(p,cast(u64)(700+i),.{sidebar.x,y,width,row_height},row.caption,"folder",focused,host.places_key==cast(u64)(700+i),true,false,row.path,true) {
-            host.bookmark_selected=i; OpenPlace(*host,row.path,cast(u64)(700+i))
-        }
-        PlaceRow(*host,session,.{sidebar.x,y,width,row_height},row.path,.Bookmark,i,cast(u64)(700+i),focused)
-        y+=row_height
-    }
-    Native.Heading(p,.{sidebar.x+10.0,y,sidebar.width-20.0,heading_height},"<b>Devices</b>")
-    y+=heading_height
-    if Native.Control(p,cast(u64)32,.{sidebar.x,y,width,row_height},"File System","drive-harddisk",focused,host.places_key==32,true) { OpenPlace(*host,"/",32) }
-    PlaceRow(*host,session,.{sidebar.x,y,width,row_height},"/",.Folder,-1,32,focused)
-    y+=row_height
-    for mount: host.mounts.entries {
-        route:=ifx mount.local_path!="" then mount.local_path else mount.uri
-        caption: Text=FileDisplay.Caption(mount.caption)
-        if Native.Control(p,mount.key,.{sidebar.x,y,width,row_height},TextView(caption),"drive-removable-media",focused,host.places_key==mount.key,true,false,mount.icon_serialized) { OpenPlace(*host,route,mount.key) }
-        PlaceRow(*host,session,.{sidebar.x,y,width,row_height},route,.Device,-1,mount.key,focused)
-        y+=row_height
-    }
-    Native.Heading(p,.{sidebar.x+10.0,y,sidebar.width-20.0,heading_height},"<b>Network</b>")
-    y+=heading_height
-    if Native.Control(p,cast(u64)36,.{sidebar.x,y,width,row_height},"Browse Network","network-workgroup",focused,host.places_key==36,true) { OpenPlace(*host,"network:///",36) }
-    PlaceRow(*host,session,.{sidebar.x,y,width,row_height},"network:///",.Special,-1,36,focused)
-    p.clip=saved_clip
 }
 
-// Text preview lines inside the TSX text scroll scope.
-DrawPreviewTextRowsHost :: (session: Session, viewport: Rectangle, scroll_offset: s32,
-    pan_x: float32, bounds: Rectangle) {
+PlacesClipBeginHost :: (sidebar: Rectangle) {
+    #if !#defined(EXPLORER_TAIJI) {
+        p := *host.paint
+        places_clip_cache = p.clip
+        p.clip = sidebar
+    }
+}
+
+PlacesClipEndHost :: () {
+    #if !#defined(EXPLORER_TAIJI) {
+        p := *host.paint
+        p.clip = places_clip_cache
+    }
+}
+
+PlacesHeadingHeightHost :: () -> float32 {
+    #if !#defined(EXPLORER_TAIJI) {
+        return Native.PlacesHeadingHeight()
+    }
+    return 0.0
+}
+
+PlacesRowHeightHost :: () -> float32 {
+    #if !#defined(EXPLORER_TAIJI) {
+        return Native.PlacesRowHeight()
+    }
+    return 0.0
+}
+
+PlacesHeadingPaintHost :: (bounds: Rectangle, markup: string) {
+    #if !#defined(EXPLORER_TAIJI) {
+        Native.Heading(*host.paint,bounds,markup)
+    }
+}
+
+PlacesBookmarksCountHost :: () -> s32 {
+    #if !#defined(EXPLORER_TAIJI) {
+        return cast(s32)host.bookmarks.document.rows.count
+    }
+    return 0
+}
+
+PlacesMountsCountHost :: () -> s32 {
+    #if !#defined(EXPLORER_TAIJI) {
+        return cast(s32)host.mounts.entries.count
+    }
+    return 0
+}
+
+// Fixed Places row; literal labels borrow the call, owned captions go through
+// the per-row cache before the descriptor returns to TSX.
+PlacesFixedRowHost :: (key: u64, label: string, icon: string, route: string,
+    side: s32, icon_data: string, file_icon: bool) -> *PlacesRowView {
+    places_row_begin()
+    places_row_cache.key = key
+    places_row_cache.side = side
+    places_row_cache.selected = host.places_key == key
+    places_row_cache.file_icon = file_icon
+    places_row_cache.label = label
+    places_row_cache.icon = icon
+    places_row_cache.route = route
+    places_row_cache.icon_data = icon_data
+    return *places_row_cache
+}
+
+PlacesComputerRowHost :: () -> *PlacesRowView {
+    return PlacesFixedRowHost(34, "Computer", "computer", "computer:///", 3, "", false)
+}
+
+PlacesHomeRowHost :: () -> *PlacesRowView {
+    caption: Text = FileDisplay.Caption(TabPaths.PathName(Model.HomePath()))
+    VecClear(places_row_label.bytes)
+    unused BuilderAppend(places_row_label.bytes,TextView(caption))
+    VecFree(caption.bytes)
+    row := PlacesFixedRowHost(31, "", "go-home", Model.HomePath(), 1, "", false)
+    row.label = TextView(places_row_label)
+    return row
+}
+
+PlacesDesktopRowHost :: (desktop: string) -> *PlacesRowView {
+    return PlacesFixedRowHost(37, "Desktop", "user-desktop", desktop, 1, "", false)
+}
+
+PlacesRecentRowHost :: () -> *PlacesRowView {
+    return PlacesFixedRowHost(35, "Recent", "document-open-recent", "recent:///", 1, "", false)
+}
+
+PlacesTrashRowHost :: () -> *PlacesRowView {
+    route: Text = Model.TrashDirectory(false)
+    VecClear(places_row_route.bytes)
+    unused BuilderAppend(places_row_route.bytes,TextView(route))
+    VecFree(route.bytes)
+    row := PlacesFixedRowHost(33, "Trash", "user-trash", "", 3, TextView(host.trash_icon), false)
+    row.route = TextView(places_row_route)
+    return row
+}
+
+PlacesBookmarkRowHost :: (index: s32) -> *PlacesRowView {
+    row_data := host.bookmarks.document.rows[index]
+    row := PlacesFixedRowHost(cast(u64)(700+index), "", "folder", "", 2, "", true)
+    places_row_cache.index = index
+    places_row_cache.selected = host.places_key == cast(u64)(700+index)
+    places_row_cache.label = row_data.caption
+    places_row_cache.route = row_data.path
+    places_row_cache.icon_data = row_data.path
+    return row
+}
+
+PlacesFilesystemRowHost :: () -> *PlacesRowView {
+    return PlacesFixedRowHost(32, "File System", "drive-harddisk", "/", 1, "", false)
+}
+
+PlacesMountRowHost :: (index: s32) -> *PlacesRowView {
+    mount := host.mounts.entries[index]
+    caption: Text = FileDisplay.Caption(mount.caption)
+    VecClear(places_row_label.bytes)
+    unused BuilderAppend(places_row_label.bytes,TextView(caption))
+    VecFree(caption.bytes)
+    route := ifx mount.local_path != "" then mount.local_path else mount.uri
+    row := PlacesFixedRowHost(mount.key, "", "drive-removable-media", "", 4, mount.icon_serialized, false)
+    row.label = TextView(places_row_label)
+    row.route = route
+    return row
+}
+
+PlacesNetworkRowHost :: () -> *PlacesRowView {
+    return PlacesFixedRowHost(36, "Browse Network", "network-workgroup", "network:///", 3, "", false)
+}
+
+PlacesControlPaintHost :: (key: u64, bounds: Rectangle, label: string, icon: string,
+    focused: bool, selected: bool, icon_data: string, file_icon: bool) -> bool {
+    #if !#defined(EXPLORER_TAIJI) {
+        return Native.Control(*host.paint,key,bounds,label,icon,focused,selected,true,false,icon_data,file_icon)
+    }
+    return false
+}
+
+PlacesBookmarkSelectHost :: (index: s32) {
+    host.bookmark_selected = index
+}
+
+PlacesOpenHost :: (route: string, key: u64) {
+    #if !#defined(EXPLORER_TAIJI) {
+        OpenPlace(*host,route,key)
+    }
+}
+
+PlacesRowMenuHost :: (session: Session, bounds: Rectangle, route: string, side: s32,
+    index: s32, key: u64, focused: bool) {
+    #if !#defined(EXPLORER_TAIJI) {
+        side_value: MenuSide = .None
+        if side == 1 { side_value = .Folder }
+        else if side == 2 { side_value = .Bookmark }
+        else if side == 3 { side_value = .Special }
+        else if side == 4 { side_value = .Device }
+        PlaceRow(*host,session,bounds,route,side_value,index,key,focused)
+    }
+}
+
+// Preview text line data for the TSX scroll scope: the composed line width
+// and per-line slicing stay native; the visible-line window is TSX layout.
+preview_line_cache: Text;
+
+PreviewLineCountHost :: () -> s32 {
+    return host.preview.lines
+}
+
+PreviewLineHost :: (row: s32) -> string {
     state := *host.preview
-    state.text_scroll = scroll_offset
     text := TextView(state.body)
     start: s64 = 0
-    row: s32 = 0
+    index: s32 = 0
     at: s64 = 0
     while at <= text.count {
         if at == text.count || text[at] == cast(u8)10 {
-            y := viewport.y + cast(float32)(row * 20 - state.text_scroll)
-            if y + 20.0 >= bounds.y && y < bounds.y + bounds.height {
+            if index == row {
                 line := text[start:at]
                 if line.count > 0 && line[line.count - 1] == cast(u8)13 { line = line[:line.count - 1] }
-                UiControls.WidgetText(session, TextWidget.Props.{.key = cast(u64)(row + 1000),
-                    .bounds = .{viewport.x + 4.0 - pan_x, y,
-                        cast(float32)Preview.TEXT_LIMIT * 8.0, 20.0},
-                    .text = line, .size = 14, .wrap = .TextWrapNone})
+                VecClear(preview_line_cache.bytes)
+                unused BuilderAppend(preview_line_cache.bytes,line)
+                return TextView(preview_line_cache)
             }
-            row += 1
+            index += 1
             start = at + 1
         }
         at += 1
     }
+    return ""
+}
+
+PreviewLineWidthHost :: () -> float32 {
+    return cast(float32)Preview.TEXT_LIMIT * 8.0
+}
+
+// Details row primitives for the TSX scroll scope: activation probing, tree
+// submission, the GTK row paint and the multi-select state action. The TSX
+// loop owns the visible-row range, the hit button and the click wiring.
+details_clip_cache: Rectangle;
+details_cell_caption: Text;
+details_cell_size: Text;
+details_cell_type: Text;
+details_cell_date: Text;
+
+DetailsScrollHost :: (scroll_offset: s32) {
+    manager := ActiveManager(*host)
+    manager.scroll = scroll_offset
+}
+
+DetailsClipBeginHost :: () {
+    #if !#defined(EXPLORER_TAIJI) {
+        p := *host.paint
+        details_clip_cache = p.clip
+    }
+}
+
+DetailsClipEndHost :: () {
+    #if !#defined(EXPLORER_TAIJI) {
+        p := *host.paint
+        p.clip = details_clip_cache
+    }
+}
+
+DetailsRowClickedHost :: (session: Session, index: s32, focused: bool) -> bool {
+    manager := ActiveManager(*host)
+    entry := *manager.entries[index]
+    previous := TreePrevious(session,TreeCurrentParent(session),entry.key,cast(s32)WidgetKindSelectable)
+    return focused && Input.TreeTakeActivationAt(session,previous)
+}
+
+DetailsRowSubmitHost :: (session: Session, index: s32, row_bounds: Rectangle,
+    focused: bool) -> s32 {
+    manager := ActiveManager(*host)
+    entry := *manager.entries[index]
+    node := TreeSubmitCurrent(session,entry.key,cast(s32)WidgetKindSelectable,row_bounds)
+    TreeSetInteractive(session,node,!focused,false,index+1)
+    TreeSetSelected(session,node,manager.selected[index])
+    TreeSetLabel(session,node,entry.caption)
+    return node
+}
+
+DetailsRowSelectedHost :: (index: s32) -> bool {
+    manager := ActiveManager(*host)
+    return manager.selected[index]
+}
+
+DetailsRowIsDirectoryHost :: (index: s32) -> bool {
+    manager := ActiveManager(*host)
+    return Model.EntryIsDirectory(manager,index)
+}
+
+DetailsCellCaptionHost :: (index: s32) -> string {
+    manager := ActiveManager(*host)
+    VecClear(details_cell_caption.bytes)
+    unused BuilderAppend(details_cell_caption.bytes,Model.EntryCaption(manager,index))
+    return TextView(details_cell_caption)
+}
+
+DetailsCellSizeHost :: (index: s32) -> string {
+    manager := ActiveManager(*host)
+    entry := *manager.entries[index]
+    size: [24]u8
+    VecClear(details_cell_size.bytes)
+    unused BuilderAppend(details_cell_size.bytes,Number.FormatInteger(entry.info.size,size[:]))
+    return TextView(details_cell_size)
+}
+
+DetailsCellTypeHost :: (index: s32) -> string {
+    manager := ActiveManager(*host)
+    entry := *manager.entries[index]
+    value := Model.EntryType(entry)
+    VecClear(details_cell_type.bytes)
+    unused BuilderAppend(details_cell_type.bytes,value)
+    return TextView(details_cell_type)
+}
+
+DetailsCellDateHost :: (index: s32) -> string {
+    #if #defined(EXPLORER_TAIJI) {
+        manager := ActiveManager(*host)
+        entry := *manager.entries[index]
+        date: [32]u8
+        VecClear(details_cell_date.bytes)
+        unused BuilderAppend(details_cell_date.bytes,GuestDate(entry.info.modified,date[:]))
+        return TextView(details_cell_date)
+    }
+    return ""
+}
+
+DetailsSelectRowHost :: (index: s32, control: bool, shift: bool) {
+    manager := ActiveManager(*host)
+    state := Tables.TableViewResult.{.focused_row=manager.cursor,.anchor=manager.anchor}
+    state = Tables.TableViewMultiSelect(manager.selected[:],cast(s32)manager.entries.count,state,index,control,shift)
+    manager.cursor=state.focused_row; manager.anchor=state.anchor
+}
+
+EntryClickHost :: (row: s32, modifiers: s32) {
+    EntryClick(*host,row,modifiers)
+}
+
+TreeScopePushHost :: (session: Session, node: s32) -> bool {
+    return TreePushScope(session,node)
+}
+
+TreeScopeEndHost :: (session: Session) {
+    End(session)
+}
+
+// Desktop row paint: hover/drop state, the GTK row surface, icon and cells.
+DetailsRowPaintHost :: (session: Session, node: s32, index: s32, row_bounds: Rectangle,
+    body: Rectangle, row_height: s32, physical: s32, icon_size: float32,
+    icon_delta: float32, content_width: s32, focused: bool) {
+    #if !#defined(EXPLORER_TAIJI) {
+        manager := ActiveManager(*host)
+        view := PaneViewAt(*host)
+        entry := *manager.entries[index]
+        p := *host.paint
+        selected := manager.selected[index]
+        gtk_state: u32 = ifx selected then cast(u32)Gtk.GtkStyleSelected else cast(u32)0
+        previous := TreePrevious(session,TreeCurrentParent(session),entry.key,cast(s32)WidgetKindSelectable)
+        if focused && Input.TreeHoveredAt(session,previous) { gtk_state |= cast(u32)Gtk.GtkStylePrelight }
+        yy := row_bounds.y
+        RecordDropRow(*host,row_bounds,entry.path,physical,entry.key,Model.EntryIsDirectory(manager,index))
+        if host.drop_key!=0 && host.drop_key==entry.key { gtk_state |= cast(u32)DROP_ACTIVE }
+        p.clip=RectangleIntersection(details_clip_cache,body)
+        Native.Surface(p,row_bounds,"treeview",gtk_state)
+        x := body.x-cast(float32)view.details_scroll_x
+        data := *view.details_cells[index]
+        DetailsData(manager,index,data)
+        revision := cast(u64)entry.info.modified ^ cast(u64)entry.info.modified_nanoseconds
+        icon_bounds := Rectangle.{x+Native.DetailsIconX(),yy+Native.DetailsIconY(),icon_size,icon_size}
+        if entry.icon_serialized!="" { Native.SerializedIcon(p,icon_bounds,entry.icon_serialized,revision) }
+        else { Native.FileIcon(p,icon_bounds,entry.path,false,revision) }
+        if !Model.IsUri(entry.path) && !Model.EntryIsDirectory(manager,index) && Preview.ImagePath(entry.path) {
+            nodes:=Native.Nodes("image")
+            GtkPainterPaint(p,nodes[:],icon_bounds,entry.path,4,0,revision)
+        }
+        Native.FileEmblems(p,.{icon_bounds.x-1.0,yy+1.0,icon_size+2.0,icon_size+2.0},icon_bounds,data.link,data.broken)
+        scoped := TreePushScope(session,node)
+        for column: cast(s32)0..3 {
+            width := cast(float32)view.column_widths[column]
+            if column==3 { width=body.x-cast(float32)view.details_scroll_x+cast(float32)content_width-x }
+            padding := ifx column==0 then Native.DetailsTextX()+icon_delta else Native.DetailsCellPadding()
+            cell_bounds := Rectangle.{x+padding,yy,width-padding-Native.DetailsCellPadding(),cast(float32)row_height}
+            if scoped { cell:=TreeSubmitCurrent(session,cast(u64)(column+1),cast(s32)WidgetKindText,cell_bounds); TreeSetLabel(session,cell,data.cells[column]) }
+            Native.Label(p,cell_bounds,data.cells[column],"treeview",gtk_state,ifx column==1 then 2 else 0)
+            x+=width
+        }
+        if scoped { End(session) }
+        // End this row's cell views before host state can move on.
+        data.cells[0]=""; data.cells[1]=""; data.cells[2]=""; data.cells[3]=""
+        p.clip=details_clip_cache
+    }
+}
+
+// Details header primitives: the GTK surface and header buttons stay native;
+// the column layout, drag resize and sort wiring are TSX composition.
+details_header_clip: Rectangle;
+
+DetailsHeaderSurfaceHost :: (bounds: Rectangle) {
+    #if !#defined(EXPLORER_TAIJI) {
+        Native.Surface(*host.paint,bounds,"toolbar")
+    }
+}
+
+DetailsHeaderClipBeginHost :: (header: Rectangle) {
+    #if !#defined(EXPLORER_TAIJI) {
+        p := *host.paint
+        details_header_clip = p.clip
+        p.clip = RectangleIntersection(details_header_clip,header)
+    }
+}
+
+DetailsHeaderClipEndHost :: () {
+    #if !#defined(EXPLORER_TAIJI) {
+        p := *host.paint
+        p.clip = details_header_clip
+    }
+}
+
+DetailsSortColumnHost :: () -> s32 {
+    return SortColumn(ActiveManager(*host).sort_mode)
+}
+
+DetailsColumnWidthHost :: (column: s32) -> s32 {
+    view := ActiveView(*host)
+    return view.column_widths[column]
+}
+
+DetailsReverseHost :: () -> bool {
+    return ActiveManager(*host).sort_reverse
+}
+
+DetailsHeaderDragHost :: (session: Session, column: s32, x: float32, header: Rectangle,
+    focused: bool, width: float32) -> float32 {
+    #if !#defined(EXPLORER_TAIJI) {
+        view := ActiveView(*host)
+        resize_key := cast(u64)0xffff000000000000 | cast(u64)column
+        previous := TreePrevious(session,TreeCurrentParent(session),resize_key,cast(s32)WidgetKindSlider)
+        drag := Input.TreeTakeDragAt(session,previous)
+        if column<3 && focused && (drag.active || drag.ended) {
+            adjusted := drag.x-drag.grab_x-x+3.0
+            if adjusted<60.0 { adjusted=60.0 }
+            view.column_widths[column]=cast(s32)adjusted
+            view.columns_resized=true
+            return adjusted
+        }
+    }
+    return width
+}
+
+DetailsHeaderPaintHost :: (column: s32, bounds: Rectangle, label: string,
+    focused: bool) -> bool {
+    #if !#defined(EXPLORER_TAIJI) {
+        manager := ActiveManager(*host)
+        return Native.Header(*host.paint,cast(u64)(60+column),bounds,label,SortColumn(manager.sort_mode)==column,manager.sort_reverse,focused)
+    }
+    return false
+}
+
+DetailsHeaderDividerHost :: (session: Session, column: s32, x: float32,
+    header: Rectangle, focused: bool) {
+    #if !#defined(EXPLORER_TAIJI) {
+        node:=TreeSubmitCurrent(session,cast(u64)0xffff000000000000 | cast(u64)column,cast(s32)WidgetKindSlider,.{x-3.0,header.y,6.0,header.height})
+        TreeSetInteractive(session,node,!focused,false,column+800)
+        TreeSetCursor(session,node,5)
+    }
+}
+
+DetailsSortByColumnHost :: (column: s32) {
+    manager := ActiveManager(*host)
+    mode := SortForColumn(column)
+    Model.SetSort(manager,mode,ifx mode==manager.sort_mode then !manager.sort_reverse else false)
+    ActiveView(*host).last_click_ms=0
 }
